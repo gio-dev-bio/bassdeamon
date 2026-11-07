@@ -62,8 +62,11 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
     output.setTextValueSuffix(" dB");output.setNumDecimalPlacesToDisplay(1);output.setScrollWheelEnabled(false);
     output.setBounds(824,808,260,28);face.addAndMakeVisible(output);
     outputAttachment=std::make_unique<State::SliderAttachment>(processor.parameters,"output.trim",output);
+    output.textFromValueFunction=[](double value){return juce::String(value,1)+" dB";};
+    output.valueFromTextFunction=[](const juce::String& value){return value.getDoubleValue();}; output.updateText();
     output.setTooltip("Final trim. No limiter is applied; red peak indication means you must reduce the level.");
-    bass.fill(-120);kick.fill(-120);cut.fill(0);
+    for(size_t i=0;i<bass.size();++i){bass[i]=processor.spectrumBass[i].load();kick[i]=processor.spectrumKick[i].load();cut[i]=processor.spectrumCut[i].load();}
+    vu=processor.glueReduction.load();
     setResizable(true,true);setResizeLimits(900,645,1560,1118);
     if(auto* c=getConstrainer())c->setFixedAspectRatio(1200.0/860.0);
     setSize(1080,774);timerCallback();startTimerHz(30);
@@ -84,7 +87,7 @@ void BassDeamonEditor::createTexture(){
     for(int y=0;y<860;++y)for(int x=0;x<1200;++x){const int n=random.nextInt(9);data.setPixelColour(x,y,juce::Colour::fromRGBA(230,216,180,static_cast<juce::uint8>(n)));}
 }
 void BassDeamonEditor::paintConsole(juce::Graphics& g){
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff33372e),0,0,console::ink,1200,860,false));g.fillAll();
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff302e2a),0,0,console::ink,1200,860,false));g.fillAll();
     console::panel(g,{5,5,1190,850});
     g.setColour(console::copper.withAlpha(0.35f));g.drawRoundedRectangle(juce::Rectangle<float>(9,9,1182,842),10,2);
     juce::Random scratches(1829);
@@ -110,7 +113,7 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g){
         console::text(g,value,{253,y+27,114,26},18,console::amber,juce::Justification::centred);
     };
     readout("ATTACK",juce::String(processor.glueAttack.load(),1)+" ms",496);
-    readout("RELEASE",juce::String(processor.glueRelease.load(),0)+" ms",575);
+    readout("RELEASE",juce::String(juce::roundToInt(processor.glueRelease.load()))+" ms",575);
     console::text(g,"GLUE GR  "+juce::String(processor.glueReduction.load(),1)+" dB",{46,724,190,24},17,console::amber);
     console::text(g,"BASS-LED / STEREO LINKED",{46,752,294,18},12,console::muted);
     const int state=processor.learnStatus.load();
@@ -161,7 +164,7 @@ void BassDeamonEditor::paintSpectrum(juce::Graphics& g){
     console::text(g,"LOW-END / BAND ENERGY",{58,138,260,18},13,console::muted);
     console::text(g,"KICK",{566,138,48,18},13,console::amber);
     console::text(g,"BASS",{630,138,48,18},13,console::cream);
-    console::text(g,"EQ CUT 0…12 dB",{694,138,126,18},12,console::orange);
+    console::text(g,"EQ CUT 0-12 dB",{694,138,126,18},12,console::orange);
 }
 void BassDeamonEditor::paintVU(juce::Graphics& g){
     const juce::Rectangle<float> r(878,143,282,157);

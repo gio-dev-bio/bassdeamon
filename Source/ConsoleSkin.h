@@ -3,9 +3,9 @@
 
 namespace console {
 inline const juce::Colour cream{0xffe6d5b5}, amber{0xffffb54f}, copper{0xff9d7350};
-inline const juce::Colour ink{0xff101410}, muted{0xff9a9c8c}, orange{0xffe76931};
+inline const juce::Colour ink{0xff141412}, muted{0xff9a9c8c}, orange{0xffe76931};
 inline juce::Font font(float size, bool bold = false) {
-    return juce::Font(juce::FontOptions("Avenir Next Condensed", size, bold ? juce::Font::bold : juce::Font::plain));
+    return juce::Font(juce::FontOptions(size, bold ? juce::Font::bold : juce::Font::plain));
 }
 inline void text(juce::Graphics& g, const juce::String& s, juce::Rectangle<float> r,
                  float size = 15, juce::Colour colour = cream, juce::Justification align = juce::Justification::centredLeft) {
@@ -18,8 +18,8 @@ inline void screw(juce::Graphics& g, float x, float y) {
 }
 inline void panel(juce::Graphics& g, juce::Rectangle<float> r, bool dark = false) {
     g.setColour(juce::Colours::black.withAlpha(0.7f)); g.fillRoundedRectangle(r.translated(0,3),9);
-    g.setGradientFill(juce::ColourGradient(dark ? ink : juce::Colour(0xff353a31),r.getX(),r.getY(),
-        dark ? juce::Colour(0xff191c16) : juce::Colour(0xff20261f),r.getX(),r.getBottom(),false));
+    g.setGradientFill(juce::ColourGradient(dark ? ink : juce::Colour(0xff34332f),r.getX(),r.getY(),
+        dark ? juce::Colour(0xff191c16) : juce::Colour(0xff22221f),r.getX(),r.getBottom(),false));
     g.fillRoundedRectangle(r,9); g.setColour(copper.withAlpha(0.75f)); g.drawRoundedRectangle(r.reduced(0.5f),9,1.3f);
     g.setColour(juce::Colours::black.withAlpha(0.8f)); g.drawRoundedRectangle(r.reduced(3),7,1);
     for (float x : {r.getX()+10,r.getRight()-10}) for(float y : {r.getY()+10,r.getBottom()-10}) screw(g,x,y);
@@ -87,7 +87,7 @@ public:
             const float px=cx+std::sin(a)*size,py=cy-std::cos(a)*size;
             if(i==0)grip.startNewSubPath(px,py);else grip.lineTo(px,py);
         }
-        grip.closeSubPath();g.setGradientFill(juce::ColourGradient(juce::Colour(0xff383b31),cx,cy-radius,juce::Colour(0xff151a14),cx,cy+radius,false));g.fillPath(grip);
+        grip.closeSubPath();g.setGradientFill(juce::ColourGradient(juce::Colour(0xff3a3832),cx,cy-radius,juce::Colour(0xff191916),cx,cy+radius,false));g.fillPath(grip);
         g.setColour(juce::Colours::black.withAlpha(0.6f));g.strokePath(grip,juce::PathStrokeType(1.5f));
         const float tip=radius*0.78f,base=radius*0.28f;
         g.setColour(slider.isEnabled()?cream:muted);g.drawLine(cx+std::sin(angle)*base,cy-std::cos(angle)*base,cx+std::sin(angle)*tip,cy-std::cos(angle)*tip,radius>42?4.5f:3.0f);
@@ -108,7 +108,7 @@ private:
     static void button(juce::Graphics& g,juce::Button& b,bool hover,bool down,bool on) {
         auto r=b.getLocalBounds().toFloat().reduced(1);
         g.setColour(juce::Colours::black.withAlpha(0.6f));g.fillRoundedRectangle(r.translated(0,2),4);
-        const auto top=on?amber:juce::Colour(0xff4b4b3c),bottom=on?juce::Colour(0xffa15c24):juce::Colour(0xff242a22);
+        const auto top=on?amber:juce::Colour(0xff4a4238),bottom=on?juce::Colour(0xffa15c24):juce::Colour(0xff2b2620);
         g.setGradientFill(juce::ColourGradient((down?top.darker():top).brighter(hover?0.1f:0),0,r.getY(),bottom,0,r.getBottom(),false));
         g.fillRoundedRectangle(r,4);g.setColour(on?cream:copper);g.drawRoundedRectangle(r,4,1);
         g.setColour(on?ink:cream);g.setFont(font(r.getHeight()<28?12.5f:14.5f,true));
