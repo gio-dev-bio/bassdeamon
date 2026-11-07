@@ -62,7 +62,7 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
     output.setTextValueSuffix(" dB");output.setNumDecimalPlacesToDisplay(1);output.setScrollWheelEnabled(false);
     output.setBounds(824,808,260,28);face.addAndMakeVisible(output);
     outputAttachment=std::make_unique<State::SliderAttachment>(processor.parameters,"output.trim",output);
-    output.textFromValueFunction=[](double value){return juce::String(value,1)+" dB";};
+    output.textFromValueFunction=[](double value){return juce::String(value,1);};
     output.valueFromTextFunction=[](const juce::String& value){return value.getDoubleValue();}; output.updateText();
     output.setTooltip("Final trim. No limiter is applied; red peak indication means you must reduce the level.");
     for(size_t i=0;i<bass.size();++i){bass[i]=processor.spectrumBass[i].load();kick[i]=processor.spectrumKick[i].load();cut[i]=processor.spectrumCut[i].load();}
