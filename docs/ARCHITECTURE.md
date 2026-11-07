@@ -1,6 +1,6 @@
 # Architettura preliminare
 
-Questo documento specifica il comportamento desiderato, non funzionalità già implementate.
+Questo documento specifica il comportamento desiderato. README e VALIDATION distinguono il prototipo attuale dagli obiettivi ancora da implementare.
 
 ## Routing
 
@@ -30,7 +30,8 @@ I due canali stereo del basso condividono il controllo dinamico per preservare l
 - Latenza algoritmica e ritardo intenzionale sono grandezze distinte; la compensazione host non deve annullare il ritardo musicale scelto.
 - Un angolo fisso a tutte le frequenze non è una promessa del controllo all-pass.
 - Non inseguire automaticamente ogni nota.
-- Un suggerimento automatico è un'estensione successiva, con confidenza e possibilità di blocco.
+- Learn + Lock concordato per la prima versione: analisi della frase, suggerimento di polarità/ritardo, mantenimento fisso e regolazione manuale. Nessun tracking Adaptive continuo.
+- Nel prototipo Learn usa correlazione low-end e non ottimizza automaticamente il filtro all-pass; la correlazione non garantisce la scelta musicalmente migliore.
 - Valutare la somma con il kick sull'intera frase, non solo su un singolo colpo.
 
 ## UNMASK

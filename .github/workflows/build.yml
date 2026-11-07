@@ -1,0 +1,35 @@
+name: BassDeamon prototype
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  dsp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure dependency-free DSP tests
+        run: cmake -S . -B build -DBASSDEAMON_BUILD_PLUGIN=OFF -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build --parallel 2
+      - run: ctest --test-dir build --output-on-failure
+      - name: Address and undefined behaviour sanitizers
+        run: |
+          g++ -std=c++17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -ISource tests/DspTests.cpp -o /tmp/dsp-sanitized
+          /tmp/dsp-sanitized
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure Intel + Apple Silicon VST3
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+      - run: cmake --build build --config Release --parallel 3
+      - run: ctest --test-dir build -C Release --output-on-failure
+      - name: Package unsigned development plugin
+        run: ditto -c -k --sequesterRsrc --keepParent build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3 BassDeamon-0.1.0-macOS-universal.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BassDeamon-0.1.0-macOS-universal
+          path: BassDeamon-0.1.0-macOS-universal.zip
