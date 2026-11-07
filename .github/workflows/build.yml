@@ -20,7 +20,7 @@ jobs:
           g++ -std=c++17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -ISource tests/DspTests.cpp -o /tmp/dsp-sanitized
           /tmp/dsp-sanitized
   macos:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Configure Intel + Apple Silicon VST3
