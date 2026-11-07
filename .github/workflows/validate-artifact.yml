@@ -1,0 +1,50 @@
+name: Diagnose packaged VST3
+on:
+  push:
+    branches: ['codex/first-dsp-prototype']
+    paths: ['.github/workflows/validate-artifact.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  validate:
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: [arm64, x86_64]
+    steps:
+      - name: Download the exact package reported by the user
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download 42372644149 --repo gio-dev-bio/bassdeamon --name BassDeamon-0.1.0-macOS-universal --dir artifact
+          ditto -x -k artifact/BassDeamon-0.1.0-macOS-universal.zip unpacked
+      - name: Inspect bundle, architecture and signature
+        run: |
+          file unpacked/BassDeamon.vst3/Contents/MacOS/BassDeamon
+          lipo -info unpacked/BassDeamon.vst3/Contents/MacOS/BassDeamon
+          codesign --verify --strict --verbose=2 unpacked/BassDeamon.vst3
+          otool -L unpacked/BassDeamon.vst3/Contents/MacOS/BassDeamon
+      - name: Download pluginval 1.0.4
+        run: |
+          curl --fail --location --retry 3 https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_macOS.zip --output pluginval.zip
+          ditto -x -k pluginval.zip validator
+          chmod +x validator/pluginval.app/Contents/MacOS/pluginval
+          lipo -info validator/pluginval.app/Contents/MacOS/pluginval
+      - name: Load and stress-test the VST3 in an external host
+        timeout-minutes: 12
+        run: |
+          mkdir -p validation-logs
+          arch -${{ matrix.architecture }} validator/pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --timeout-ms 60000 --output-dir "$PWD/validation-logs" --validate "$PWD/unpacked/BassDeamon.vst3"
+      - name: Preserve validator logs and crash reports
+        if: always()
+        run: |
+          mkdir -p validation-logs/crash-reports
+          cp "$HOME"/Library/Logs/DiagnosticReports/*pluginval* validation-logs/crash-reports/ 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: validation-${{ matrix.architecture }}
+          path: validation-logs
