@@ -74,7 +74,10 @@ bassdeamon::Settings BassDeamonProcessor::readSettings() const noexcept {
     s.rotate = value(6) > 0.5f; s.rotationHz = value(7);
     s.unmask = value(8) > 0.5f; s.unmaskAmount = value(9); s.delta = value(10) > 0.5f;
     for (size_t i = 0; i < 3; ++i) s.agc[i] = {value(11+2*i) > 0.5f, value(12+2*i) > 0.5f};
-    s.outputDb = value(17); return s;
+    // Canonicalise the declared 0.001 dB grid in double: JUCE's normalised
+    // float roundtrip can otherwise turn nominal 0 dB into a tiny boost.
+    s.outputDb = std::round(static_cast<double>(value(17)) * 1000.0) / 1000.0;
+    return s;
 }
 void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) {
     juce::ScopedNoDenormals noDenormals;
