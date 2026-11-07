@@ -37,3 +37,12 @@
 - GUI: verifica visiva, accessibilità, ridimensionamento e design finale.
 
 I test sintetici dimostrano proprietà specifiche del prototipo, non trasparenza audio universale.
+
+## Estensione 0.2.0
+
+Nuovi contratti DSP: focus automatico su risonanza nota, HOLD senza movimento,
+richiamo del focus congelato e selettività del focus manuale su due toni distinti.
+Test JUCE estesi ad A/B, HOLD e width. Rendering della GUI dal codice reale in CI,
+con segnali di test sintetici noti, per controllare la leggibilità e le sovrapposizioni.
+Il packaging esegue firma completa e pluginval strictness 5 per ARM/Intel.
+La validazione finale in Cubase resta un passaggio separato.

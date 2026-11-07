@@ -26,11 +26,19 @@ struct Settings {
     bool unmask = true, delta = false;
     double unmaskAmount = 0.4, outputDb = 0.0;
     std::array<AgcSettings, 3> agc{};
+    bool unmaskTrack = true, unmaskHold = false;
+    double unmaskFrequency = 75, unmaskWidth = 0.55;
+    double unmaskAttackMs = 8, unmaskReleaseMs = 120, unmaskMaxCutDb = 9;
 };
+constexpr size_t bandCount = 12;
+inline constexpr std::array<double, bandCount> bandFrequencies{30, 38, 48, 60, 75, 94, 118, 148, 186, 234, 295, 370};
 struct Meters {
     double glueReductionDb = 0.0, unmaskReductionDb = 0.0;
     std::array<double, 3> agcDb{};
-    double peak = 0.0;
+    double peak = 0.0, kickPeak = 0.0, inputRmsDb = -120, outputRmsDb = -120;
+    double focusHz = 75, attackMs = 20, releaseMs = 180;
+    std::array<double, bandCount> bassDb{}, kickDb{}, cutsDb{};
+    double filterQ = 2;
 };
 
 // Double precision RBJ cookbook filters, transposed direct form II.
@@ -168,6 +176,8 @@ public:
         thresholdDb = -24; ratio = 2; attackMs = 20; releaseMs = 180;
         glueReduction = 0; onsetClock = lastOnset = 0; kickIntervalMs = 0;
         controlCounter = 0; smoothed = false; meters = {};
+        inputPowerMeter = outputPowerMeter = outputHeld = kickHeld = 0;
+        focusHz = 75; trackedFocusHz = 75;
         cutDb.fill(0); kickE.fill(0); bassE.fill(0);
         allpassX.fill(0); allpassY.fill(0);
         for (auto& d : delays) d.prepare(sampleRate);
@@ -184,7 +194,8 @@ public:
         smoothA = pole(20, sampleRate); bandA = pole(15, sampleRate);
         kickFastA = pole(3, sampleRate); kickSlowA = pole(100, sampleRate);
         parameterA = pole(500, sampleRate / 32); // coefficients adapt over 500 ms
-        cutAttackA = pole(5, sampleRate); cutReleaseA = pole(100, sampleRate);
+        cutAttackA = pole(8, sampleRate); cutReleaseA = pole(120, sampleRate);
+        focusA = pole(350, sampleRate / 32); peakA = pole(300, sampleRate);
         attackA = pole(attackMs, sampleRate); releaseA = pole(releaseMs, sampleRate);
     }
     void startLearn() noexcept { learner.start(); }
@@ -193,16 +204,17 @@ public:
     LearnResult learnResult() const noexcept { return learner.getResult(); }
     const Meters& getMeters() const noexcept { return meters; }
     // Frozen adaptation/AGC values are part of the session state, not only UI parameters.
-    using RuntimeState = std::array<double, 7>;
+    using RuntimeState = std::array<double, 8>;
     RuntimeState runtimeState() const noexcept {
         return {thresholdDb, ratio, attackMs, releaseMs,
-                agc[0].learnedDb(), agc[1].learnedDb(), agc[2].learnedDb()};
+                agc[0].learnedDb(), agc[1].learnedDb(), agc[2].learnedDb(), focusHz};
     }
     void restoreRuntime(const RuntimeState& r) noexcept {
         thresholdDb = std::clamp(r[0], -100.0, 12.0); ratio = std::clamp(r[1], 1.0, 4.0);
         attackMs = std::clamp(r[2], 5.0, 80.0); releaseMs = std::clamp(r[3], 50.0, 500.0);
         attackA = pole(attackMs, sampleRate); releaseA = pole(releaseMs, sampleRate);
         for (size_t i = 0; i < agc.size(); ++i) agc[i].restore(r[4+i]);
+        focusHz = trackedFocusHz = std::clamp(r[7], 30.0, 250.0);
     }
     void clearHistory() noexcept {
         for (auto& d : delays) d.clear();
@@ -210,6 +222,7 @@ public:
             for (auto& band : *bank) for (auto& f : band) f.z1 = f.z2 = 0;
         allpassX.fill(0); allpassY.fill(0);
         bassE.fill(0); kickE.fill(0); bassEnergy = envelope = kickFast = kickSlow = 0;
+        inputPowerMeter = outputPowerMeter = outputHeld = kickHeld = 0;
         learner.cancel();
     }
 
@@ -223,7 +236,10 @@ public:
             rotationHz = s.rotationHz; outputGain = gain(s.outputDb); smoothed = true;
             deltaMix = s.delta && s.unmask ? 1 : 0;
         }
-        meters.peak = 0;
+        cutAttackA = pole(std::clamp(s.unmaskAttackMs, 1.0, 50.0), sampleRate);
+        cutReleaseA = pole(std::clamp(s.unmaskReleaseMs, 30.0, 500.0), sampleRate);
+        const double widthOctaves = 0.25 + 1.25 * std::clamp(s.unmaskWidth, 0.0, 1.0);
+        const double filterQ = 3.5 - 2.6 * std::clamp(s.unmaskWidth, 0.0, 1.0);
         for (int n = 0; n < samples; ++n) {
             std::array<double, 2> x{}, k{};
             for (int c = 0; c < channels; ++c) x[c] = std::isfinite(bass[c][n]) ? bass[c][n] : 0;
@@ -233,6 +249,8 @@ public:
                 k[1] = kickChannels > 1 ? (std::isfinite(kick[1][n]) ? kick[1][n] : 0) : k[0];
             }
             const double inputPower = power(x, channels), kp = power(k, 2);
+            inputPowerMeter = follow(inputPowerMeter, inputPower, energyA);
+            kickHeld = std::max(std::max(std::abs(k[0]), std::abs(k[1])), kickHeld * peakA);
             bassEnergy = follow(bassEnergy, inputPower, energyA);
             envelope = follow(envelope, inputPower, rmsA);
             kickFast = follow(kickFast, kp, kickFastA); kickSlow = follow(kickSlow, kp, kickSlowA);
@@ -257,8 +275,39 @@ public:
                     releaseMs = follow(releaseMs, std::clamp(context * 0.4, 80.0, 300.0), parameterA);
                 }
                 attackA = pole(attackMs, sampleRate); releaseA = pole(releaseMs, sampleRate);
-                for (size_t b = 0; b < frequencies.size(); ++b)
-                    for (int c = 0; c < 2; ++c) filters[b][c].peak(frequencies[b], 2, cutDb[b], sampleRate);
+                // Track the strongest overlapping low-end band, not an asserted musical fundamental.
+                // Hysteresis prevents bouncing between adjacent resonances on each kick.
+                if (s.unmaskTrack && !s.unmaskHold) {
+                    size_t best = 0, current = 0;
+                    double score = 0, nearest = 1e9;
+                    for (size_t b = 0; b < frequencies.size(); ++b) {
+                        if (frequencies[b] > 250) continue;
+                        const double overlap = std::min(bassE[b], kickE[b]);
+                        if (overlap > score) { score = overlap; best = b; }
+                        const double distance = std::abs(std::log(frequencies[b] / trackedFocusHz));
+                        if (distance < nearest) { nearest = distance; current = b; }
+                    }
+                    if (score > 1e-8 && (score > std::min(bassE[current], kickE[current]) * 1.6
+                        || std::min(bassE[current], kickE[current]) < 1e-9))
+                        trackedFocusHz = std::clamp(frequencies[best], 30.0, 250.0);
+                }
+                const double targetFocus = s.unmaskTrack ? trackedFocusHz : std::clamp(s.unmaskFrequency, 30.0, 250.0);
+                if (!s.unmaskHold || !s.unmaskTrack) focusHz = std::exp(follow(std::log(focusHz), std::log(targetFocus), focusA));
+                double weightSum = 0;
+                for (size_t b = 0; b < frequencies.size(); ++b) {
+                    const double octaves = std::log2(frequencies[b] / focusHz) / widthOctaves;
+                    focusWeights[b] = std::exp(-0.5 * octaves * octaves);
+                    weightSum += focusWeights[b];
+                }
+                double commandedCutSum = 0;
+                for (double value : cutDb) commandedCutSum -= value;
+                const double cap = std::clamp(s.unmaskMaxCutDb, 3.0, 12.0);
+                const double correction = commandedCutSum > cap ? cap / commandedCutSum : 1;
+                for (size_t b = 0; b < frequencies.size(); ++b) {
+                    cutDb[b] *= correction;
+                    focusWeights[b] /= std::max(weightSum, 1e-9);
+                    for (int c = 0; c < 2; ++c) filters[b][c].peak(frequencies[b], filterQ, cutDb[b], sampleRate);
+                }
             }
             glueMix = follow(glueMix, s.glue ? 1 : 0, smoothA);
             phaseMix = follow(phaseMix, s.phase ? 1 : 0, smoothA);
@@ -317,7 +366,8 @@ public:
                 // Overlap requires both signals. No kick => decay to unity, never duck full-band.
                 const double overlap = std::min(bassE[b], kickE[b]);
                 const double activity = std::clamp((10*std::log10(std::max(overlap,1e-20))+65)/30, 0.0, 1.0);
-                const double target = -4 * std::clamp(s.unmaskAmount, 0.0, 1.0)*activity;
+                const double target = -std::clamp(s.unmaskMaxCutDb, 3.0, 12.0)
+                    * std::clamp(s.unmaskAmount, 0.0, 1.0) * activity * focusWeights[b];
                 cutDb[b] = follow(cutDb[b], target, target < cutDb[b] ? cutAttackA : cutReleaseA);
                 maxCut = std::max(maxCut, -cutDb[b]);
                 for (int c = 0; c < channels; ++c) x[c] = filters[b][c].tick(x[c]);
@@ -332,16 +382,27 @@ public:
                 const double normal = x[c]*unmaskAgc*outputGain;
                 const double out = normal + deltaMix*(beforeUnmask[c]-afterUnmask[c]-normal);
                 bass[c][n] = static_cast<float>(out);
-                meters.peak = std::max(meters.peak, std::abs(out));
+                outputHeld = std::max(std::abs(out), outputHeld * peakA);
             }
+            outputPowerMeter = follow(outputPowerMeter,
+                static_cast<double>(bass[0][n])*bass[0][n]/channels
+                + (channels == 2 ? static_cast<double>(bass[1][n])*bass[1][n]/channels : 0), energyA);
             meters.glueReductionDb = glueReduction * glueMix;
             meters.unmaskReductionDb = maxCut * unmaskMix; // maximum individual band, not total cut
         }
+        meters.peak = outputHeld; meters.kickPeak = kickHeld;
+        meters.inputRmsDb = db(std::sqrt(inputPowerMeter)); meters.outputRmsDb = db(std::sqrt(outputPowerMeter));
+        meters.focusHz = focusHz; meters.filterQ = filterQ;
+        meters.attackMs = attackMs; meters.releaseMs = releaseMs;
+        for (size_t b = 0; b < frequencies.size(); ++b) {
+            meters.bassDb[b] = db(std::sqrt(bassE[b])); meters.kickDb[b] = db(std::sqrt(kickE[b]));
+            meters.cutsDb[b] = cutDb[b] * unmaskMix;
+        }
     }
 private:
-    static constexpr std::array<double, 6> frequencies{40, 55, 75, 105, 145, 200};
-    std::array<std::array<Biquad, 2>, 6> detectorsBass{}, detectorsKick{}, filters{};
-    std::array<double, 6> bassE{}, kickE{}, cutDb{};
+    static constexpr auto frequencies = bandFrequencies;
+    std::array<std::array<Biquad, 2>, bandCount> detectorsBass{}, detectorsKick{}, filters{};
+    std::array<double, bandCount> bassE{}, kickE{}, cutDb{}, focusWeights{};
     std::array<Delay, 2> delays;
     std::array<AutoGain, 3> agc;
     PhaseLearner learner;
@@ -354,6 +415,8 @@ private:
     double glueMix = 0, phaseMix = 0, unmaskMix = 0, delaySamples = 0, polarity = 1;
     double rotationMix = 0, rotationHz = 90, outputGain = 1, kickIntervalMs = 0;
     double deltaMix = 0;
+    double inputPowerMeter = 0, outputPowerMeter = 0, outputHeld = 0, kickHeld = 0;
+    double focusHz = 75, trackedFocusHz = 75, focusA = 0, peakA = 0;
     std::uint64_t onsetClock = 0, lastOnset = 0;
     int controlCounter = 0;
     bool smoothed = false;

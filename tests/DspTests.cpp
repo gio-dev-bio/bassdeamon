@@ -112,6 +112,33 @@ int main() {
         require(noKick == dry, "UNMASK without kick must be unity");
         std::cout << "PASS UNMASK selectivity / missing sidechain\n";
 
+        // Focus follows overlapping resonance, HOLD stops frequency movement while cuts stay dynamic.
+        auto trackingBass = tone(192000, 186, 0.35), trackingKick = tone(192000, 186, 0.5);
+        Engine tracking; tracking.prepare(48000); Settings trackingSettings = bypass();
+        trackingSettings.unmask = true; trackingSettings.unmaskAmount = 1;
+        render(tracking, trackingBass, &trackingKick, trackingSettings);
+        const double heldFocus = tracking.getMeters().focusHz;
+        require(heldFocus > 140, "Automatic focus did not follow the overlap");
+        trackingSettings.unmaskHold = true;
+        trackingBass = tone(96000, 38, 0.35); trackingKick = tone(96000, 38, 0.5);
+        render(tracking, trackingBass, &trackingKick, trackingSettings);
+        require(tracking.getMeters().focusHz == heldFocus, "HOLD focus kept moving");
+        Engine recalledFocus; recalledFocus.prepare(48000); recalledFocus.restoreRuntime(tracking.runtimeState());
+        require(recalledFocus.runtimeState()[7] == heldFocus, "HOLD focus was not persisted");
+        std::cout << "PASS automatic focus / HOLD / recall\n";
+
+        // A narrow manual focus must leave an unrelated upper-bass note relatively intact.
+        auto manual = tone(144000, 48, 0.3), upper = tone(144000, 186, 0.3), manualKick = manual;
+        for (size_t i = 0; i < manual.size(); ++i) { manual[i] += upper[i]; manualKick[i] += upper[i]; }
+        const auto manualDry = manual;
+        Engine manualEngine; manualEngine.prepare(48000); Settings manualSettings = bypass();
+        manualSettings.unmask = true; manualSettings.unmaskAmount = 1; manualSettings.unmaskTrack = false;
+        manualSettings.unmaskFrequency = 48; manualSettings.unmaskWidth = 0;
+        render(manualEngine, manual, &manualKick, manualSettings);
+        require(projection(manual,48,96000)/projection(manualDry,48,96000) < 0.7, "Manual focus did not cut the selected region");
+        require(projection(manual,186,96000)/projection(manualDry,186,96000) > 0.9, "Manual focus cut an unrelated upper-bass note");
+        std::cout << "PASS manual focus selectivity\n";
+
         // Delta is removed bass, before module AGC and trim.
         auto delta = dry; Engine diff; diff.prepare(48000); s.delta = true; s.outputDb = 12;
         render(diff, delta, &side, s);

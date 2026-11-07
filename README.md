@@ -1,39 +1,41 @@
-# BassDeamon 0.1.0 — prima bozza DSP/VST3
+# BassDeamon 0.2.0
 
-Plugin audio originale per uniformare il basso e gestirne la relazione con il kick.
-**Prototipo da misurare e ascoltare: non una release audio definitiva.**
+VST3 originale per lavorare sulla relazione kick/basso. Inserire sul **basso** e inviare il **kick al sidechain**. Il kick non viene sommato all'uscita.
 
-## Routing
+`Bass mono/stereo → GLUE → PHASE opzionale → UNMASK → Output trim`
 
-Inserire sul **basso**, inviare il **kick al sidechain esterno**.
+## Novità della 0.2
 
-`Bass mono/stereo → GLUE → PHASE opzionale → UNMASK → Output`
+- GUI JUCE nativa e ridimensionabile: console vintage, demone DJ vettoriale, manopole, VU GR, indicazione sidechain e livelli reali.
+- Grafico a **12 bande** per l'energia di basso/kick e risposta EQ calcolata dai filtri correnti. Non è uno spettrogramma FFT.
+- UNMASK con focus automatico della zona di sovrapposizione, isteresi e movimento lento; HOLD congela la frequenza mentre i tagli restano dinamici.
+- Focus manuale 30–250 Hz, larghezza, attack 1–50 ms, release 30–500 ms, budget di taglio 3/6/9/12 dB e ascolto Delta.
+- Confronto A/B completo, quattro starting point, bypass globale, tooltip e peak hold con indicazione di clipping.
+- Stato v2: richiamo dei parametri congelati GLUE, AGC e focus; lettura dei vecchi stati v1.
+- Firma ad-hoc applicata dopo la generazione del manifest; controllo firma e pluginval su ARM/Intel prima del packaging.
 
-Il kick è solo un riferimento e non viene mai sommato all'uscita.
-Stereo linking dei rilevatori e dei guadagni; calcolo interno DSP in double.
+## Controlli e comportamento
 
-## Implementato nella bozza
-
-| Modulo | Comportamento attuale |
+| Modulo | Funzione |
 |---|---|
-| GLUE | Compressore RMS feed-forward, soft knee, soglia/ratio/attack/release adattivi, Amount e blocco dei parametri. Il basso guida la compressione; onset kick e BPM contribuiscono al release. |
-| PHASE | Bypass iniziale, polarità, ritardo causale 0–5 ms con interpolazione Lagrange di terzo ordine, all-pass del primo ordine opzionale. |
-| Learn + Lock | Quattro secondi di analisi low-pass; ricerca di polarità e ritardo su 21 candidati (passo 0,25 ms). A fine analisi il risultato resta fisso e modificabile. Segnale insufficiente: nessuna modifica. |
-| UNMASK | Sei rilevatori di sovrapposizione a 40/55/75/105/145/200 Hz; tagli parametrici minimum phase smussati, massimo 4 dB per banda a Amount 100%. Delta prima di AGC/trim. |
-| Auto Gain | Tre compensazioni indipendenti con on/off e Lock, misura energetica stereo, sospensione sul silenzio, limite ±3 dB per modulo e +6 dB complessivi. Adattamento lento (5 s; 12 s per UNMASK). Off iniziale. |
-| Stato | Parametri con ID stabili, schema versionato, salvataggio dei parametri GLUE congelati e dei guadagni AGC appresi. |
-| Interfaccia | Console di controllo provvisoria, colori vintage, meter GR/AGC/peak. Grafica finale con demone DJ ancora da realizzare. |
+| GLUE | Compressione RMS feed-forward stereo-linked, soft knee e parametri adattivi. Amount e Lock Adaptation. Il basso guida la dinamica; onset kick e BPM forniscono contesto al release. |
+| PHASE | Off iniziale. Learn analizza 4 s, cerca polarità e ritardo su 21 candidati 0–5 ms e mantiene il risultato fisso. Polarità, ritardo causale Lagrange e all-pass manuale. |
+| UNMASK | 12 rilevatori di sovrapposizione 30–370 Hz, focus 30–250 Hz, tagli minimum phase con pesi normalizzati e limite al budget comandato. |
+| Auto Gain | Tre AGC indipendenti con Lock, misura energetica stereo, sospensione sul silenzio, ±3 dB per modulo e massimo +6 dB complessivi. Tempi lenti 5 s / 12 s per UNMASK. Off iniziale. |
+| A/B | Due memorie di confronto mantenute finché l'istanza resta caricata, anche chiudendo la GUI. Nel progetto viene salvata l'impostazione attiva, non entrambe le memorie A/B. |
+| Starting points | Clean Low End, Afro / Round & Steady, Punch / Make Room, Sub / Gentle Control. Non correggono automaticamente ogni mix e lasciano PHASE off. |
 
-La correlazione Learn è una **euristica**, non la garanzia di un mix migliore.
-Analizza la frase dopo GLUE; non apprende la rotazione all-pass, che resta manuale.
-Non abilita automaticamente PHASE: confrontare il risultato con ACTIVE.
-Il ritardo è intenzionale: latenza algoritmica dichiarata **0 campioni**; nessun anticipo o lookahead.
-Il controllo all-pass cambia fase in funzione della frequenza, non di un angolo costante.
+**Il focus automatico segue una risonanza condivisa: non è il riconoscimento della fondamentale o della nota.** La correlazione PHASE non garantisce una scelta musicalmente migliore. Confrontare sempre la frase intera. L'all-pass non ruota tutte le frequenze dello stesso angolo.
 
-## Build macOS (Intel e Apple Silicon)
+Latenza algoritmica dichiarata: **0 campioni**. Il ritardo PHASE è un offset musicale intenzionale. Nessun anticipo, lookahead, limiter o saturazione obbligatoria.
 
-Richiede Xcode con Command Line Tools, CMake ≥3.22 e accesso GitHub per scaricare JUCE.
-JUCE **9.0.5**, fissato al commit `d60b7a78030661574a615b586d9325ba7a7fa7dd`.
+## Installazione macOS
+
+Estrarre lo ZIP e sostituire `BassDeamon.vst3` in `/Library/Audio/Plug-Ins/VST3/` a Cubase chiuso. Istruzioni complete nel file `INSTALL.txt`. Questa build di sviluppo è firmata ad-hoc e non notarizzata da Apple; se Gatekeeper la blocca, seguire l'autorizzazione mirata indicata nel file.
+
+## Build e verifiche
+
+C++17, JUCE **9.0.5**, commit `d60b7a78030661574a615b586d9325ba7a7fa7dd`, CMake ≥3.22 e Xcode Command Line Tools.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
@@ -44,13 +46,7 @@ ctest --test-dir build -C Release --output-on-failure
 
 Output: `build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3`.
 Per un checkout JUCE locale: `-DBASSDEAMON_JUCE_PATH=/percorso/JUCE`.
-La build di sviluppo non include firma Developer ID, notarizzazione o installer.
-AU e standalone non sono inclusi in questa versione.
-
-La workflow GitHub Actions compila il VST3 universale e pubblica uno ZIP negli artifact
-**solo dopo il superamento della build e dei test**. Non equivale alla validazione in Cubase.
-
-## Test DSP senza JUCE
+Dopo tutti i passaggi che modificano il bundle, firmare il bundle completo con `codesign --force --sign - --timestamp=none` e verificarlo con `codesign --verify --strict`.
 
 ```sh
 cmake -S . -B build-core -DBASSDEAMON_BUILD_PLUGIN=OFF -DCMAKE_BUILD_TYPE=Release
@@ -58,30 +54,20 @@ cmake --build build-core
 ctest --test-dir build-core --output-on-failure
 ```
 
-Oppure: `g++ -std=c++17 -O2 -ISource tests/DspTests.cpp -o dsp_tests`.
+La CI verifica DSP, sanitizers, stato/A-B, rendering della vera GUI, firma e pluginval strictness 5 sulle due architetture. Il PNG di anteprima usa segnali sintetici noti, elaborati dal motore reale. Non è una misura della qualità musicale.
 
-I test verificano identità a moduli bypassati, isolamento sidechain, stereo linking,
-indipendenza dal buffer, compressione senza kick/BPM, AGC e lock, selettività UNMASK,
-ricostruzione Delta, ritardo/polarità/all-pass, Learn e stabilità a sample rate diversi.
-Il target JUCE `plugin_tests` verifica layout, routing e roundtrip dello stato.
+## Limiti e lavoro audio ancora necessario
 
-## Limiti concreti della 0.1
+- Analisi a bande, senza FFT e senza pitch tracking; linear phase e oversampling non implementati.
+- AGC RMS non ponderato: la trasparenza percettiva e lo spazio lasciato al kick richiedono ascolti.
+- Un cambio di ritardo PHASE smussato può produrre un breve cambio di pitch. Usare Learn su un loop di prova.
+- Stereo fuori fase può annullare il mono usato dal Learn: ignorare un risultato non affidabile.
+- I nuovi filtri UNMASK possono cambiare il suono dei preset 0.1: confrontare su una copia del progetto.
+- Firma ad-hoc, non Developer ID/notarizzazione. AU e standalone non distribuiti.
+- Validazione finale su Cubase/macOS Sonoma dell'utente, misure di distorsione/transienti/CPU e ascolti su bassline reali ancora necessari.
 
-- UNMASK usa bande fisse: tracking della fondamentale e Lock frequenza non sono implementati.
-- GLUE è un primo modello adattivo, da tarare per preservare accenti e articolazione su bassline reali.
-- Learn confronta correlazione low-end, non loudness della somma, salienza del kick o qualità percettiva.
-- Il mono usato dal Learn può annullarsi su stereo fuori fase: in quel caso ignorare il risultato o usare materiale coerente.
-- La transizione fra ritardi usa smoothing e può produrre un breve cambio di pitch; usare Learn su loop di prova.
-- La misura AGC è RMS non ponderata. La metrica percettiva e l'effetto sullo spazio lasciato al kick devono essere validati.
-- Nessun limiter: monitorare il peak meter e lasciare headroom.
-- Oversampling e linear phase non sono esposti finché non esistono implementazione e misure a sostegno.
-- CPU, artefatti, transienti, validazione VST3 e prove in Cubase/macOS sono ancora da completare.
+## Documentazione
 
-## Documentazione e dipendenze
+[Obiettivi di prodotto](docs/PRODUCT.md) · [Architettura](docs/ARCHITECTURE.md) · [Verifiche](docs/VALIDATION.md)
 
-- [Obiettivi di prodotto originali](docs/PRODUCT.md)
-- [Architettura e criteri di qualità](docs/ARCHITECTURE.md)
-- [Verifiche di questa bozza](docs/VALIDATION.md)
-- [JUCE 9.0.5](https://github.com/juce-framework/JUCE/tree/9.0.5) e relativa licenza nel repository JUCE; nessun codice o asset KickUncover.
-
-La scelta della licenza di distribuzione BassDeamon/JUCE resta da definire prima di distribuire il prodotto.
+Nessun codice o asset KickUncover. Licenze JUCE/BassDeamon da definire prima della distribuzione commerciale; vedere la licenza del framework JUCE.

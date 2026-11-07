@@ -26,10 +26,16 @@ public:
     void changeProgramName(int, const juce::String&) override {}
     void getStateInformation(juce::MemoryBlock&) override;
     void setStateInformation(const void*, int) override;
+    void selectAB(int slot);
+    void loadStartingPoint(int preset);
+    int selectedAB() const noexcept { return abSlot; }
     void requestLearn() noexcept { learnRequested.store(true); }
     juce::AudioProcessorValueTreeState parameters;
     std::atomic<float> glueReduction{0}, unmaskReduction{0}, outputPeak{0};
     std::array<std::atomic<float>, 3> agcMeters{};
+    std::array<std::atomic<float>, bassdeamon::bandCount> spectrumBass{}, spectrumKick{}, spectrumCut{};
+    std::atomic<float> kickPeak{0}, focusHz{75}, inputRmsDb{-120}, outputRmsDb{-120};
+    std::atomic<float> glueAttack{20}, glueRelease{180}, unmaskQ{2};
     // 0 idle/locked, 1 learning, 2 insufficient signal. UI reads atomics only.
     std::atomic<int> learnStatus{0};
     std::atomic<float> learnCorrelation{0};
@@ -39,11 +45,13 @@ private:
     void timerCallback() override;
     void publishMeters() noexcept;
     bassdeamon::Engine engine;
-    std::array<std::atomic<float>*, 18> raw{};
+    std::array<std::atomic<float>*, 26> raw{};
     std::atomic<bool> learnRequested{false}, resultReady{false};
     std::atomic<float> resultDelay{0};
     std::atomic<bool> resultInvert{false};
-    std::array<std::atomic<float>, 7> runtimeSnapshot{}, restoredRuntime{};
+    std::array<std::atomic<float>, 8> runtimeSnapshot{}, restoredRuntime{};
+    std::array<juce::MemoryBlock, 2> abStates;
+    int abSlot = 0; // message-thread only; A/B survives editor close/reopen.
     std::atomic<bool> restoreRequested{false};
     bool wasLearning = false, wasPlaying = false, wasBypassed = false;
     double lastTimeSeconds = -1;

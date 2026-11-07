@@ -2,7 +2,6 @@ name: BassDeamon prototype
 on:
   push:
     branches: [main, 'codex/**']
-  pull_request:
   workflow_dispatch:
 permissions:
   contents: read
@@ -27,6 +26,8 @@ jobs:
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
       - run: cmake --build build --config Release --parallel 3
       - run: ctest --test-dir build -C Release --output-on-failure
+      - name: Render the real plugin GUI for visual review
+        run: build/plugin_tests_artefacts/Release/plugin_tests --capture "$PWD/GUI-Preview.png"
       - name: Sign the complete bundle after manifest generation
         run: |
           codesign --force --sign - --timestamp=none build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3
@@ -40,8 +41,12 @@ jobs:
           arch -arm64 validator/pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --timeout-ms 60000 --validate "$PWD/build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3"
           arch -x86_64 validator/pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --timeout-ms 60000 --validate "$PWD/build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3"
       - name: Package ad-hoc signed development plugin
-        run: ditto -c -k --sequesterRsrc --keepParent build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3 BassDeamon-0.1.0-macOS-universal.zip
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3 BassDeamon-0.2.0-macOS-universal.zip
+          zip -j BassDeamon-0.2.0-macOS-universal.zip INSTALL.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: BassDeamon-0.1.0-macOS-universal
-          path: BassDeamon-0.1.0-macOS-universal.zip
+          name: BassDeamon-0.2.0-macOS-universal
+          path: |
+            BassDeamon-0.2.0-macOS-universal.zip
+            GUI-Preview.png

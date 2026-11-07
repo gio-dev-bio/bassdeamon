@@ -7,8 +7,10 @@ void set(BassDeamonProcessor& p, const char* id, float value) {
     auto* parameter = p.parameters.getParameter(id);
     parameter->setValueNotifyingHost(parameter->convertTo0to1(value));
 }
-int main() {
+int captureGui(const juce::File&);
+int main(int argc, char** argv) {
     juce::ScopedJuceInitialiser_GUI init;
+    if (argc > 2 && juce::String(argv[1]) == "--capture") return captureGui(juce::File(argv[2]));
     try {
         BassDeamonProcessor p;
         auto layout = p.getBusesLayout();
@@ -23,11 +25,16 @@ int main() {
         p.processBlock(bass, midi);
         for (int i = 0; i < 256; ++i) require(bass.getSample(0,i) == 0.125f, "Plugin bypass not unity");
         set(p, "phase.delay", 2.25f); set(p, "phase.invert", 1); set(p, "unmask.agcLock", 1);
+        set(p, "unmask.hold", 1); set(p, "unmask.width", 0.75f);
+        p.selectAB(1); set(p, "phase.delay", 3.5f); p.selectAB(0);
+        require(std::abs(p.parameters.getRawParameterValue("phase.delay")->load()-2.25f) < 0.001f, "A/B recall failed");
         juce::MemoryBlock state; p.getStateInformation(state);
         BassDeamonProcessor restored; restored.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
         require(restored.parameters.getRawParameterValue("phase.delay")->load() == 2.25f, "Delay state lost");
         require(restored.parameters.getRawParameterValue("phase.invert")->load() == 1, "Polarity state lost");
         require(restored.parameters.getRawParameterValue("unmask.agcLock")->load() == 1, "AGC lock state lost");
+        require(restored.parameters.getRawParameterValue("unmask.hold")->load() == 1, "Focus HOLD state lost");
+        require(std::abs(restored.parameters.getRawParameterValue("unmask.width")->load()-0.75f) < 0.001f, "Width state lost");
         layout = restored.getBusesLayout();
         layout.inputBuses.set(1, juce::AudioChannelSet::mono());
         require(restored.setBusesLayout(layout), "Mono sidechain rejected");
