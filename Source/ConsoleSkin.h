@@ -53,6 +53,8 @@ inline void demon(juce::Graphics& g, juce::Rectangle<float> area) {
 class Skin final : public juce::LookAndFeel_V4 {
 public:
     Skin() {
+        setColour(juce::Slider::thumbColourId,amber); setColour(juce::Slider::trackColourId,copper);
+        setColour(juce::Slider::backgroundColourId,ink);
         setColour(juce::Slider::textBoxTextColourId,cream); setColour(juce::Slider::textBoxBackgroundColourId,ink);
         setColour(juce::Slider::textBoxOutlineColourId,copper.withAlpha(0.5f));
         setColour(juce::ComboBox::textColourId,cream); setColour(juce::ComboBox::backgroundColourId,ink);
@@ -63,7 +65,7 @@ public:
         setColour(juce::TooltipWindow::textColourId,ink);
     }
     void drawRotarySlider(juce::Graphics& g, int x, int y, int w, int h, float position, float start, float end, juce::Slider& slider) override {
-        auto r=juce::Rectangle<float>(static_cast<float>(x),static_cast<float>(y),static_cast<float>(w),static_cast<float>(h)).reduced(12);
+        auto r=juce::Rectangle<float>(static_cast<float>(x),static_cast<float>(y),static_cast<float>(w),static_cast<float>(h)).reduced(std::min(12.0f,static_cast<float>(h)*0.1f));
         const float radius=std::min(r.getWidth(),r.getHeight())*0.5f, cx=r.getCentreX(),cy=r.getCentreY();
         const float angle=start+position*(end-start);
         for(int i=0;i<=12;++i) {

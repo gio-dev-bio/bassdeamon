@@ -187,6 +187,13 @@ void BassDeamonProcessor::getStateInformation(juce::MemoryBlock& dest) {
 void BassDeamonProcessor::setStateInformation(const void* data, int bytes) {
     if (auto xml = getXmlFromBinary(data, bytes)) {
         if (xml->hasTagName(parameters.state.getType()) && xml->getIntAttribute("schemaVersion", 1) <= 2) {
+            // A v1 state cannot carry the added controls: reset them deterministically.
+            if (xml->getIntAttribute("schemaVersion", 1) == 1) {
+                for (size_t i = 18; i < ids.size(); ++i) {
+                    auto* parameter = parameters.getParameter(ids[i]);
+                    parameter->setValueNotifyingHost(parameter->getDefaultValue());
+                }
+            }
             // Merge known parameter values into the current schema: v0.1 sessions lack v0.2 IDs.
             const auto incoming = juce::ValueTree::fromXml(*xml);
             for (int i = 0; i < incoming.getNumChildren(); ++i) {

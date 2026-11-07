@@ -44,6 +44,15 @@ int main(int argc, char** argv) {
         for (int i = 0; i < 256; ++i) routed.setSample(2, i, 0.5f);
         restored.processBlock(routed, midi);
         require(routed.getMagnitude(0,0,256) == 0 && routed.getMagnitude(1,0,256) == 0, "Sidechain leaked");
-        std::cout << "PASS plugin layouts / routing / state roundtrip\n";
+        auto legacy = p.parameters.copyState(); legacy.setProperty("schemaVersion", 1, nullptr);
+        const juce::StringArray newIds{"global.on", "unmask.track", "unmask.hold", "unmask.frequency", "unmask.width", "unmask.attack", "unmask.release", "unmask.maxCut"};
+        for (int i = legacy.getNumChildren()-1; i >= 0; --i)
+            if (newIds.contains(legacy.getChild(i).getProperty("id").toString())) legacy.removeChild(i, nullptr);
+        juce::MemoryBlock legacyBytes;
+        auto legacyXml = legacy.createXml(); juce::AudioProcessor::copyXmlToBinary(*legacyXml, legacyBytes);
+        restored.setStateInformation(legacyBytes.getData(), static_cast<int>(legacyBytes.getSize()));
+        require(std::abs(restored.parameters.getRawParameterValue("unmask.width")->load()-0.55f) < 0.001f, "Legacy width default was not restored");
+        require(restored.parameters.getRawParameterValue("unmask.hold")->load() == 0, "Legacy HOLD default was not restored");
+        std::cout << "PASS plugin layouts / routing / state / A-B / legacy migration\n";
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }
