@@ -52,6 +52,10 @@ struct Biquad {
         a1 = -2 * std::cos(w) / a0; a2 = (1 - alpha) / a0;
     }
     void peak(double frequency, double q, double cutDb, double sr) noexcept {
+        if (std::abs(cutDb) < 1e-12) {
+            // Explicit identity avoids recursive roundoff/FMA residue at exactly 0 dB.
+            b0 = 1; b1 = b2 = a1 = a2 = z1 = z2 = 0; return;
+        }
         const double w = 2 * pi * frequency / sr, A = gain(cutDb / 2);
         const double alpha = std::sin(w) / (2 * q), a0 = 1 + alpha / A;
         b0 = (1 + alpha * A) / a0; b1 = -2 * std::cos(w) / a0;
@@ -181,6 +185,7 @@ public:
         kickFastA = pole(3, sampleRate); kickSlowA = pole(100, sampleRate);
         parameterA = pole(500, sampleRate / 32); // coefficients adapt over 500 ms
         cutAttackA = pole(5, sampleRate); cutReleaseA = pole(100, sampleRate);
+        attackA = pole(attackMs, sampleRate); releaseA = pole(releaseMs, sampleRate);
     }
     void startLearn() noexcept { learner.start(); }
     void cancelLearn() noexcept { learner.cancel(); }
