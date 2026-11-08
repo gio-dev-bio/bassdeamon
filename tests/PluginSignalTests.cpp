@@ -53,8 +53,9 @@ int pluginSignalTests(const std::string& path) {
             }
         }
         csv<<(startOff?"global_initial":"global_transition")<<','<<name<<",48000,2,128,"<<(startOff?count:count-sr)*2<<','<<bits<<','<<max<<','<<late<<'\n';
-        // Smoothed transitions and IEEE signed-zero/subnormal differences are recorded, not hidden by an identity assertion.
-        if(!std::isfinite(max))++failures;
+        // The new finite global ramp must reach exact dry after 20 ms, including IEEE edge values.
+        if(startOff&&bits)++failures;
+        if(late!=0||!std::isfinite(max))++failures;
     }
     // Deliberately switch at a nonzero sample to expose possible hard-bypass clicks.
     for(bool host:{true,false}) {

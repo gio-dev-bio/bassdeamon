@@ -30,7 +30,7 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
     aButton.setBounds(958,33,44,38);bButton.setBounds(1010,33,44,38);
     for(auto* b:{&aButton,&bButton}) {face.addAndMakeVisible(*b);b->setTooltip("Compare two complete settings at their actual output levels. Auto Gain can help level matching.");}
     aButton.onClick=[this]{processor.selectAB(0);};bButton.onClick=[this]{processor.selectAB(1);};
-    addSwitch("global.on","POWER",{1082,27,88,50},"Processing power. Bypass ramps all modules and trim back to unity.");
+    addSwitch("global.on","POWER",{1082,27,88,50},"20 ms transition, then exact dry bypass. Processing settings are retained.");
     const char* modules[]{"glue","phase","unmask"};
     for(int i=0;i<3;++i) {
         const int x=24+i*392;
@@ -46,7 +46,7 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
     addSwitch("phase.invert","POLARITY -",{438,654,150,32},"Invert both bass channels together.");
     addSwitch("phase.rotate","ALL-PASS",{610,654,150,32},"Enable the manual all-pass stage.");
     learn.setBounds(438,704,150,38);face.addAndMakeVisible(learn);learn.onClick=[this]{processor.requestLearn();};
-    learn.setTooltip("Analyse four seconds of bass and kick, suggest polarity/delay, then hold the result. It does not enable PHASE automatically.");
+    learn.setTooltip("Analyse four seconds. Apply only a strong, distinct match stable across both halves. Weak, ambiguous or moving matches keep your settings. Does not enable PHASE. Correlation is not a sound-quality score.");
     addKnob("unmask.amount","DEPTH","",true,{830,448,170,184},"Maximum spectral unmasking amount. The kick is never summed into the bass.");
     frequencyKnob=&addKnob("unmask.frequency","MANUAL FOCUS"," Hz",false,{1026,460,118,120},"Manual focus frequency, available when AUTO FOCUS is off.");
     addKnob("unmask.width","WIDTH","",true,{1026,580,118,120},"Width of the focus region and dynamic EQ bands.");
@@ -118,7 +118,8 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g){
     console::text(g,"BASS-LED / STEREO LINKED",{46,752,294,18},12,console::muted);
     const int state=processor.learnStatus.load();
     const auto match=processor.learnCorrelation.load();
-    console::text(g,state==1?"ANALYSING 4 s...":state==2?"NO RELIABLE MATCH":match>0?"LOCKED  /  r "+juce::String(match,2):"MANUAL / READY",{604,707,170,28},14,state==2?console::orange:console::amber);
+    const juce::String status=state==1?"ANALYSING 4 s...":state==2?"WEAK / NO SIGNAL":state==3?"AMBIGUOUS MATCH":state==4?"MOVING MATCH":match>0?"LOCKED  /  r "+juce::String(match,2):"MANUAL / READY";
+    console::text(g,status,{604,707,170,28},13,state>=2?console::orange:console::amber);
     console::text(g,"POLARITY + DELAY ONLY / ALL-PASS IS MANUAL",{438,750,325,18},11.5f,console::muted);
     console::text(g,"FOCUS  "+juce::String(focus,1)+" Hz",{1026,439,118,18},13,console::amber);
     console::panel(g,{24,798,1152,46},true);
@@ -127,7 +128,7 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g){
     console::text(g,"IN "+juce::String(std::max(inputDb,-99.0f),1)+"  /  OUT "+juce::String(std::max(outputDb,-99.0f),1)+" dBFS RMS",{221,808,315,26},13,console::muted);
     console::text(g,"PEAK "+juce::String(std::max(peak,-99.0f),1)+" dBFS",{548,808,180,26},14,clipFrames>0?console::orange:console::cream);
     console::text(g,"TRIM",{762,808,60,26},13,console::muted);
-    console::text(g,"v0.2.1",{1090,808,66,26},13,console::muted,juce::Justification::centredRight);
+    console::text(g,"v0.2.2",{1090,808,66,26},13,console::muted,juce::Justification::centredRight);
     g.drawImageAt(grain,0,0);
 }
 void BassDeamonEditor::paintSpectrum(juce::Graphics& g){
@@ -191,7 +192,7 @@ void BassDeamonEditor::timerCallback(){
     vu=0.65f*vu+0.35f*processor.glueReduction.load();focus=processor.focusHz.load();q=processor.unmaskQ.load();
     peak=static_cast<float>(bassdeamon::db(processor.outputPeak.load()));sidePeak=processor.kickPeak.load();inputDb=processor.inputRmsDb.load();outputDb=processor.outputRmsDb.load();
     if(peak>=0)clipFrames=90;else clipFrames=std::max(0,clipFrames-1);
-    learn.setEnabled(processor.learnStatus.load()!=1);
+    learn.setEnabled(processor.learnStatus.load()!=1&&processor.parameters.getRawParameterValue("global.on")->load()>.5f);
     aButton.setToggleState(processor.selectedAB()==0,juce::dontSendNotification);bButton.setToggleState(processor.selectedAB()==1,juce::dontSendNotification);
     frequencyKnob->slider.setEnabled(processor.parameters.getRawParameterValue("unmask.track")->load()<0.5f);
     face.repaint();

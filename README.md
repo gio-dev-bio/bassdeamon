@@ -1,4 +1,6 @@
-# BassDeamon 0.2.1
+# BassDeamon 0.2.2
+
+Novità: POWER termina su bypass digitale esatto dopo 20 ms; PHASE usa cambi di delay a due tap fissi e Learn rifiuta corrispondenze deboli, ambigue o instabili. Dettagli e compromessi in [RELEASE_0.2.2.md](docs/RELEASE_0.2.2.md).
 
 VST3 originale per lavorare sulla relazione kick/basso. Inserire sul **basso** e inviare il **kick al sidechain**. Il kick non viene sommato all'uscita.
 
@@ -60,7 +62,7 @@ La CI verifica DSP, sanitizers, stato/A-B, rendering della vera GUI, firma e plu
 
 - Analisi a bande, senza FFT e senza pitch tracking; linear phase e oversampling non implementati.
 - AGC RMS non ponderato: la trasparenza percettiva e lo spazio lasciato al kick richiedono ascolti.
-- Un cambio di ritardo PHASE smussato può produrre un breve cambio di pitch. Usare Learn su un loop di prova.
+- I cambi di delay PHASE sfumano tra due tap fissi per 20 ms: evitano il pitch glide del tap mobile, ma possono creare una breve variazione di ampiezza/comb filtering. Le variazioni rapide sono accorpate fino al termine del fade corrente.
 - Stereo fuori fase può annullare il mono usato dal Learn: ignorare un risultato non affidabile.
 - I nuovi filtri UNMASK possono cambiare il suono dei preset 0.1: confrontare su una copia del progetto.
 - Firma ad-hoc, non Developer ID/notarizzazione. AU e standalone non distribuiti.

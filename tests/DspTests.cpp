@@ -1,4 +1,5 @@
 #include "Dsp.h"
+#include <cstring>
 #include <cstdlib>
 #include <iostream>
 #include <random>
@@ -170,6 +171,46 @@ int main() {
         learner.start(); for (int i = 0; i < 192000; ++i) learner.tick(0, 0);
         require(!learner.getResult().valid, "Learn accepted silence");
         std::cout << "PASS PHASE Learn + Lock / silence rejection\n";
+
+        // Alignment is accepted only when distinct and stable; DC and periodic ambiguities reject.
+        const auto reject=[&](int kind){
+            learner.start();std::mt19937 unrelated(937);std::uniform_real_distribution<float> rnd(-.5f,.5f);
+            for(size_t i=0;i<noise.size();++i){
+                double b=noise[i],k=rnd(unrelated);
+                if(kind==1)b=k=.25;
+                if(kind==2)b=k=.25*std::sin(2*pi*160*i/48000);
+                if(kind==3){const size_t d=i<96000?24:192;k=i>=d?noise[i-d]:0;}
+                learner.tick(b,k);
+            }
+            require(!learner.getResult().valid,"Unreliable phase match was accepted");
+        };
+        for(int kind=0;kind<4;++kind)reject(kind);
+        std::cout<<"PASS Learn rejects unrelated / DC / ambiguous / changing lag\n";
+
+        // Global bypass preserves bits after a finite ramp, including -0 and subnormal floats.
+        Engine master;master.prepare(48000);s={};s.phase=s.rotate=s.invert=true;s.delayMs=4;s.outputDb=6;
+        for(auto& cfg:s.agc)cfg.enabled=true;
+        auto warm=tone(4096,80,.25);render(master,warm,nullptr,s);
+        s.active=false;Signal fade(960,0.125f);render(master,fade,nullptr,s,17);
+        Signal exact{0.0f,-0.0f,1e-39f,-1e-39f,.25f,-.5f};auto original=exact;
+        render(master,exact,nullptr,s,1);
+        require(std::memcmp(exact.data(),original.data(),exact.size()*sizeof(float))==0,"Global bypass endpoint is not bit exact");
+        s.active=true;Signal silentResume(2048,0);render(master,silentResume,nullptr,s,17);
+        for(float v:silentResume)require(v==0,"Stale wet history leaked after global bypass");
+        auto resume=tone(4096,80,.25);render(master,resume,nullptr,s,17);
+        for(float v:resume)require(std::isfinite(v),"Nonfinite global resume");
+        std::cout<<"PASS finite global bypass / exact IEEE endpoint / resume\n";
+
+        // Delay changes blend fixed taps, rather than sweeping the pitch of a moving tap.
+        Engine taps;taps.prepare(48000);s=bypass();s.phase=true;
+        Signal before(noise.begin(),noise.begin()+4096);render(taps,before,nullptr,s,64);
+        Signal after(noise.begin()+4096,noise.begin()+8192);s.delayMs=2;render(taps,after,nullptr,s,63);
+        for(size_t n=0;n<after.size();++n){
+            const double blend=std::min(1.0,static_cast<double>(n+1)/960);
+            const double expected=noise[4096+n]+blend*(static_cast<double>(noise[4096+n-96])-noise[4096+n]);
+            require(std::abs(after[n]-expected)<1e-7,"Fixed-tap delay crossfade mismatch");
+        }
+        std::cout<<"PASS fixed-tap PHASE delay crossfade\n";
 
         // Extreme legal settings stay finite at all supported rates.
         for (double sr : {8000.0, 44100.0, 96000.0, 192000.0}) {

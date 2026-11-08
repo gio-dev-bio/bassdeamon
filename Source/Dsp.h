@@ -19,6 +19,7 @@ inline double power(const std::array<double, 2>& x, int channels) noexcept {
 
 struct AgcSettings { bool enabled = false, locked = false; };
 struct Settings {
+    bool active = true;
     bool glue = true, glueLocked = false;
     double glueAmount = 0.35;
     bool phase = false, invert = false, rotate = false;
@@ -121,7 +122,26 @@ private:
     size_t head = 0;
 };
 
-struct LearnResult { double delayMs = 0, correlation = 0; bool invert = false, valid = false; };
+// Finite ramps reach their exact endpoint; retargeting starts from the current value.
+class Ramp {
+public:
+    void reset(double value) noexcept { current=target=value; remaining=0; step=0; }
+    void set(double value,int samples) noexcept {
+        if(value==target)return;
+        target=value;remaining=std::max(1,samples);step=(target-current)/remaining;
+    }
+    double next() noexcept { if(remaining>0){current+=step;if(--remaining==0)current=target;}return current; }
+    double value() const noexcept { return current; }
+    bool finished() const noexcept { return remaining==0; }
+private:
+    double current=0,target=0,step=0;int remaining=0;
+};
+enum class LearnRejection { none, insufficient, weak, ambiguous, unstable };
+struct LearnResult {
+    double delayMs = 0, correlation = 0; bool invert = false, valid = false;
+    double separation = 0;
+    LearnRejection rejection = LearnRejection::insufficient;
+};
 class PhaseLearner {
 public:
     void prepare(double sr) {
@@ -129,7 +149,8 @@ public:
         lowPole = std::exp(-2 * pi * 250 / sr); history.prepare(sr); start(); active = false;
     }
     void start() noexcept {
-        cross.fill(0); bassPower.fill(0); kickPower = 0; count = 0;
+        for(auto* a:{&cross,&bassPower,&bassSum,&firstCross,&firstBassPower,&firstBassSum})a->fill(0);
+        kickPower=kickSum=firstKickPower=firstKickSum=0;count=firstCount=0;
         elapsed = 0; lowBass = lowKick = 0; active = true; result = {};
     }
     void cancel() noexcept { active = false; }
@@ -145,27 +166,59 @@ public:
             for (size_t i = 0; i < cross.size(); ++i) {
                 const double b = history.read(static_cast<double>(i) * 0.00025 * sampleRate);
                 cross[i] += b * lowKick; bassPower[i] += b * b;
+                bassSum[i]+=b;
+                if(elapsed<=static_cast<int>(2*sampleRate)){
+                    firstCross[i]+=b*lowKick;firstBassPower[i]+=b*b;firstBassSum[i]+=b;
+                }
             }
             kickPower += lowKick * lowKick; ++count;
+            kickSum+=lowKick;
+            if(elapsed<=static_cast<int>(2*sampleRate)){firstKickPower+=lowKick*lowKick;firstKickSum+=lowKick;++firstCount;}
         }
         if (elapsed >= static_cast<int>(4 * sampleRate)) {
             active = false;
-            double best = 0;
+            const auto corr=[](double xy,double xx,double sx,double yy,double sy,int n){
+                if(n<1)return 0.0;
+                const double vx=std::max(0.0,xx-sx*sx/n),vy=std::max(0.0,yy-sy*sy/n);
+                // DC or near-constant signals do not establish an alignment.
+                if(vx<std::max(1e-12,xx*.001)||vy<std::max(1e-12,yy*.001))return 0.0;
+                return std::clamp((xy-sx*sy/n)/std::sqrt(vx*vy),-1.0,1.0);
+            };
+            std::array<double,21> correlations{};
+            double best = 0;size_t bestIndex=0;
             for (size_t i = 0; i < cross.size(); ++i) {
-                const double corr = cross[i] / std::sqrt(std::max(1e-30, bassPower[i] * kickPower));
-                if (std::abs(corr) > best) {
-                    best = std::abs(corr); result = {static_cast<double>(i) * 0.25, best, corr < 0, false};
+                const double c=corr(cross[i],bassPower[i],bassSum[i],kickPower,kickSum,count);correlations[i]=c;
+                if (std::abs(c) > best) {
+                    best = std::abs(c);bestIndex=i;result.delayMs=static_cast<double>(i)*.25;result.correlation=best;result.invert=c<0;
                 }
             }
-            result.valid = count >= 200 && kickPower > 1e-5 && best >= 0.15;
+            double competitor=0;
+            for(size_t i=0;i<cross.size();++i)if(std::abs(static_cast<int>(i)-static_cast<int>(bestIndex))>=4)
+                competitor=std::max(competitor,std::abs(correlations[i]));
+            result.separation=best-competitor;
+            const auto halfBest=[&](bool first){
+                double peak=0;int index=0;bool invert=false;
+                for(size_t i=0;i<cross.size();++i){
+                    const double c=first?corr(firstCross[i],firstBassPower[i],firstBassSum[i],firstKickPower,firstKickSum,firstCount)
+                        :corr(cross[i]-firstCross[i],bassPower[i]-firstBassPower[i],bassSum[i]-firstBassSum[i],kickPower-firstKickPower,kickSum-firstKickSum,count-firstCount);
+                    if(std::abs(c)>peak){peak=std::abs(c);index=static_cast<int>(i);invert=c<0;}
+                }
+                return std::array<double,3>{static_cast<double>(index),invert?1.0:0.0,peak};
+            };
+            const auto first=halfBest(true),second=halfBest(false);
+            const bool stable=first[2]>=.55&&second[2]>=.55&&first[1]==second[1]&&std::abs(first[0]-second[0])<=2;
+            result.rejection=count<600||firstCount<200||count-firstCount<200||kickPower<=1e-5?LearnRejection::insufficient
+                :best<.55?LearnRejection::weak:result.separation<.08?LearnRejection::ambiguous:!stable?LearnRejection::unstable:LearnRejection::none;
+            result.valid=result.rejection==LearnRejection::none;
         }
     }
     bool learning() const noexcept { return active; }
     LearnResult getResult() const noexcept { return result; }
 private:
-    std::array<double, 21> cross{}, bassPower{};
+    std::array<double,21> cross{},bassPower{},bassSum{},firstCross{},firstBassPower{},firstBassSum{};
     double sampleRate = 48000, lowPole = 0, lowBass = 0, lowKick = 0, kickPower = 0;
-    int decimation = 24, elapsed = 0, count = 0;
+    double kickSum=0,firstKickPower=0,firstKickSum=0;
+    int decimation = 24, elapsed = 0, count = 0,firstCount=0;
     bool active = false;
     Delay history;
     LearnResult result;
@@ -179,6 +232,7 @@ public:
         thresholdDb = -24; ratio = 2; attackMs = 20; releaseMs = 180;
         glueReduction = 0; onsetClock = lastOnset = 0; kickIntervalMs = 0;
         controlCounter = 0; smoothed = false; meters = {};
+        globalInitialised=globalPaused=false;globalRamp.reset(1);delayFade.reset(1);polarityRamp.reset(1);
         inputPowerMeter = outputPowerMeter = outputHeld = kickHeld = 0;
         focusHz = 75; trackedFocusHz = 75;
         cachedRotationHz = -1; cachedAllpassA = 0;
@@ -234,11 +288,28 @@ public:
     void process(float* const* bass, int channels, const float* const* kick, int kickChannels,
                  int samples, const Settings& s, double bpm = 0) noexcept {
         if (channels < 1 || channels > 2) return;
+        const int rampSamples=std::max(1,static_cast<int>(sampleRate*.02));
+        if(!globalInitialised){globalRamp.reset(s.active?1:0);globalInitialised=true;}
+        globalRamp.set(s.active?1:0,rampSamples);
+        if(!s.active&&globalRamp.finished()){
+            if(!globalPaused){clearHistory();globalPaused=true;}
+            // Leave every input bit untouched, including IEEE signed zeros/subnormals.
+            meters.glueReductionDb=meters.unmaskReductionDb=0;meters.agcDb.fill(0);meters.cutsDb.fill(0);
+            for(int n=0;n<samples;++n){
+                std::array<double,2> dry{};for(int c=0;c<channels;++c)dry[c]=bass[c][n];
+                inputPowerMeter=follow(inputPowerMeter,power(dry,channels),energyA);
+                outputHeld*=peakA;for(int c=0;c<channels;++c)outputHeld=std::max(outputHeld,std::abs(dry[c]));
+            }
+            meters.peak=outputHeld;meters.inputRmsDb=meters.outputRmsDb=db(std::sqrt(inputPowerMeter));
+            return;
+        }
+        globalPaused=false;
         if (!smoothed) {
             glueMix = s.glue ? 1 : 0; phaseMix = s.phase ? 1 : 0;
             unmaskMix = s.unmask ? 1 : 0; delaySamples = s.delayMs * sampleRate / 1000;
             polarity = s.invert ? -1 : 1; rotationMix = s.rotate ? 1 : 0;
             rotationHz = s.rotationHz; outputGain = gain(s.outputDb); smoothed = true;
+            previousDelaySamples=delaySamples;delayFade.reset(1);polarityRamp.reset(polarity);
             deltaMix = s.delta && s.unmask ? 1 : 0;
             smoothedFilterQ = 3.5 - 2.6 * std::clamp(s.unmaskWidth, 0.0, 1.0);
         }
@@ -251,7 +322,10 @@ public:
         const double unmaskDepth = std::clamp(s.unmaskMaxCutDb, 3.0, 12.0)*std::clamp(s.unmaskAmount, 0.0, 1.0);
         const double widthOctaves = 0.25 + 1.25 * std::clamp(s.unmaskWidth, 0.0, 1.0);
         const double filterQTarget = 3.5 - 2.6 * std::clamp(s.unmaskWidth, 0.0, 1.0);
+        polarityRamp.set(s.invert?-1:1,rampSamples);
         for (int n = 0; n < samples; ++n) {
+            const float dryLeft=bass[0][n],dryRight=channels==2?bass[1][n]:0;
+            const double activeMix=globalRamp.next();
             std::array<double, 2> x{}, k{};
             for (int c = 0; c < channels; ++c) x[c] = std::isfinite(bass[c][n]) ? bass[c][n] : 0;
             if (kick && kickChannels > 0) {
@@ -350,8 +424,11 @@ public:
 
             const double monoBass = channels == 2 ? (x[0]+x[1])*0.5 : x[0];
             learner.tick(monoBass, (k[0]+k[1])*0.5);
-            delaySamples = follow(delaySamples, delayTarget, smoothA);
-            polarity = follow(polarity, s.invert ? -1 : 1, smoothA);
+            // Crossfade two fixed delay taps instead of sweeping delay/pitch.
+            // Rapid changes are coalesced until the current finite fade completes.
+            if(delayFade.finished()&&delaySamples!=delayTarget){previousDelaySamples=delaySamples;delaySamples=delayTarget;delayFade.reset(0);delayFade.set(1,rampSamples);}
+            const double delayBlend=delayFade.next();
+            polarity = polarityRamp.next();
             rotationMix = follow(rotationMix, s.rotate ? 1 : 0, smoothA);
             rotationHz = follow(rotationHz, rotationTarget, smoothA);
             if (rotationHz != cachedRotationHz) {
@@ -362,7 +439,8 @@ public:
             double phaseReference = 0;
             for (int c = 0; c < channels; ++c) {
                 delays[c].push(x[c]);
-                const double d = delays[c].read(std::clamp(delaySamples, 0.0, sampleRate * 0.005));
+                double d = delays[c].read(std::clamp(delaySamples, 0.0, sampleRate * 0.005));
+                if(delayBlend<1){const double old=delays[c].read(previousDelaySamples);d=old+delayBlend*(d-old);}
                 phaseReference += ((1-phaseMix)*x[c]*x[c] + phaseMix*d*d) / channels;
                 const double rotated = a*d + allpassX[c] - a*allpassY[c];
                 allpassX[c] = d; allpassY[c] = std::abs(rotated) < 1e-25 ? 0 : rotated;
@@ -402,8 +480,9 @@ public:
                 // Delta is removed bass BEFORE AGC/output trim; never includes kick.
                 const double normal = x[c]*unmaskAgc*outputGain;
                 const double out = normal + deltaMix*(beforeUnmask[c]-afterUnmask[c]-normal);
-                bass[c][n] = static_cast<float>(out);
-                outputHeld = std::max(std::abs(out), outputHeld * peakA);
+                const float dry=c==0?dryLeft:dryRight;
+                bass[c][n] = activeMix==0?dry:static_cast<float>(activeMix==1?out:static_cast<double>(dry)+activeMix*(out-dry));
+                outputHeld = std::max(std::abs(static_cast<double>(bass[c][n])), outputHeld * peakA);
             }
             outputPowerMeter = follow(outputPowerMeter,
                 static_cast<double>(bass[0][n])*bass[0][n]/channels
@@ -443,5 +522,8 @@ private:
     std::uint64_t onsetClock = 0, lastOnset = 0;
     int controlCounter = 0;
     bool smoothed = false;
+    Ramp globalRamp,delayFade,polarityRamp;
+    bool globalInitialised=false,globalPaused=false;
+    double previousDelaySamples=0;
 };
 } // namespace bassdeamon

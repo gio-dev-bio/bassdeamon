@@ -93,10 +93,7 @@ bassdeamon::Settings BassDeamonProcessor::readSettings() const noexcept {
     s.unmaskFrequency = value(21); s.unmaskWidth = value(22);
     s.unmaskAttackMs = value(23); s.unmaskReleaseMs = value(24);
     s.unmaskMaxCutDb = 3 * (1 + std::clamp(static_cast<int>(value(25)), 0, 3));
-    if (value(18) < 0.5f) {
-        s.glue = s.phase = s.unmask = s.delta = false; s.outputDb = 0;
-        for (auto& g : s.agc) g.enabled = false;
-    }
+    s.active=value(18)>.5f;
     return s;
 }
 void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) {
@@ -129,21 +126,24 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     }
     lastBlockSamples = buffer.getNumSamples();
     if (wasBypassed) { engine.clearHistory(); wasLearning = false; learnStatus.store(0); wasBypassed = false; }
-    if (learnRequested.exchange(false)) {
+    const auto settings=readSettings();
+    if(!settings.active){engine.cancelLearn();wasLearning=false;learnStatus.store(0);resultReady.store(false);}
+    if (learnRequested.exchange(false)&&settings.active) {
         resultReady.store(false); engine.startLearn(); wasLearning = true; learnStatus.store(1);
     }
     const float* kick[2]{nullptr, nullptr};
     const int sideChannels = side.getNumChannels();
     for (int c = 0; c < sideChannels; ++c) kick[c] = side.getReadPointer(c);
     engine.process(bass.getArrayOfWritePointers(), bass.getNumChannels(),
-                   sideChannels > 0 ? kick : nullptr, sideChannels, bass.getNumSamples(), readSettings(), bpm);
+                   sideChannels > 0 ? kick : nullptr, sideChannels, bass.getNumSamples(), settings, bpm);
     if (wasLearning && !engine.learning()) {
         const auto r = engine.learnResult();
+        learnCorrelation.store(static_cast<float>(r.correlation));
         if (r.valid) {
             resultDelay.store(static_cast<float>(r.delayMs)); resultInvert.store(r.invert);
             learnCorrelation.store(static_cast<float>(r.correlation));
             resultReady.store(true); learnStatus.store(0);
-        } else learnStatus.store(2);
+        } else learnStatus.store(r.rejection==bassdeamon::LearnRejection::ambiguous?3:r.rejection==bassdeamon::LearnRejection::unstable?4:2);
     }
     wasLearning = engine.learning(); publishMeters();
 }

@@ -36,7 +36,7 @@ public:
     std::array<std::atomic<float>, bassdeamon::bandCount> spectrumBass{}, spectrumKick{}, spectrumCut{};
     std::atomic<float> kickPeak{0}, focusHz{75}, inputRmsDb{-120}, outputRmsDb{-120};
     std::atomic<float> glueAttack{20}, glueRelease{180}, unmaskQ{2};
-    // 0 idle/locked, 1 learning, 2 insufficient signal. UI reads atomics only.
+    // 0 idle/accepted, 1 learning, 2 weak/insufficient, 3 ambiguous, 4 unstable.
     std::atomic<int> learnStatus{0};
     std::atomic<float> learnCorrelation{0};
 private:
