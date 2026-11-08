@@ -118,8 +118,8 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g){
     console::text(g,"BASS-LED / STEREO LINKED",{46,752,294,18},12,console::muted);
     const int state=processor.learnStatus.load();
     const auto match=processor.learnCorrelation.load();
-    const juce::String status=state==1?"ANALYSING 4 s...":state==2?"WEAK / NO SIGNAL":state==3?"AMBIGUOUS MATCH":state==4?"MOVING MATCH":match>0?"LOCKED  /  r "+juce::String(match,2):"MANUAL / READY";
-    console::text(g,status,{604,707,170,28},13,state>=2?console::orange:console::amber);
+    const juce::String status=state==1?"ANALYSING 4 s...":state==2?"WEAK / NO SIGNAL":state==3?"AMBIGUOUS MATCH":state==4?"MOVING MATCH":state==5?"LOCKED  /  r "+juce::String(match,2):"MANUAL / READY";
+    console::text(g,status,{604,707,170,28},13,state>=2&&state<=4?console::orange:console::amber);
     console::text(g,"POLARITY + DELAY ONLY / ALL-PASS IS MANUAL",{438,750,325,18},11.5f,console::muted);
     console::text(g,"FOCUS  "+juce::String(focus,1)+" Hz",{1026,439,118,18},13,console::amber);
     console::panel(g,{24,798,1152,46},true);

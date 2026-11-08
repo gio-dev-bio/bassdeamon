@@ -142,7 +142,7 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
         if (r.valid) {
             resultDelay.store(static_cast<float>(r.delayMs)); resultInvert.store(r.invert);
             learnCorrelation.store(static_cast<float>(r.correlation));
-            resultReady.store(true); learnStatus.store(0);
+            resultReady.store(true); learnStatus.store(5);
         } else learnStatus.store(r.rejection==bassdeamon::LearnRejection::ambiguous?3:r.rejection==bassdeamon::LearnRejection::unstable?4:2);
     }
     wasLearning = engine.learning(); publishMeters();
