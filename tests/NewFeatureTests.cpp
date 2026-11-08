@@ -62,7 +62,7 @@ void contracts(){
     }
     bassdeamon::AnalysisQueue q;bassdeamon::RelationAnalyzer analyzer;analyzer.prepare(48000);
     for(size_t i=0;i<bassdeamon::RelationAnalyzer::fftSize;++i){
-        const float x=float(.4*std::sin(2*bassdeamon::pi*64*i/4096));
+        const float x=float(.4*std::sin(2*bassdeamon::pi*64*i/bassdeamon::RelationAnalyzer::fftSize));
         bassdeamon::AnalysisFrame f;f.pre={x,-x};f.post={2*x,-2*x};f.kick={x,x};require(q.push(f),"queue capacity");}
     analyzer.consume(q);require(analyzer.pre[64]>-10,"anti-phase spectrum disappeared");
     require(std::abs(analyzer.post[64]-analyzer.pre[64]-6.0206f)<.001f,"post FFT not actual signal");

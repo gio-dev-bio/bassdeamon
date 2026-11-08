@@ -2,13 +2,15 @@
 #include "PluginEditor.h"
 
 namespace {
-constexpr std::array<const char*, 34> ids{
+constexpr std::array<const char*, 44> ids{
     "glue.on", "glue.amount", "glue.lock", "phase.on", "phase.invert", "phase.delay",
     "phase.rotate", "phase.frequency", "unmask.on", "unmask.amount", "unmask.delta",
     "glue.agc", "glue.agcLock", "phase.agc", "phase.agcLock", "unmask.agc", "unmask.agcLock",
     "output.trim", "global.on", "unmask.track", "unmask.hold", "unmask.frequency",
     "unmask.width", "unmask.attack", "unmask.release", "unmask.maxCut",
-    "tube.on","tube.drive","tube.amount","tube.source","tube.colour","tube.agc","tube.agcLock","tube.audition"};
+    "tube.on","tube.drive","tube.amount","tube.source","tube.colour","tube.agc","tube.agcLock","tube.audition",
+    "glue.timing","glue.attackMs","glue.releaseMs","glue.attackNote","glue.releaseNote",
+    "unmask.timing","unmask.attackNote","unmask.releaseNote","view.range","view.hold"};
 }
 
 BassDeamonProcessor::BassDeamonProcessor()
@@ -68,6 +70,18 @@ juce::AudioProcessorValueTreeState::ParameterLayout BassDeamonProcessor::layout(
     boolean("tube.agc","Soft Tube auto gain",false);
     boolean("tube.agcLock","Soft Tube gain lock",false);
     boolean("tube.audition","Soft Tube audition added branch",false);
+    const juce::StringArray notes{"1/64","1/32","1/16","1/8","1/4","1/2","1/1","1/8 T","1/8 D"};
+    const auto choice=[&](const char* id,const char* name,const juce::StringArray& values,int initial){
+        p.add(std::make_unique<juce::AudioParameterChoice>(juce::ParameterID{id,1},name,values,initial));
+    };
+    choice("glue.timing","GLUE timing",{"AUTO","MS","SYNC"},0);
+    continuous("glue.attackMs","GLUE manual attack (ms)",.1f,500,20);
+    continuous("glue.releaseMs","GLUE manual release (ms)",1,4000,180);
+    choice("glue.attackNote","GLUE attack note",notes,0);choice("glue.releaseNote","GLUE release note",notes,2);
+    choice("unmask.timing","UNMASK timing",{"MS","SYNC"},0);
+    choice("unmask.attackNote","UNMASK attack note",notes,0);choice("unmask.releaseNote","UNMASK release note",notes,2);
+    choice("view.range","Spectrum range",{"0-1000 Hz","0-2500 Hz","0-5000 Hz"},0);
+    boolean("view.hold","Scope hold",false);
     return p;
 }
 
@@ -106,6 +120,9 @@ bassdeamon::Settings BassDeamonProcessor::readSettings() const noexcept {
     s.tube.enabled=value(26)>.5f;s.tube.driveDb=value(27);s.tube.amount=value(28);
     s.tube.sourceHz=value(29);s.tube.colour=value(30);s.tube.autoGain=value(31)>.5f;
     s.tube.gainLock=value(32)>.5f;s.tube.audition=value(33)>.5f;
+    s.glueTiming=int(value(34));s.glueAttackMs=value(35);s.glueReleaseMs=value(36);
+    s.glueAttackNote=int(value(37));s.glueReleaseNote=int(value(38));s.unmaskSync=value(39)>.5f;
+    s.unmaskAttackNote=int(value(40));s.unmaskReleaseNote=int(value(41));
     return s;
 }
 void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) {
@@ -119,11 +136,12 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
         engine.restoreRuntime(restored); engine.clearHistory(); wasLearning = false;
         resultReady.store(false); learnStatus.store(0);
     }
-    double bpm = 0;
+    double bpm = 0,ppq=-1;
     if (auto* playhead = getPlayHead()) {
         if (const auto position = playhead->getPosition()) {
             if (const auto tempo = position->getBpm()) bpm = *tempo;
             const bool playing = position->getIsPlaying();
+            if(playing)if(const auto q=position->getPpqPosition())ppq=*q;
             bool seek = false;
             if (const auto t = position->getTimeInSeconds()) {
                 seek = playing && wasPlaying && lastTimeSeconds >= 0
@@ -131,11 +149,15 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
                 lastTimeSeconds = *t;
             }
             if (seek || (wasPlaying && !playing)) {
-                engine.clearHistory(); wasLearning = false; learnStatus.store(0);
+                const bool keepLearn=seek&&playing&&engine.learning();
+                engine.clearHistory(keepLearn);
+                if(!keepLearn){wasLearning=false;learnStatus.store(0);}
             }
             wasPlaying = playing;
         }
     }
+    tempo.store(float(std::isfinite(bpm)&&bpm>=20&&bpm<=400?bpm:120));
+    tempoFromHost.store(std::isfinite(bpm)&&bpm>=20&&bpm<=400);
     lastBlockSamples = buffer.getNumSamples();
     if (wasBypassed) { engine.clearHistory(); wasLearning = false; learnStatus.store(0); wasBypassed = false; }
     const auto settings=readSettings();
@@ -163,6 +185,7 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
                 for(int c=0;c<2;++c){const int source=std::min(c,channels-1);
                     frame.pre[size_t(c)]=before[size_t(source)][size_t(n)];frame.post[size_t(c)]=output[source][n];
                     if(sideChannels>0)frame.kick[size_t(c)]=reference[std::min(c,sideChannels-1)][n];}
+                frame.beat=ppq>=0?ppq+(offset+n)*tempo.load(std::memory_order_relaxed)/(60*getSampleRate()):-1;
                 analysisQueue.push(frame);
             }
         }
@@ -176,6 +199,7 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
             resultReady.store(true); learnStatus.store(5);
         } else learnStatus.store(r.rejection==bassdeamon::LearnRejection::ambiguous?3:r.rejection==bassdeamon::LearnRejection::unstable?4:2);
     }
+    learnProgress.store(float(engine.learnProgress()));
     wasLearning = engine.learning(); publishMeters();
 }
 void BassDeamonProcessor::processBlockBypassed(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) {
@@ -193,6 +217,7 @@ void BassDeamonProcessor::processBlockBypassed(juce::AudioBuffer<float>& buffer,
 }
 void BassDeamonProcessor::publishMeters() noexcept {
     const auto& m = engine.getMeters();
+    tubeAddedDb.store(float(m.tubeAddedDb));unmaskAttack.store(float(m.unmaskAttackMs));unmaskRelease.store(float(m.unmaskReleaseMs));
     tubeGainDb.store(static_cast<float>(m.tubeAgcDb));
     glueReduction.store(static_cast<float>(m.glueReductionDb));
     unmaskReduction.store(static_cast<float>(m.unmaskReductionDb));
@@ -220,14 +245,17 @@ void BassDeamonProcessor::timerCallback() {
     // Learn does not silently enable PHASE. User can compare with the active switch.
 }
 void BassDeamonProcessor::getStateInformation(juce::MemoryBlock& dest) {
-    auto state = parameters.copyState(); state.setProperty("schemaVersion", 3, nullptr);
+    auto state = parameters.copyState(); state.setProperty("schemaVersion", 4, nullptr);
     for (size_t i = 0; i < runtimeSnapshot.size(); ++i)
         state.setProperty("runtime" + juce::String(static_cast<int>(i)), runtimeSnapshot[i].load(), nullptr);
     if (auto xml = state.createXml()) copyXmlToBinary(*xml, dest);
 }
 void BassDeamonProcessor::setStateInformation(const void* data, int bytes) {
     if (auto xml = getXmlFromBinary(data, bytes)) {
-        if (xml->hasTagName(parameters.state.getType()) && xml->getIntAttribute("schemaVersion", 1) <= 3) {
+        if (xml->hasTagName(parameters.state.getType()) && xml->getIntAttribute("schemaVersion", 1) <= 4) {
+            if(xml->getIntAttribute("schemaVersion",1)<4){
+                for(size_t i=34;i<ids.size();++i){auto* param=parameters.getParameter(ids[i]);param->setValueNotifyingHost(param->getDefaultValue());}
+            }
             // A v1 state cannot carry the added controls: reset them deterministically.
             if (xml->getIntAttribute("schemaVersion", 1) == 1) {
                 for (size_t i = 18; i < ids.size(); ++i) {

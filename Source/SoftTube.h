@@ -29,7 +29,7 @@ public:
         clear(); initialised=false;
     }
     void clear() noexcept {
-        channels={}; mix=target=auditionMix=0;remaining=0;counter=0;running=false;
+        channels={}; residualPower=0;mix=target=auditionMix=0;remaining=0;counter=0;running=false;
     }
     void configure(const TubeSettings& s) noexcept {
         desiredDrive=std::pow(10.0,std::clamp(s.driveDb,0.0,18.0)/20);
@@ -42,9 +42,10 @@ public:
     }
     bool active() const noexcept { return running||target>0||mix>0; }
     double wetMix() const noexcept { return mix; }
+    double addedPower() const noexcept { return residualPower; }
     void frame(std::array<double,2>& x,int count) noexcept {
         if(remaining>0){mix+=step;if(--remaining==0)mix=target;}
-        if(mix==0&&target==0){if(running){channels={};running=false;}return;}
+        if(mix==0&&target==0){residualPower=0;if(running){channels={};running=false;}return;}
         running=true;
         drive=desiredDrive+smoothing*(drive-desiredDrive);
         amount=desiredAmount+smoothing*(amount-desiredAmount);
@@ -58,6 +59,7 @@ public:
             tonePole=std::exp(-2*p*(600+3400*colour)/sampleRate);
             bias=.08+.24*colour;offset=std::tanh(bias);normal=drive*(1-offset*offset);
         }
+        double framePower=0;
         for(int c=0;c<count;++c){
             auto& state=channels[size_t(c)];const double dry=x[size_t(c)];
             state.low1=(1-sourcePole)*dry+sourcePole*state.low1;
@@ -78,15 +80,18 @@ public:
             state.hp1=(1-highPole)*down+highPole*state.hp1;double added=down-state.hp1;
             state.hp2=(1-highPole)*added+highPole*state.hp2;added-=state.hp2;
             state.tone=(1-tonePole)*added+tonePole*state.tone;added=amount*state.tone;
+            framePower+=added*added/count;
             // Audition is the added residual before module AGC and output trim.
             x[size_t(c)]=dry+mix*(added-auditionMix*dry);
         }
+        residualPower=framePower+smoothing*(residualPower-framePower);
     }
 private:
     static constexpr size_t taps=49,inputSize=13;
     struct Channel {std::array<double,inputSize> input{};std::array<double,taps> output{};
         size_t inHead=0,outHead=0;double low1=0,low2=0,hp1=0,hp2=0,tone=0;};
     std::array<Channel,2> channels{};std::array<double,taps> coeff{};
+    double residualPower=0;
     double sampleRate=48000,smoothing=0,sourcePole=0,highPole=0,tonePole=0;
     double drive=1,amount=0,sourceHz=180,colour=.45;
     double desiredDrive=1,desiredAmount=0,desiredHz=180,desiredColour=.45;

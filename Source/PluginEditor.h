@@ -9,6 +9,7 @@ public:
     void paint(juce::Graphics& g) override {g.fillAll(console::ink);}
     void resized() override;
 private:
+    friend int interactionTests();
     friend int captureGui(const juce::File&);
     using State=juce::AudioProcessorValueTreeState;
     struct Face final : juce::Component {
@@ -26,6 +27,7 @@ private:
     struct Switch {juce::ToggleButton button;std::unique_ptr<State::ButtonAttachment> attachment;};
     void addSwitch(const char*,const char*,juce::Rectangle<int>,const char* tooltip);
     Knob& addKnob(const char*,const char*,const char*,bool,juce::Rectangle<int>,const char*);
+    void addChoice(const char*,const juce::StringArray&,juce::Rectangle<int>);
     void paintConsole(juce::Graphics&);
     void paintSpectrum(juce::Graphics&);
     void paintWave(juce::Graphics&);
@@ -40,7 +42,14 @@ private:
     std::vector<std::unique_ptr<Switch>> switches;
     bassdeamon::RelationAnalyzer analyzer;
     juce::TextButton sumButton{"SUM K+B"};
-    bool showSum=false;
+    bool showSum=true;
+    struct Choice {juce::ComboBox box;std::unique_ptr<State::ComboBoxAttachment> attachment;};
+    std::vector<std::unique_ptr<Choice>> choices;
+    std::array<float,bassdeamon::RelationAnalyzer::bins> visualPre{},visualPost{},visualKick{};
+    juce::Slider glueAttackSlider,glueReleaseSlider;
+    std::unique_ptr<State::SliderAttachment> glueAttackAttachment,glueReleaseAttachment;
+    Knob *unmaskAttackKnob=nullptr,*unmaskReleaseKnob=nullptr;
+    float scopeScale=1;
     juce::TextButton learn{"LEARN / LOCK"},aButton{"A"},bButton{"B"};
     juce::ComboBox presets,ceiling;
     std::unique_ptr<State::ComboBoxAttachment> ceilingAttachment;

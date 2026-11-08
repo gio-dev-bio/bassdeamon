@@ -33,7 +33,8 @@ public:
     void requestLearn() noexcept { learnRequested.store(true); }
     juce::AudioProcessorValueTreeState parameters;
     bassdeamon::AnalysisQueue analysisQueue;
-    std::atomic<float> tubeGainDb{0};
+    std::atomic<float> tubeGainDb{0},tubeAddedDb{-120},tempo{120},unmaskAttack{8},unmaskRelease{120},learnProgress{0};
+    std::atomic<bool> tempoFromHost{false};
     std::atomic<float> glueReduction{0}, unmaskReduction{0}, outputPeak{0};
     std::array<std::atomic<float>, 3> agcMeters{};
     std::array<std::atomic<float>, bassdeamon::bandCount> spectrumBass{}, spectrumKick{}, spectrumCut{};
@@ -43,12 +44,13 @@ public:
     std::atomic<int> learnStatus{0};
     std::atomic<float> learnCorrelation{0};
 private:
+    friend int interactionTests();
     static juce::AudioProcessorValueTreeState::ParameterLayout layout();
     bassdeamon::Settings readSettings() const noexcept;
     void timerCallback() override;
     void publishMeters() noexcept;
     bassdeamon::Engine engine;
-    std::array<std::atomic<float>*, 34> raw{};
+    std::array<std::atomic<float>*, 44> raw{};
     std::atomic<bool> learnRequested{false}, resultReady{false};
     std::atomic<float> resultDelay{0};
     std::atomic<bool> resultInvert{false};

@@ -16,12 +16,14 @@ void guardedProcess(BassDeamonProcessor& processor, juce::AudioBuffer<float>& bu
     require(allocation::count == before, "C++ allocation inside plugin callback");
 }
 int captureGui(const juce::File&);
+int interactionTests();
 int pluginSignalTests(const std::string&);
 int main(int argc, char** argv) {
     juce::ScopedJuceInitialiser_GUI init;
     if (argc > 2 && juce::String(argv[1]) == "--capture") return captureGui(juce::File(argv[2]));
     if (argc > 2 && juce::String(argv[1]) == "--signals") return pluginSignalTests(argv[2]);
     try {
+        interactionTests();
         BassDeamonProcessor p;
         auto layout = p.getBusesLayout();
         layout.inputBuses.set(0, juce::AudioChannelSet::mono());

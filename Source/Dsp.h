@@ -18,12 +18,20 @@ inline double power(const std::array<double, 2>& x, int channels) noexcept {
     return (x[0] * x[0] + (channels == 2 ? x[1] * x[1] : 0.0)) / channels;
 }
 
+inline constexpr std::array<double,9> noteBeats{.0625,.125,.25,.5,1,2,4,1.0/3,.75};
+inline double noteMilliseconds(int note,double bpm) noexcept {
+    const double tempo=std::isfinite(bpm)&&bpm>=20&&bpm<=400?bpm:120;
+    return 60000/tempo*noteBeats[size_t(std::clamp(note,0,8))];
+}
 struct AgcSettings { bool enabled = false, locked = false; };
 struct Settings {
     bool active = true;
     TubeSettings tube;
     bool glue = true, glueLocked = false;
     double glueAmount = 0.35;
+    int glueTiming=0,glueAttackNote=0,glueReleaseNote=2; // AUTO / MS / SYNC
+    double glueAttackMs=20,glueReleaseMs=180;
+    bool unmaskSync=false;int unmaskAttackNote=0,unmaskReleaseNote=2;
     bool phase = false, invert = false, rotate = false;
     double delayMs = 0.0, rotationHz = 90.0;
     bool unmask = true, delta = false;
@@ -41,7 +49,7 @@ struct Meters {
     double peak = 0.0, kickPeak = 0.0, inputRmsDb = -120, outputRmsDb = -120;
     double focusHz = 75, attackMs = 20, releaseMs = 180;
     std::array<double, bandCount> bassDb{}, kickDb{}, cutsDb{};
-    double filterQ = 2, tubeAgcDb=0;
+    double filterQ = 2, tubeAgcDb=0,tubeAddedDb=-120,unmaskAttackMs=8,unmaskReleaseMs=120;
 };
 
 // Double precision RBJ cookbook filters, transposed direct form II.
@@ -214,6 +222,7 @@ public:
             result.valid=result.rejection==LearnRejection::none;
         }
     }
+    double progress() const noexcept { return std::clamp(elapsed/(4*sampleRate),0.0,1.0); }
     bool learning() const noexcept { return active; }
     LearnResult getResult() const noexcept { return result; }
 private:
@@ -262,6 +271,7 @@ public:
     void startLearn() noexcept { learner.start(); }
     void cancelLearn() noexcept { learner.cancel(); }
     bool learning() const noexcept { return learner.learning(); }
+    double learnProgress() const noexcept { return learner.progress(); }
     LearnResult learnResult() const noexcept { return learner.getResult(); }
     const Meters& getMeters() const noexcept { return meters; }
     // Frozen adaptation/AGC values are part of the session state, not only UI parameters.
@@ -278,14 +288,14 @@ public:
         focusHz = trackedFocusHz = std::clamp(r[7], 30.0, 250.0);
         tubeAgc.restore(r[8]);
     }
-    void clearHistory() noexcept {
+    void clearHistory(bool preserveLearn=false) noexcept {
         for (auto& d : delays) d.clear();
         for (auto* bank : {&detectorsBass, &detectorsKick, &filters})
             for (auto& band : *bank) for (auto& f : band) f.z1 = f.z2 = 0;
         allpassX.fill(0); allpassY.fill(0);
         bassE.fill(0); kickE.fill(0); bassEnergy = envelope = kickFast = kickSlow = 0;
         inputPowerMeter = outputPowerMeter = outputHeld = kickHeld = 0;
-        learner.cancel();tube.clear();
+        if(!preserveLearn)learner.cancel();tube.clear();
     }
 
     void process(float* const* bass, int channels, const float* const* kick, int kickChannels,
@@ -314,11 +324,13 @@ public:
             polarity = s.invert ? -1 : 1; rotationMix = s.rotate ? 1 : 0;
             rotationHz = s.rotationHz; outputGain = gain(s.outputDb); smoothed = true;
             previousDelaySamples=delaySamples;delayFade.reset(1);polarityRamp.reset(polarity);
-            deltaMix = s.delta && s.unmask ? 1 : 0;
+            deltaMix = s.delta && s.unmask && !(s.tube.enabled&&s.tube.audition) ? 1 : 0;
             smoothedFilterQ = 3.5 - 2.6 * std::clamp(s.unmaskWidth, 0.0, 1.0);
         }
-        cutAttackA = pole(std::clamp(s.unmaskAttackMs, 1.0, 50.0), sampleRate);
-        cutReleaseA = pole(std::clamp(s.unmaskReleaseMs, 30.0, 500.0), sampleRate);
+        meters.unmaskAttackMs=s.unmaskSync?noteMilliseconds(s.unmaskAttackNote,bpm):std::clamp(s.unmaskAttackMs,1.0,50.0);
+        meters.unmaskReleaseMs=s.unmaskSync?noteMilliseconds(s.unmaskReleaseNote,bpm):std::clamp(s.unmaskReleaseMs,30.0,500.0);
+        cutAttackA = pole(meters.unmaskAttackMs, sampleRate);
+        cutReleaseA = pole(meters.unmaskReleaseMs, sampleRate);
         const double trimTarget = gain(std::clamp(s.outputDb, -24.0, 12.0));
         const double delayTarget = std::clamp(s.delayMs, 0.0, 5.0)*sampleRate/1000;
         const double rotationTarget = std::clamp(s.rotationHz, 20.0, 500.0);
@@ -363,6 +375,10 @@ public:
                     const double context = recentKick ? (validBpm ? (kickIntervalMs + 60000 / bpm) / 2 : kickIntervalMs)
                                                      : (validBpm ? 60000 / bpm : 450);
                     releaseMs = follow(releaseMs, std::clamp(context * 0.4, 80.0, 300.0), parameterA);
+                }
+                if(s.glueTiming!=0){
+                    attackMs=s.glueTiming==2?noteMilliseconds(s.glueAttackNote,bpm):std::clamp(s.glueAttackMs,.1,500.0);
+                    releaseMs=s.glueTiming==2?noteMilliseconds(s.glueReleaseNote,bpm):std::clamp(s.glueReleaseMs,1.0,4000.0);
                 }
                 attackA = pole(attackMs, sampleRate); releaseA = pole(releaseMs, sampleRate);
                 // Track the strongest overlapping low-end band, not an asserted musical fundamental.
@@ -489,7 +505,7 @@ public:
             const auto afterUnmask = x;
             const double unmaskAgc = compensate(2, power(beforeUnmask, channels), power(x, channels), unmaskMix);
             outputGain = follow(outputGain, trimTarget, smoothA);
-            deltaMix = follow(deltaMix, s.delta && s.unmask ? 1 : 0, smoothA);
+            deltaMix = follow(deltaMix, s.delta && s.unmask && !(s.tube.enabled&&s.tube.audition) ? 1 : 0, smoothA);
             for (int c = 0; c < channels; ++c) {
                 // Delta is removed bass BEFORE AGC/output trim; never includes kick.
                 const double normal = x[c]*unmaskAgc*outputGain;
@@ -504,6 +520,7 @@ public:
             meters.glueReductionDb = glueReduction * glueMix;
             meters.unmaskReductionDb = maxCut * unmaskMix; // maximum individual band, not total cut
         }
+        meters.tubeAddedDb=db(std::sqrt(tube.addedPower()));
         meters.peak = outputHeld; meters.kickPeak = kickHeld;
         meters.inputRmsDb = db(std::sqrt(inputPowerMeter)); meters.outputRmsDb = db(std::sqrt(outputPowerMeter));
         meters.focusHz = focusHz; meters.filterQ = smoothedFilterQ;

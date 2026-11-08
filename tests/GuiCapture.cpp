@@ -32,6 +32,7 @@ int captureGui(const juce::File& output){
     if(*std::max_element(spectrum.begin(),spectrum.end()) < -80){
         std::cerr<<"GUI capture has no real analyzer data\n";return 1;
     }
+    if(static_cast<BassDeamonEditor*>(editor.get())->analyzer.scope.completed<1){std::cerr<<"Missing full quarter-note scope capture\n";return 1;}
     const auto image=editor->createComponentSnapshot(editor->getLocalBounds(),true,1.0f);
     auto stream=output.createOutputStream();juce::PNGImageFormat format;
     if(!stream||!format.writeImageToStream(image,*stream))return 1;
