@@ -1,0 +1,8 @@
+{
+  "machine": "arm64",
+  "os": "macOS-15.8.2-arm64-arm-64bit",
+  "cpu": "Apple M1 (Virtual)",
+  "logical_cpus": "3",
+  "compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)\nTarget: arm64-apple-darwin24.6.0\nThread model: posix\nInstalledDir: /Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin",
+  "flags": "-std=c++17 -O3 -DNDEBUG; native architecture, no fast-math"
+}

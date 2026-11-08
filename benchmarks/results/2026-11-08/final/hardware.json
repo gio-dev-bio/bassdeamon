@@ -1,0 +1,7 @@
+{
+  "machine": "x86_64",
+  "os": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "flags": "-std=c++17 -O3 -DNDEBUG; no fast-math",
+  "compiler": "g++ (Debian 14.2.0-19) 14.2.0",
+  "cpu": "AMD EPYC 9V74 80-Core Processor"
+}

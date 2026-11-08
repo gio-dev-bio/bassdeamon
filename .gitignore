@@ -9,3 +9,5 @@ benchmarks/optimized/
 benchmarks/final/
 bench-results/
 *.f32
+benchmarks/native-intel/
+benchmarks/native-arm64/
