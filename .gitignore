@@ -3,3 +3,9 @@ build*/
 *.zip
 *.wav
 .cache/
+
+benchmarks/before/
+benchmarks/optimized/
+benchmarks/final/
+bench-results/
+*.f32

@@ -127,7 +127,7 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g){
     console::text(g,"IN "+juce::String(std::max(inputDb,-99.0f),1)+"  /  OUT "+juce::String(std::max(outputDb,-99.0f),1)+" dBFS RMS",{221,808,315,26},13,console::muted);
     console::text(g,"PEAK "+juce::String(std::max(peak,-99.0f),1)+" dBFS",{548,808,180,26},14,clipFrames>0?console::orange:console::cream);
     console::text(g,"TRIM",{762,808,60,26},13,console::muted);
-    console::text(g,"v0.2.0",{1090,808,66,26},13,console::muted,juce::Justification::centredRight);
+    console::text(g,"v0.2.1",{1090,808,66,26},13,console::muted,juce::Justification::centredRight);
     g.drawImageAt(grain,0,0);
 }
 void BassDeamonEditor::paintSpectrum(juce::Graphics& g){
@@ -149,11 +149,13 @@ void BassDeamonEditor::paintSpectrum(juce::Graphics& g){
     }
     // Evaluate the actual cascade response from the current per-band cuts, not a decorative curve.
     juce::Path eq;
+    const double sr=processor.getSampleRate()>0?processor.getSampleRate():48000;
+    std::array<bassdeamon::Biquad,bassdeamon::bandCount> responseFilters;
+    for(size_t i=0;i<cut.size();++i)responseFilters[i].peak(bassdeamon::bandFrequencies[i],q,cut[i],sr);
     for(int j=0;j<=160;++j){const double hz=30*std::pow(500.0/30,static_cast<double>(j)/160);
         double attenuation=0;
-        const double sr=processor.getSampleRate()>0?processor.getSampleRate():48000;
         const auto z=std::polar(1.0,-2*bassdeamon::pi*hz/sr);
-        for(size_t i=0;i<cut.size();++i){bassdeamon::Biquad filter;filter.peak(bassdeamon::bandFrequencies[i],q,cut[i],sr);
+        for(size_t i=0;i<cut.size();++i){const auto& filter=responseFilters[i];
             attenuation+=bassdeamon::db(std::abs((filter.b0+filter.b1*z+filter.b2*z*z)/(1.0+filter.a1*z+filter.a2*z*z)));
         }
         const float x=fx(hz),y=plot.getY()+6+static_cast<float>(std::clamp(-attenuation/12,0.0,1.0))*104;

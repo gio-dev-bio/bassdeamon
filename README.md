@@ -1,4 +1,4 @@
-# BassDeamon 0.2.0
+# BassDeamon 0.2.1
 
 VST3 originale per lavorare sulla relazione kick/basso. Inserire sul **basso** e inviare il **kick al sidechain**. Il kick non viene sommato all'uscita.
 
@@ -71,3 +71,29 @@ La CI verifica DSP, sanitizers, stato/A-B, rendering della vera GUI, firma e plu
 [Obiettivi di prodotto](docs/PRODUCT.md) · [Architettura](docs/ARCHITECTURE.md) · [Verifiche](docs/VALIDATION.md)
 
 Nessun codice o asset KickUncover. Licenze JUCE/BassDeamon da definire prima della distribuzione commerciale; vedere la licenza del framework JUCE.
+
+
+## Benchmark e ottimizzazioni 0.2.1
+
+`tests/Benchmark.cpp` confronta il motore corrente con la reference congelata 0.2.0
+(`tests/baselines/Dsp020.h`, commit e6d48b7). Esegue misure stereo a 44,1/48/96 kHz,
+buffer 64/128/256/512, tre ripetizioni di 0,6 s e warmup di 30 blocchi. Riporta media,
+p50/p95/p99/max, quota di un core e conteggio di `new/new[]` nel callback.
+Questi tempi comprendono la schedulazione di un runner condiviso: non sono garanzie hard realtime o misure del Mac dell'utente.
+
+```sh
+c++ -std=c++17 -O3 -DNDEBUG -ISource tests/Benchmark.cpp -o dsp-benchmark
+./dsp-benchmark bench-results
+python3 benchmarks/analyze.py bench-results
+```
+
+L'analisi richiede numpy/scipy. Genera metriche THD+N su toni coerenti, silenzio,
+code, automazioni e confronto numerico. I segnali variabili non sono interpretati
+come toni stazionari; le modulazioni intenzionali di PHASE non sono chiamate distorsione inattesa.
+La CI ripete il benchmark su macOS ARM e Intel **nativi**, separatamente dalla validazione VST3.
+
+Ottimizzazioni: meno operazioni log/pow/trig ridondanti, all-pass con coefficienti
+in cache, learner fermo quando non analizza, coefficienti EQ calcolati una sola
+volta per i due canali e curva GUI con filtri precomputati.
+La larghezza EQ viene smussata su 20 ms: è un cambiamento voluto durante le
+automazioni, da confrontare separatamente dalle ottimizzazioni numericamente trasparenti.

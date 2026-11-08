@@ -8,7 +8,7 @@
 namespace bassdeamon {
 constexpr double pi = 3.14159265358979323846;
 inline double db(double x) noexcept { return 20.0 * std::log10(std::max(x, 1.0e-12)); }
-inline double gain(double d) noexcept { return std::pow(10.0, d / 20.0); }
+inline double gain(double d) noexcept { return d == 0 ? 1.0 : std::pow(10.0, d / 20.0); }
 inline double pole(double ms, double sr) noexcept { return std::exp(-1.0 / (0.001 * ms * sr)); }
 inline double follow(double current, double target, double a) noexcept {
     return target + a * (current - target);
@@ -107,6 +107,7 @@ public:
     void clear() noexcept { std::fill(data.begin(), data.end(), 0); head = 0; }
     double read(double samples) const noexcept {
         const auto whole = static_cast<size_t>(samples);
+        if (samples == 0) return data[(head + data.size() - 1) % data.size()];
         const double f = samples - static_cast<double>(whole);
         const auto at = [&](size_t d) { return data[(head + data.size() - 1 - d) % data.size()]; };
         // Causal third-order Lagrange fractional delay. Exact identity at zero.
@@ -133,9 +134,11 @@ public:
     }
     void cancel() noexcept { active = false; }
     void tick(double bass, double kick) noexcept {
+        // start() resets the low-pass states, and ignores the first 20 ms (history <=5 ms).
+        // No need to run the learner while it is not listening.
+        if (!active) return;
         lowBass = follow(lowBass, bass, lowPole); lowKick = follow(lowKick, kick, lowPole);
         history.push(lowBass);
-        if (!active) return;
         ++elapsed;
         if (elapsed > static_cast<int>(sampleRate * 0.02) && elapsed % decimation == 0
             && lowKick * lowKick > 1e-8) {
@@ -178,6 +181,7 @@ public:
         controlCounter = 0; smoothed = false; meters = {};
         inputPowerMeter = outputPowerMeter = outputHeld = kickHeld = 0;
         focusHz = 75; trackedFocusHz = 75;
+        cachedRotationHz = -1; cachedAllpassA = 0;
         cutDb.fill(0); kickE.fill(0); bassE.fill(0);
         allpassX.fill(0); allpassY.fill(0);
         for (auto& d : delays) d.prepare(sampleRate);
@@ -196,6 +200,7 @@ public:
         parameterA = pole(500, sampleRate / 32); // coefficients adapt over 500 ms
         cutAttackA = pole(8, sampleRate); cutReleaseA = pole(120, sampleRate);
         focusA = pole(350, sampleRate / 32); peakA = pole(300, sampleRate);
+        filterParameterA = pole(20, sampleRate / 32);
         attackA = pole(attackMs, sampleRate); releaseA = pole(releaseMs, sampleRate);
     }
     void startLearn() noexcept { learner.start(); }
@@ -235,11 +240,17 @@ public:
             polarity = s.invert ? -1 : 1; rotationMix = s.rotate ? 1 : 0;
             rotationHz = s.rotationHz; outputGain = gain(s.outputDb); smoothed = true;
             deltaMix = s.delta && s.unmask ? 1 : 0;
+            smoothedFilterQ = 3.5 - 2.6 * std::clamp(s.unmaskWidth, 0.0, 1.0);
         }
         cutAttackA = pole(std::clamp(s.unmaskAttackMs, 1.0, 50.0), sampleRate);
         cutReleaseA = pole(std::clamp(s.unmaskReleaseMs, 30.0, 500.0), sampleRate);
+        const double trimTarget = gain(std::clamp(s.outputDb, -24.0, 12.0));
+        const double delayTarget = std::clamp(s.delayMs, 0.0, 5.0)*sampleRate/1000;
+        const double rotationTarget = std::clamp(s.rotationHz, 20.0, 500.0);
+        const double glueAmount = std::clamp(s.glueAmount, 0.0, 1.0);
+        const double unmaskDepth = std::clamp(s.unmaskMaxCutDb, 3.0, 12.0)*std::clamp(s.unmaskAmount, 0.0, 1.0);
         const double widthOctaves = 0.25 + 1.25 * std::clamp(s.unmaskWidth, 0.0, 1.0);
-        const double filterQ = 3.5 - 2.6 * std::clamp(s.unmaskWidth, 0.0, 1.0);
+        const double filterQTarget = 3.5 - 2.6 * std::clamp(s.unmaskWidth, 0.0, 1.0);
         for (int n = 0; n < samples; ++n) {
             std::array<double, 2> x{}, k{};
             for (int c = 0; c < channels; ++c) x[c] = std::isfinite(bass[c][n]) ? bass[c][n] : 0;
@@ -263,6 +274,7 @@ public:
             }
             if (++controlCounter == 32) {
                 controlCounter = 0;
+                smoothedFilterQ = follow(smoothedFilterQ, filterQTarget, filterParameterA);
                 if (!s.glueLocked && bassEnergy > 1e-10) {
                     thresholdDb = follow(thresholdDb, db(std::sqrt(bassEnergy)) - 3, parameterA);
                     const double crest = std::clamp(db(std::sqrt(std::max(envelope, 1e-20) / bassEnergy)), 0.0, 12.0);
@@ -306,7 +318,10 @@ public:
                 for (size_t b = 0; b < frequencies.size(); ++b) {
                     cutDb[b] *= correction;
                     focusWeights[b] /= std::max(weightSum, 1e-9);
-                    for (int c = 0; c < 2; ++c) filters[b][c].peak(frequencies[b], filterQ, cutDb[b], sampleRate);
+                    auto& left = filters[b][0]; auto& right = filters[b][1];
+                    left.peak(frequencies[b], smoothedFilterQ, cutDb[b], sampleRate);
+                    right.b0=left.b0; right.b1=left.b1; right.b2=left.b2; right.a1=left.a1; right.a2=left.a2;
+                    if (std::abs(cutDb[b]) < 1e-12) right.z1=right.z2=0;
                 }
             }
             glueMix = follow(glueMix, s.glue ? 1 : 0, smoothA);
@@ -316,7 +331,7 @@ public:
             const double knee = 6, slope = 1 - 1 / ratio;
             const double desired = over <= -knee/2 ? 0 : (over >= knee/2 ? slope * over
                                     : slope * (over+knee/2)*(over+knee/2)/(2*knee));
-            glueReduction = follow(glueReduction, desired * std::clamp(s.glueAmount, 0.0, 1.0),
+            glueReduction = follow(glueReduction, desired * glueAmount,
                                    desired * s.glueAmount > glueReduction ? attackA : releaseA);
             double budget = 6;
             const auto compensate = [&](int module, double in, double out, double mix) {
@@ -335,11 +350,15 @@ public:
 
             const double monoBass = channels == 2 ? (x[0]+x[1])*0.5 : x[0];
             learner.tick(monoBass, (k[0]+k[1])*0.5);
-            delaySamples = follow(delaySamples, std::clamp(s.delayMs, 0.0, 5.0)*sampleRate/1000, smoothA);
+            delaySamples = follow(delaySamples, delayTarget, smoothA);
             polarity = follow(polarity, s.invert ? -1 : 1, smoothA);
             rotationMix = follow(rotationMix, s.rotate ? 1 : 0, smoothA);
-            rotationHz = follow(rotationHz, std::clamp(s.rotationHz, 20.0, 500.0), smoothA);
-            const double t = std::tan(pi * rotationHz / sampleRate), a = (t-1)/(t+1);
+            rotationHz = follow(rotationHz, rotationTarget, smoothA);
+            if (rotationHz != cachedRotationHz) {
+                const double t = std::tan(pi * rotationHz / sampleRate);
+                cachedAllpassA = (t-1)/(t+1); cachedRotationHz = rotationHz;
+            }
+            const double a = cachedAllpassA;
             double phaseReference = 0;
             for (int c = 0; c < channels; ++c) {
                 delays[c].push(x[c]);
@@ -365,9 +384,11 @@ public:
                 bassE[b] = follow(bassE[b], be, bandA); kickE[b] = follow(kickE[b], ke, bandA);
                 // Overlap requires both signals. No kick => decay to unity, never duck full-band.
                 const double overlap = std::min(bassE[b], kickE[b]);
-                const double activity = std::clamp((10*std::log10(std::max(overlap,1e-20))+65)/30, 0.0, 1.0);
-                const double target = -std::clamp(s.unmaskMaxCutDb, 3.0, 12.0)
-                    * std::clamp(s.unmaskAmount, 0.0, 1.0) * activity * focusWeights[b];
+                // Exact saturated branches avoid log10 for inactive or fully active bands.
+                const double activity = overlap <= 3.1622776601683792e-7 ? 0.0
+                    : overlap >= 3.1622776601683794e-4 ? 1.0
+                    : (10*std::log10(overlap)+65)/30;
+                const double target = -unmaskDepth * activity * focusWeights[b];
                 cutDb[b] = follow(cutDb[b], target, target < cutDb[b] ? cutAttackA : cutReleaseA);
                 maxCut = std::max(maxCut, -cutDb[b]);
                 for (int c = 0; c < channels; ++c) x[c] = filters[b][c].tick(x[c]);
@@ -375,7 +396,7 @@ public:
             for (int c = 0; c < channels; ++c) x[c] = beforeUnmask[c] + unmaskMix*(x[c]-beforeUnmask[c]);
             const auto afterUnmask = x;
             const double unmaskAgc = compensate(2, power(beforeUnmask, channels), power(x, channels), unmaskMix);
-            outputGain = follow(outputGain, gain(std::clamp(s.outputDb, -24.0, 12.0)), smoothA);
+            outputGain = follow(outputGain, trimTarget, smoothA);
             deltaMix = follow(deltaMix, s.delta && s.unmask ? 1 : 0, smoothA);
             for (int c = 0; c < channels; ++c) {
                 // Delta is removed bass BEFORE AGC/output trim; never includes kick.
@@ -392,7 +413,7 @@ public:
         }
         meters.peak = outputHeld; meters.kickPeak = kickHeld;
         meters.inputRmsDb = db(std::sqrt(inputPowerMeter)); meters.outputRmsDb = db(std::sqrt(outputPowerMeter));
-        meters.focusHz = focusHz; meters.filterQ = filterQ;
+        meters.focusHz = focusHz; meters.filterQ = smoothedFilterQ;
         meters.attackMs = attackMs; meters.releaseMs = releaseMs;
         for (size_t b = 0; b < frequencies.size(); ++b) {
             meters.bassDb[b] = db(std::sqrt(bassE[b])); meters.kickDb[b] = db(std::sqrt(kickE[b]));
@@ -415,6 +436,8 @@ private:
     double glueMix = 0, phaseMix = 0, unmaskMix = 0, delaySamples = 0, polarity = 1;
     double rotationMix = 0, rotationHz = 90, outputGain = 1, kickIntervalMs = 0;
     double deltaMix = 0;
+    double cachedRotationHz = -1, cachedAllpassA = 0;
+    double smoothedFilterQ = 2, filterParameterA = 0;
     double inputPowerMeter = 0, outputPowerMeter = 0, outputHeld = 0, kickHeld = 0;
     double focusHz = 75, trackedFocusHz = 75, focusA = 0, peakA = 0;
     std::uint64_t onsetClock = 0, lastOnset = 0;

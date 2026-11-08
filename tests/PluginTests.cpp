@@ -1,11 +1,18 @@
 #include "PluginProcessor.h"
 #include <iostream>
+#include "RealtimeAllocation.h"
 #include <stdexcept>
 
 void require(bool condition, const char* message) { if (!condition) throw std::runtime_error(message); }
 void set(BassDeamonProcessor& p, const char* id, float value) {
     auto* parameter = p.parameters.getParameter(id);
     parameter->setValueNotifyingHost(parameter->convertTo0to1(value));
+}
+void guardedProcess(BassDeamonProcessor& processor, juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) {
+    const auto before = allocation::count; allocation::watch = true;
+    processor.processBlock(buffer, midi);
+    allocation::watch = false;
+    require(allocation::count == before, "C++ allocation inside plugin callback");
 }
 int captureGui(const juce::File&);
 int main(int argc, char** argv) {
@@ -22,7 +29,7 @@ int main(int argc, char** argv) {
         p.prepareToPlay(48000, 256);
         juce::AudioBuffer<float> bass(1, 256); juce::MidiBuffer midi;
         for (int i = 0; i < 256; ++i) bass.setSample(0, i, 0.125f);
-        p.processBlock(bass, midi);
+        guardedProcess(p, bass, midi);
         for (int i = 0; i < 256; ++i) require(bass.getSample(0,i) == 0.125f, "Plugin bypass not unity");
         set(p, "phase.delay", 2.25f); set(p, "phase.invert", 1); set(p, "unmask.agcLock", 1);
         set(p, "unmask.hold", 1); set(p, "unmask.width", 0.75f);
@@ -42,7 +49,7 @@ int main(int argc, char** argv) {
         restored.prepareToPlay(48000, 256);
         juce::AudioBuffer<float> routed(3, 256); routed.clear();
         for (int i = 0; i < 256; ++i) routed.setSample(2, i, 0.5f);
-        restored.processBlock(routed, midi);
+        guardedProcess(restored, routed, midi);
         require(routed.getMagnitude(0,0,256) == 0 && routed.getMagnitude(1,0,256) == 0, "Sidechain leaked");
         auto legacy = p.parameters.copyState(); legacy.setProperty("schemaVersion", 1, nullptr);
         const juce::StringArray newIds{"global.on", "unmask.track", "unmask.hold", "unmask.frequency", "unmask.width", "unmask.attack", "unmask.release", "unmask.maxCut"};
