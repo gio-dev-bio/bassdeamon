@@ -1,4 +1,4 @@
-#include "PluginProcessor.h"
+#include "PluginEditor.h"
 #include <juce_graphics/juce_graphics.h>
 #include <iostream>
 
@@ -17,6 +17,9 @@ int captureGui(const juce::File& output){
             buffer.setSample(2,n,static_cast<float>(0.7*std::exp(-beat*22)*std::sin(2*bassdeamon::pi*60*t)));
         }
         p.processBlock(buffer,midi);
+        // Deterministic capture also works when nested JUCE message loops are
+        // disabled. Run the REAL editor analysis, not decorative test traces.
+        if(block%16==0)static_cast<BassDeamonEditor*>(editor.get())->timerCallback();
         #if JUCE_MODAL_LOOPS_PERMITTED
         if(block%16==0)juce::MessageManager::getInstance()->runDispatchLoopUntil(35);
         #endif
@@ -24,6 +27,11 @@ int captureGui(const juce::File& output){
     #if JUCE_MODAL_LOOPS_PERMITTED
     juce::MessageManager::getInstance()->runDispatchLoopUntil(40);
     #endif
+    static_cast<BassDeamonEditor*>(editor.get())->timerCallback();
+    const auto& spectrum=static_cast<BassDeamonEditor*>(editor.get())->analyzer.pre;
+    if(*std::max_element(spectrum.begin(),spectrum.end()) < -80){
+        std::cerr<<"GUI capture has no real analyzer data\n";return 1;
+    }
     const auto image=editor->createComponentSnapshot(editor->getLocalBounds(),true,1.0f);
     auto stream=output.createOutputStream();juce::PNGImageFormat format;
     if(!stream||!format.writeImageToStream(image,*stream))return 1;

@@ -19,7 +19,9 @@ BASSDEAMON 0.2.3 — VST3 macOS Intel / Apple Silicon
    Il risultato è statico fino a una nuova analisi o a una modifica manuale.
 
 La GUI mostra:
-- energia a 12 bande di kick e basso e risposta EQ corrente;
+- spettro PRE/POST reale 25 Hz-5 kHz, kick di riferimento e possibile masking in rosso;
+- scope L con somma kick+basso esclusivamente visiva;
+- Soft Tube opzionale prima di UNMASK, spento inizialmente, con oversampling fisso 4x;
 - VU della gain reduction GLUE;
 - AGC indipendente e Lock per ogni modulo;
 - AUTO FOCUS / HOLD FOCUS e focus manuale per UNMASK;

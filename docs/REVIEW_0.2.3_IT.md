@@ -2,7 +2,7 @@
 
 Base: `gio-dev-bio/bassdeamon`, ramo `codex/first-dsp-prototype`, commit `73cacb42e61279d706cb1c1556ce06c00073f29a`.
 
-Questo pacchetto contiene una patch e i file modificati. **Non contiene un VST3 compilato e non è una release pronta da installare.** Le modifiche non sono state caricate su GitHub: il controllo automatico richiede l'autorizzazione esplicita alla pubblicazione dei sorgenti e workflow nel repository privato.
+Questo pacchetto contiene una patch e i file modificati. **Non contiene un VST3 compilato e non è una release pronta da installare.** La pubblicazione sul ramo di sviluppo privato è stata autorizzata esplicitamente ed eseguita. Il candidato audio 9c348324c082bcea11d21ab29148130739c2d738 ha superato build universale, test JUCE, sanitizers e pluginval ARM/Intel (run 42514115749), oltre ai segnali nativi su entrambe le architetture (run 42514115721). Questa revisione corregge la cattura grafica deterministica; il motore audio è invariato.
 
 ## Implementazione
 
@@ -33,7 +33,7 @@ I numerosi confronti per campione e per frame presenti nel log non sono altretta
 - Misure CPU/RAM nel processo host, interfaccia aperta/chiusa e più istanze; benchmark Intel/ARM nativi. I tempi Linux allegati non stimano il carico del Mac dell'utente.
 - Misure estese di aliasing/intermodulazione e transienti del nuovo Soft Tube, ascolto critico, prova su Cubase/Sonoma e materiale reale.
 
-La patch aggiorna il workflow esistente e aggiunge test nativi; per eseguirli occorre autorizzare il caricamento delle modifiche nello stesso repository privato, senza merge in main.
+La patch aggiorna il workflow esistente e aggiunge test nativi; le modifiche restano nel ramo di sviluppo, senza merge in main. Per istruzioni e limiti aggiornati leggere GUIDA_0.2.3_IT.md.
 
 ## Applicazione
 

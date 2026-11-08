@@ -47,7 +47,7 @@ jobs:
       - name: Package ad-hoc signed development plugin
         run: |
           ditto -c -k --sequesterRsrc --keepParent build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3 BassDeamon-0.2.3-macOS-universal.zip
-          zip -j BassDeamon-0.2.3-macOS-universal.zip INSTALL.txt
+          zip -j BassDeamon-0.2.3-macOS-universal.zip INSTALL.txt docs/GUIDA_0.2.3_IT.md
       - uses: actions/upload-artifact@v4
         with:
           name: BassDeamon-0.2.3-macOS-universal

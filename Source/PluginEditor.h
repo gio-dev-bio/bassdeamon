@@ -9,6 +9,7 @@ public:
     void paint(juce::Graphics& g) override {g.fillAll(console::ink);}
     void resized() override;
 private:
+    friend int captureGui(const juce::File&);
     using State=juce::AudioProcessorValueTreeState;
     struct Face final : juce::Component {
         explicit Face(BassDeamonEditor& e):editor(e){}
