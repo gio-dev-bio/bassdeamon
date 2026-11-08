@@ -1,0 +1,26 @@
+name: Extended signals and bypass
+on:
+  push:
+    branches: ['codex/**']
+    paths: ['tests/Signal*', 'tests/PluginSignalTests.cpp', '.github/workflows/signal-tests.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  signals:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure native processor test host
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build DSP and JUCE signal tests
+        run: cmake --build build --config Release --target signal_tests plugin_tests --parallel 3
+      - name: Render varied DSP signals
+        run: build/signal_tests signal-results
+      - name: Test host and internal bypass sample by sample
+        run: build/plugin_tests_artefacts/Release/plugin_tests --signals signal-results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Extended-signal-results-0.2.1
+          path: signal-results/
