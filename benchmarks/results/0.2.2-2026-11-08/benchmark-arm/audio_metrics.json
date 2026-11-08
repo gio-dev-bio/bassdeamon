@@ -1,0 +1,249 @@
+{
+  "machine": "arm64",
+  "platform": "macOS-15.8.2-arm64-arm-64bit",
+  "baseline_commit": "e6d48b7fa76979da31214eca03d4190fdef3578e",
+  "cpu_method": "Stereo core DSP only; 3 repeats x 0.6 s, 30 warmup blocks. Wall-clock timings; shared non-realtime runner. No host/GUI load included.",
+  "allocation_scope": "C++ new/new[] including aligned forms in the core callback; not all operating-system malloc calls.",
+  "audio_method": "48 kHz float output. Coherent 40/80/160 Hz tones, 10 s, last 2 s analysed; least-squares fundamental/DC removal. Dynamic fixtures are NOT evaluated as stationary THD+N.",
+  "transient_method": "Extreme width 0/100% at 4 changes/s; 6th order Butterworth high-pass 2 kHz, ignore first 1 s. Difference is not a perceptual audibility certificate.",
+  "failures": [],
+  "audio": [
+    {
+      "file": "tone_bypass_40",
+      "mode": "bypass",
+      "peak_dbfs": -12.041199826559248,
+      "nonfinite": 0,
+      "dc_last_2s_dbfs": -370.57242075837445,
+      "thdn_db": -153.2968250023377,
+      "thd_db": -169.23096241376453,
+      "gain_db": -1.7539607461828195e-08
+    },
+    {
+      "file": "tone_glue_40",
+      "mode": "glue",
+      "peak_dbfs": -12.133523890303053,
+      "nonfinite": 0,
+      "dc_last_2s_dbfs": -219.2307259205981,
+      "thdn_db": -73.01410673311851,
+      "thd_db": -73.01416696565252,
+      "gain_db": -0.6709107937335644
+    },
+    {
+      "file": "tone_unmask_40",
+      "mode": "unmask",
+      "peak_dbfs": -12.70070500784757,
+      "nonfinite": 0,
+      "dc_last_2s_dbfs": -205.57017523462622,
+      "thdn_db": -121.11555601416359,
+      "thd_db": -121.13053483038186,
+      "gain_db": -3.8802448497048365
+    },
+    {
+      "file": "tone_phase_40",
+      "mode": "phase",
+      "peak_dbfs": -12.012370372830352,
+      "nonfinite": 0,
+      "dc_last_2s_dbfs": -400.0,
+      "thdn_db": -150.5873567265208,
+      "thd_db": -164.23656366022738,
+      "gain_db": -1.4715259135701252e-08
+    },
+    {
+      "file": "tone_bypass_80",
+      "mode": "bypass",
+      "peak_dbfs": -12.041199826559248,
+      "nonfinite": 0,
+      "dc_last_2s_dbfs": -352.5106210185356,
+      "thdn_db": -153.09055030505465,
+      "thd_db": -168.08921280983256,
+      "gain_db": -2.157677887455611e-08
+    },
+    {
+      "file": "tone_glue_80",
+      "mode": "glue",
+      "peak_dbfs": -12.061032465273025,
+      "nonfinite": 0,
+      "dc_last_2s_dbfs": -219.7327545867927,
+      "thdn_db": -84.9016064340313,
+      "thd_db": -84.9016669076398,
+      "gain_db": -0.6253525950431649
+    },
+    {
+      "file": "tone_unmask_80",
+      "mode": "unmask",
+      "peak_dbfs": -12.257719686836388,
+      "nonfinite": 0,
+      "dc_last_2s_dbfs": -400.0,
+      "thdn_db": -147.44038642396885,
+      "thd_db": -160.61244814605658,
+      "gain_db": -3.2903868366379516
+    },
+    {
+      "file": "tone_phase_80",
+      "mode": "phase",
+      "peak_dbfs": -11.752519299648995,
+      "nonfinite": 0,
+      "dc_last_2s_dbfs": -400.0,
+      "thdn_db": -150.47742304148815,
+      "thd_db": -163.62573645165992,
+      "gain_db": -2.3269080042961604e-08
+    },
+    {
+      "file": "tone_bypass_160",
+      "mode": "bypass",
+      "peak_dbfs": -12.041199826559248,
+      "nonfinite": 0,
+      "dc_last_2s_dbfs": -367.0505955772608,
+      "thdn_db": -153.0349674736741,
+      "thd_db": -164.4517911823513,
+      "gain_db": 3.184496663560223e-09
+    },
+    {
+      "file": "tone_glue_160",
+      "mode": "glue",
+      "peak_dbfs": -12.043364680989978,
+      "nonfinite": 0,
+      "dc_last_2s_dbfs": -227.24756059975857,
+      "thdn_db": -96.8666946487817,
+      "thd_db": -96.86677309135233,
+      "gain_db": -0.5999206960578333
+    },
+    {
+      "file": "tone_unmask_160",
+      "mode": "unmask",
+      "peak_dbfs": -12.068341691697405,
+      "nonfinite": 0,
+      "dc_last_2s_dbfs": -230.50651965695138,
+      "thdn_db": -147.39274303856308,
+      "thd_db": -158.2837502795083,
+      "gain_db": -3.326077144631754
+    },
+    {
+      "file": "tone_phase_160",
+      "mode": "phase",
+      "peak_dbfs": -11.140549866534892,
+      "nonfinite": 0,
+      "dc_last_2s_dbfs": -400.0,
+      "thdn_db": -150.61373914270564,
+      "thd_db": -160.59382285877075,
+      "gain_db": -1.0363292667599599e-08
+    },
+    {
+      "file": "quiet_unmask_80",
+      "mode": "unmask",
+      "peak_dbfs": -32.06645448650662,
+      "nonfinite": 0,
+      "dc_last_2s_dbfs": -216.21481519573067,
+      "thdn_db": -99.66593031691936,
+      "thd_db": -99.67299173193976,
+      "gain_db": -3.0134993940167636
+    },
+    {
+      "file": "silence",
+      "mode": "silence",
+      "peak_dbfs": -400.0,
+      "nonfinite": 0,
+      "dc_last_2s_dbfs": -400.0,
+      "exact_silence": true
+    },
+    {
+      "file": "notes_all",
+      "mode": "notes_all",
+      "peak_dbfs": -11.246463016022517,
+      "nonfinite": 0,
+      "dc_last_2s_dbfs": -80.88458881727931
+    },
+    {
+      "file": "width_toggle",
+      "mode": "width_toggle",
+      "peak_dbfs": -12.163437838044048,
+      "nonfinite": 0,
+      "dc_last_2s_dbfs": -148.93469359401666,
+      "hf_2khz_peak_dbfs": -83.91006116731133,
+      "hf_2khz_rms_dbfs": -108.91411395284712,
+      "reference_hf_peak_dbfs": -67.08799075741715,
+      "hf_peak_improvement_db": 16.82207040989418
+    },
+    {
+      "file": "bypass_toggle",
+      "mode": "bypass_toggle",
+      "peak_dbfs": -12.041199826559248,
+      "nonfinite": 0,
+      "dc_last_2s_dbfs": -138.65602935295746,
+      "hf_2khz_peak_dbfs": -108.60350712072487,
+      "hf_2khz_rms_dbfs": -142.65825735010444,
+      "reference_hf_peak_dbfs": -108.60350712072487,
+      "hf_peak_improvement_db": 0.0
+    },
+    {
+      "file": "automation_phase",
+      "mode": "automation_phase",
+      "peak_dbfs": -12.041199826559248,
+      "nonfinite": 0,
+      "dc_last_2s_dbfs": -360.00694521503357,
+      "hf_2khz_peak_dbfs": -65.37623323937757,
+      "hf_2khz_rms_dbfs": -99.04085703237897,
+      "reference_hf_peak_dbfs": -65.97703744042293,
+      "hf_peak_improvement_db": -0.6008042010453636
+    },
+    {
+      "file": "tail",
+      "mode": "tail",
+      "peak_dbfs": -12.148530098651545,
+      "nonfinite": 0,
+      "dc_last_2s_dbfs": -400.0,
+      "tail_after_5s_peak_dbfs": -400.0
+    }
+  ],
+  "null": [
+    {
+      "mode": "bypass",
+      "max_absolute_error": "0",
+      "rms_error": "0",
+      "different_samples": "0",
+      "nonfinite": "0"
+    },
+    {
+      "mode": "glue",
+      "max_absolute_error": "0",
+      "rms_error": "0",
+      "different_samples": "0",
+      "nonfinite": "0"
+    },
+    {
+      "mode": "unmask",
+      "max_absolute_error": "0",
+      "rms_error": "0",
+      "different_samples": "0",
+      "nonfinite": "0"
+    },
+    {
+      "mode": "all",
+      "max_absolute_error": "0",
+      "rms_error": "0",
+      "different_samples": "0",
+      "nonfinite": "0"
+    },
+    {
+      "mode": "agc",
+      "max_absolute_error": "2.98023e-08",
+      "rms_error": "7.02366e-11",
+      "different_samples": "17",
+      "nonfinite": "0"
+    },
+    {
+      "mode": "learn",
+      "max_absolute_error": "3.72529e-09",
+      "rms_error": "1.08482e-11",
+      "different_samples": "10",
+      "nonfinite": "0"
+    },
+    {
+      "mode": "automation",
+      "max_absolute_error": "0.205102",
+      "rms_error": "0.0458296",
+      "different_samples": "235200",
+      "nonfinite": "0"
+    }
+  ]
+}
