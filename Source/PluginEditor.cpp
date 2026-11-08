@@ -172,7 +172,7 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g){
     console::text(g,status,{604,707,170,28},12,state>=2&&state<=4?console::orange:console::amber);
     const juce::String hint=state==1?"Keep bass + kick playing for 4 seconds":state==5&&!phaseOn?"Enable PHASE to hear the learned settings":state>=2&&state<=4?"Settings kept: use manual delay / polarity":"Learn sets delay + polarity; all-pass stays manual";
     console::text(g,hint,{438,746,325,22},12,console::cream);
-    console::text(g,"UNMASK BAND GR "+juce::String(processor.unmaskReduction.load(),2)+" dB",{832,387,315,18},12,console::cream);
+    console::text(g,"BAND GR "+juce::String(processor.unmaskReduction.load(),2)+" dB",{832,439,185,18},12,console::cream);
     console::text(g,"FOCUS  "+juce::String(focus,1)+" Hz",{1026,439,118,18},13,console::amber);
     }
     if(processor.parameters.getRawParameterValue("glue.timing")->load()>1.5f){

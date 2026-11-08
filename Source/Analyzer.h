@@ -20,7 +20,8 @@ public:
     }
     bool pop(AnalysisFrame& frame) noexcept {
         const auto r=read.load(std::memory_order_relaxed),w=write.load(std::memory_order_acquire);
-        if(r==w)return false;frame=frames[r%capacity];read.store(r+1,std::memory_order_release);return true;
+        if(r==w)return false;
+        frame=frames[r%capacity];read.store(r+1,std::memory_order_release);return true;
     }
     std::atomic<bool> enabled{false};std::atomic<uint32_t> dropped{0};
 private:
@@ -78,7 +79,8 @@ public:
             for(auto* stream:{&f.pre,&f.post,&f.kick})for(auto& v:*stream)if(!std::isfinite(v))v=0;
             scope.tick(f,bpm,hold);frames[count%fftSize]=f;++count;
         }
-        if(count==lastCount)return;lastCount=count;
+        if(count==lastCount)return;
+        lastCount=count;
         analyze(0,pre);analyze(1,post);analyze(2,kick);
         for(size_t b=0;b<bins;++b){maskPre[b]=mask(pre[b],kick[b]);maskPost[b]=mask(post[b],kick[b]);}
         for(size_t i=0;i<waveSize;++i){

@@ -295,7 +295,8 @@ public:
         allpassX.fill(0); allpassY.fill(0);
         bassE.fill(0); kickE.fill(0); bassEnergy = envelope = kickFast = kickSlow = 0;
         inputPowerMeter = outputPowerMeter = outputHeld = kickHeld = 0;
-        if(!preserveLearn)learner.cancel();tube.clear();
+        if(!preserveLearn)learner.cancel();
+        tube.clear();
     }
 
     void process(float* const* bass, int channels, const float* const* kick, int kickChannels,
