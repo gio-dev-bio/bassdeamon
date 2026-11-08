@@ -2,12 +2,13 @@
 #include "PluginEditor.h"
 
 namespace {
-constexpr std::array<const char*, 26> ids{
+constexpr std::array<const char*, 34> ids{
     "glue.on", "glue.amount", "glue.lock", "phase.on", "phase.invert", "phase.delay",
     "phase.rotate", "phase.frequency", "unmask.on", "unmask.amount", "unmask.delta",
     "glue.agc", "glue.agcLock", "phase.agc", "phase.agcLock", "unmask.agc", "unmask.agcLock",
     "output.trim", "global.on", "unmask.track", "unmask.hold", "unmask.frequency",
-    "unmask.width", "unmask.attack", "unmask.release", "unmask.maxCut"};
+    "unmask.width", "unmask.attack", "unmask.release", "unmask.maxCut",
+    "tube.on","tube.drive","tube.amount","tube.source","tube.colour","tube.agc","tube.agcLock","tube.audition"};
 }
 
 BassDeamonProcessor::BassDeamonProcessor()
@@ -16,7 +17,7 @@ BassDeamonProcessor::BassDeamonProcessor()
          .withOutput("Bass output", juce::AudioChannelSet::stereo(), true)),
       parameters(*this, nullptr, "BassDeamonState", layout()) {
     for (size_t i = 0; i < ids.size(); ++i) raw[i] = parameters.getRawParameterValue(ids[i]);
-    const bassdeamon::Engine::RuntimeState initial{-24, 2, 20, 180, 0, 0, 0, 75};
+    const bassdeamon::Engine::RuntimeState initial{-24, 2, 20, 180, 0, 0, 0, 75,0};
     for (size_t i = 0; i < initial.size(); ++i) runtimeSnapshot[i].store(static_cast<float>(initial[i]));
     for (auto& v : spectrumBass) v.store(-120);
     for (auto& v : spectrumKick) v.store(-120);
@@ -59,6 +60,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout BassDeamonProcessor::layout(
     continuous("unmask.release", "UNMASK release (ms)", 30, 500, 120);
     p.add(std::make_unique<juce::AudioParameterChoice>(juce::ParameterID{"unmask.maxCut", 1},
         "UNMASK cut ceiling", juce::StringArray{"3 dB", "6 dB", "9 dB", "12 dB"}, 2));
+    boolean("tube.on","Soft Tube active",false);
+    continuous("tube.drive","Soft Tube drive (dB)",0,18,6);
+    continuous("tube.amount","Soft Tube amount",0,1,.35f);
+    continuous("tube.source","Soft Tube source low-pass (Hz)",60,500,180);
+    continuous("tube.colour","Soft Tube colour",0,1,.45f);
+    boolean("tube.agc","Soft Tube auto gain",false);
+    boolean("tube.agcLock","Soft Tube gain lock",false);
+    boolean("tube.audition","Soft Tube audition added branch",false);
     return p;
 }
 
@@ -94,6 +103,9 @@ bassdeamon::Settings BassDeamonProcessor::readSettings() const noexcept {
     s.unmaskAttackMs = value(23); s.unmaskReleaseMs = value(24);
     s.unmaskMaxCutDb = 3 * (1 + std::clamp(static_cast<int>(value(25)), 0, 3));
     s.active=value(18)>.5f;
+    s.tube.enabled=value(26)>.5f;s.tube.driveDb=value(27);s.tube.amount=value(28);
+    s.tube.sourceHz=value(29);s.tube.colour=value(30);s.tube.autoGain=value(31)>.5f;
+    s.tube.gainLock=value(32)>.5f;s.tube.audition=value(33)>.5f;
     return s;
 }
 void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) {
@@ -134,8 +146,27 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     const float* kick[2]{nullptr, nullptr};
     const int sideChannels = side.getNumChannels();
     for (int c = 0; c < sideChannels; ++c) kick[c] = side.getReadPointer(c);
-    engine.process(bass.getArrayOfWritePointers(), bass.getNumChannels(),
-                   sideChannels > 0 ? kick : nullptr, sideChannels, bass.getNumSamples(), settings, bpm);
+    if(!analysisQueue.enabled.load(std::memory_order_relaxed)){
+        engine.process(bass.getArrayOfWritePointers(),bass.getNumChannels(),
+                       sideChannels>0?kick:nullptr,sideChannels,bass.getNumSamples(),settings,bpm);
+    }else{
+        // Fixed stack workspace handles host blocks larger than the prepare hint.
+        constexpr int chunkSize=256;std::array<std::array<float,chunkSize>,2> before{};
+        const int channels=bass.getNumChannels();
+        for(int offset=0;offset<bass.getNumSamples();offset+=chunkSize){
+            const int count=std::min(chunkSize,bass.getNumSamples()-offset);
+            float* output[2]{};const float* reference[2]{};
+            for(int c=0;c<channels;++c){output[c]=bass.getWritePointer(c)+offset;std::copy_n(output[c],count,before[size_t(c)].begin());}
+            for(int c=0;c<sideChannels;++c)reference[c]=kick[c]+offset;
+            engine.process(output,channels,sideChannels>0?reference:nullptr,sideChannels,count,settings,bpm);
+            for(int n=0;n<count;++n){bassdeamon::AnalysisFrame frame;
+                for(int c=0;c<2;++c){const int source=std::min(c,channels-1);
+                    frame.pre[size_t(c)]=before[size_t(source)][size_t(n)];frame.post[size_t(c)]=output[source][n];
+                    if(sideChannels>0)frame.kick[size_t(c)]=reference[std::min(c,sideChannels-1)][n];}
+                analysisQueue.push(frame);
+            }
+        }
+    }
     if (wasLearning && !engine.learning()) {
         const auto r = engine.learnResult();
         learnCorrelation.store(static_cast<float>(r.correlation));
@@ -147,12 +178,22 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     }
     wasLearning = engine.learning(); publishMeters();
 }
-void BassDeamonProcessor::processBlockBypassed(juce::AudioBuffer<float>&, juce::MidiBuffer& midi) {
+void BassDeamonProcessor::processBlockBypassed(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) {
+    if(analysisQueue.enabled.load(std::memory_order_relaxed)){
+        auto bass=getBusBuffer(buffer,false,0);auto side=getBusBuffer(buffer,true,1);
+        for(int n=0;n<buffer.getNumSamples();++n){bassdeamon::AnalysisFrame frame;
+            for(int c=0;c<2;++c){const int source=std::min(c,bass.getNumChannels()-1);
+                frame.pre[size_t(c)]=frame.post[size_t(c)]=bass.getSample(source,n);
+                if(side.getNumChannels()>0)frame.kick[size_t(c)]=side.getSample(std::min(c,side.getNumChannels()-1),n);}
+            analysisQueue.push(frame);
+        }
+    }
     midi.clear(); wasBypassed = true;
     // Matching main input/output layouts and zero algorithmic latency: leave bass untouched.
 }
 void BassDeamonProcessor::publishMeters() noexcept {
     const auto& m = engine.getMeters();
+    tubeGainDb.store(static_cast<float>(m.tubeAgcDb));
     glueReduction.store(static_cast<float>(m.glueReductionDb));
     unmaskReduction.store(static_cast<float>(m.unmaskReductionDb));
     outputPeak.store(static_cast<float>(m.peak));
@@ -179,14 +220,14 @@ void BassDeamonProcessor::timerCallback() {
     // Learn does not silently enable PHASE. User can compare with the active switch.
 }
 void BassDeamonProcessor::getStateInformation(juce::MemoryBlock& dest) {
-    auto state = parameters.copyState(); state.setProperty("schemaVersion", 2, nullptr);
+    auto state = parameters.copyState(); state.setProperty("schemaVersion", 3, nullptr);
     for (size_t i = 0; i < runtimeSnapshot.size(); ++i)
         state.setProperty("runtime" + juce::String(static_cast<int>(i)), runtimeSnapshot[i].load(), nullptr);
     if (auto xml = state.createXml()) copyXmlToBinary(*xml, dest);
 }
 void BassDeamonProcessor::setStateInformation(const void* data, int bytes) {
     if (auto xml = getXmlFromBinary(data, bytes)) {
-        if (xml->hasTagName(parameters.state.getType()) && xml->getIntAttribute("schemaVersion", 1) <= 2) {
+        if (xml->hasTagName(parameters.state.getType()) && xml->getIntAttribute("schemaVersion", 1) <= 3) {
             // A v1 state cannot carry the added controls: reset them deterministically.
             if (xml->getIntAttribute("schemaVersion", 1) == 1) {
                 for (size_t i = 18; i < ids.size(); ++i) {
@@ -194,6 +235,8 @@ void BassDeamonProcessor::setStateInformation(const void* data, int bytes) {
                     parameter->setValueNotifyingHost(parameter->getDefaultValue());
                 }
             }
+            if(xml->getIntAttribute("schemaVersion",1)<3)
+                for(size_t i=26;i<ids.size();++i){auto* parameter=parameters.getParameter(ids[i]);parameter->setValueNotifyingHost(parameter->getDefaultValue());}
             // Merge known parameter values into the current schema: v0.1 sessions lack v0.2 IDs.
             const auto incoming = juce::ValueTree::fromXml(*xml);
             for (int i = 0; i < incoming.getNumChildren(); ++i) {
@@ -203,7 +246,7 @@ void BassDeamonProcessor::setStateInformation(const void* data, int bytes) {
                     if (std::isfinite(value)) parameter->setValueNotifyingHost(parameter->convertTo0to1(value));
                 }
             }
-            const bassdeamon::Engine::RuntimeState defaults{-24, 2, 20, 180, 0, 0, 0, 75};
+            const bassdeamon::Engine::RuntimeState defaults{-24, 2, 20, 180, 0, 0, 0, 75,0};
             for (size_t i = 0; i < defaults.size(); ++i) {
                 const double value = xml->getDoubleAttribute("runtime" + juce::String(static_cast<int>(i)), defaults[i]);
                 restoredRuntime[i].store(static_cast<float>(std::isfinite(value) ? value : defaults[i]));
@@ -237,7 +280,7 @@ void BassDeamonProcessor::loadStartingPoint(int preset) {
     if (preset == 1) { set("glue.amount", 0.45f); set("unmask.amount", 0.3f); set("unmask.width", 0.7f); set("unmask.release", 180); }
     if (preset == 2) { set("glue.amount", 0.25f); set("unmask.amount", 0.65f); set("unmask.attack", 3); set("unmask.release", 90); set("unmask.maxCut", 3); }
     if (preset == 3) { set("glue.amount", 0.2f); set("unmask.amount", 0.35f); set("unmask.track", 0); set("unmask.frequency", 48); set("unmask.width", 0.35f); set("unmask.release", 220); }
-    const bassdeamon::Engine::RuntimeState initial{-24, 2, 20, 180, 0, 0, 0, 75};
+    const bassdeamon::Engine::RuntimeState initial{-24, 2, 20, 180, 0, 0, 0, 75,0};
     for (size_t i = 0; i < initial.size(); ++i) restoredRuntime[i].store(static_cast<float>(initial[i]));
     restoreRequested.store(true);
 }

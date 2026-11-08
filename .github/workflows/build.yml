@@ -18,6 +18,8 @@ jobs:
         run: |
           g++ -std=c++17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -ISource tests/DspTests.cpp -o /tmp/dsp-sanitized
           /tmp/dsp-sanitized
+          g++ -std=c++17 -O1 -g -pthread -fsanitize=address,undefined -fno-omit-frame-pointer -ISource tests/NewFeatureTests.cpp -o /tmp/features-sanitized
+          /tmp/features-sanitized
   macos:
     runs-on: macos-15
     steps:
@@ -26,6 +28,8 @@ jobs:
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
       - run: cmake --build build --config Release --parallel 3
       - run: ctest --test-dir build -C Release --output-on-failure
+      - name: Record new feature contracts and timings
+        run: build/new_feature_tests tube50.f32 > new-feature-results.txt
       - name: Render the real plugin GUI for visual review
         run: build/plugin_tests_artefacts/Release/plugin_tests --capture "$PWD/GUI-Preview.png"
       - name: Sign the complete bundle after manifest generation
@@ -42,14 +46,16 @@ jobs:
           arch -x86_64 validator/pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --timeout-ms 60000 --validate "$PWD/build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3"
       - name: Package ad-hoc signed development plugin
         run: |
-          ditto -c -k --sequesterRsrc --keepParent build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3 BassDeamon-0.2.2-macOS-universal.zip
-          zip -j BassDeamon-0.2.2-macOS-universal.zip INSTALL.txt
+          ditto -c -k --sequesterRsrc --keepParent build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3 BassDeamon-0.2.3-macOS-universal.zip
+          zip -j BassDeamon-0.2.3-macOS-universal.zip INSTALL.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: BassDeamon-0.2.2-macOS-universal
+          name: BassDeamon-0.2.3-macOS-universal
           path: |
-            BassDeamon-0.2.2-macOS-universal.zip
+            BassDeamon-0.2.3-macOS-universal.zip
             GUI-Preview.png
+            new-feature-results.txt
+            tube50.f32
 
   benchmark:
     strategy:
@@ -86,3 +92,25 @@ jobs:
           path: |
             bench-results/*.csv
             bench-results/*.json
+
+  feature-native:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native Soft Tube and analysis contracts
+        run: |
+          clang++ -std=c++17 -O3 -pthread -ISource tests/NewFeatureTests.cpp -o /tmp/features
+          /tmp/features tube50.f32 > new-feature-results.txt
+          uname -a > hardware.txt
+          sysctl -n machdep.cpu.brand_string >> hardware.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SoftTube-native-${{ matrix.runner }}
+          path: |
+            new-feature-results.txt
+            hardware.txt
+            tube50.f32

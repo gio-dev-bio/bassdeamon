@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdint>
 #include <vector>
+#include "SoftTube.h"
 
 namespace bassdeamon {
 constexpr double pi = 3.14159265358979323846;
@@ -20,6 +21,7 @@ inline double power(const std::array<double, 2>& x, int channels) noexcept {
 struct AgcSettings { bool enabled = false, locked = false; };
 struct Settings {
     bool active = true;
+    TubeSettings tube;
     bool glue = true, glueLocked = false;
     double glueAmount = 0.35;
     bool phase = false, invert = false, rotate = false;
@@ -39,7 +41,7 @@ struct Meters {
     double peak = 0.0, kickPeak = 0.0, inputRmsDb = -120, outputRmsDb = -120;
     double focusHz = 75, attackMs = 20, releaseMs = 180;
     std::array<double, bandCount> bassDb{}, kickDb{}, cutsDb{};
-    double filterQ = 2;
+    double filterQ = 2, tubeAgcDb=0;
 };
 
 // Double precision RBJ cookbook filters, transposed direct form II.
@@ -239,7 +241,7 @@ public:
         cutDb.fill(0); kickE.fill(0); bassE.fill(0);
         allpassX.fill(0); allpassY.fill(0);
         for (auto& d : delays) d.prepare(sampleRate);
-        learner.prepare(sampleRate);
+        learner.prepare(sampleRate);tube.prepare(sampleRate);tubeAgc.prepare(sampleRate,5000);
         for (size_t b = 0; b < frequencies.size(); ++b) {
             for (int c = 0; c < 2; ++c) {
                 detectorsBass[b][c] = {}; detectorsKick[b][c] = {}; filters[b][c] = {};
@@ -263,10 +265,10 @@ public:
     LearnResult learnResult() const noexcept { return learner.getResult(); }
     const Meters& getMeters() const noexcept { return meters; }
     // Frozen adaptation/AGC values are part of the session state, not only UI parameters.
-    using RuntimeState = std::array<double, 8>;
+    using RuntimeState = std::array<double, 9>;
     RuntimeState runtimeState() const noexcept {
         return {thresholdDb, ratio, attackMs, releaseMs,
-                agc[0].learnedDb(), agc[1].learnedDb(), agc[2].learnedDb(), focusHz};
+                agc[0].learnedDb(), agc[1].learnedDb(), agc[2].learnedDb(), focusHz,tubeAgc.learnedDb()};
     }
     void restoreRuntime(const RuntimeState& r) noexcept {
         thresholdDb = std::clamp(r[0], -100.0, 12.0); ratio = std::clamp(r[1], 1.0, 4.0);
@@ -274,6 +276,7 @@ public:
         attackA = pole(attackMs, sampleRate); releaseA = pole(releaseMs, sampleRate);
         for (size_t i = 0; i < agc.size(); ++i) agc[i].restore(r[4+i]);
         focusHz = trackedFocusHz = std::clamp(r[7], 30.0, 250.0);
+        tubeAgc.restore(r[8]);
     }
     void clearHistory() noexcept {
         for (auto& d : delays) d.clear();
@@ -282,19 +285,20 @@ public:
         allpassX.fill(0); allpassY.fill(0);
         bassE.fill(0); kickE.fill(0); bassEnergy = envelope = kickFast = kickSlow = 0;
         inputPowerMeter = outputPowerMeter = outputHeld = kickHeld = 0;
-        learner.cancel();
+        learner.cancel();tube.clear();
     }
 
     void process(float* const* bass, int channels, const float* const* kick, int kickChannels,
                  int samples, const Settings& s, double bpm = 0) noexcept {
         if (channels < 1 || channels > 2) return;
+        tube.configure(s.tube);
         const int rampSamples=std::max(1,static_cast<int>(sampleRate*.02));
         if(!globalInitialised){globalRamp.reset(s.active?1:0);globalInitialised=true;}
         globalRamp.set(s.active?1:0,rampSamples);
         if(!s.active&&globalRamp.finished()){
             if(!globalPaused){clearHistory();globalPaused=true;}
             // Leave every input bit untouched, including IEEE signed zeros/subnormals.
-            meters.glueReductionDb=meters.unmaskReductionDb=0;meters.agcDb.fill(0);meters.cutsDb.fill(0);
+            meters.glueReductionDb=meters.unmaskReductionDb=meters.tubeAgcDb=0;meters.agcDb.fill(0);meters.cutsDb.fill(0);
             for(int n=0;n<samples;++n){
                 std::array<double,2> dry{};for(int c=0;c<channels;++c)dry[c]=bass[c][n];
                 inputPowerMeter=follow(inputPowerMeter,power(dry,channels),energyA);
@@ -449,6 +453,16 @@ public:
             const double phaseAgc = compensate(1, phaseReference, power(x, channels), phaseMix);
             for (auto& v : x) v *= phaseAgc;
 
+            // Optional parallel Soft Tube before UNMASK. No arithmetic is added
+            // to x in the disabled/settled branch, preserving the 0.2.2 output.
+            const double tubeInput=power(x,channels);
+            tube.frame(x,channels);
+            auto tubeCfg=AgcSettings{s.tube.autoGain&&!s.tube.audition,s.tube.gainLock};
+            if(!tube.active())tubeCfg.enabled=false;
+            const double learnedTubeGain=tubeAgc.tick(tubeInput,power(x,channels),tubeCfg,budget);
+            const double tubeGain=1+tube.wetMix()*(learnedTubeGain-1);
+            if(tubeGain!=1)for(auto& v:x)v*=tubeGain;
+            meters.tubeAgcDb=db(tubeGain);budget-=std::max(0.0,meters.tubeAgcDb);
             const auto beforeUnmask = x;
             double maxCut = 0;
             for (size_t b = 0; b < frequencies.size(); ++b) {
@@ -506,6 +520,7 @@ private:
     std::array<Delay, 2> delays;
     std::array<AutoGain, 3> agc;
     PhaseLearner learner;
+    SoftTube tube;AutoGain tubeAgc;
     Meters meters;
     std::array<double, 2> allpassX{}, allpassY{};
     double sampleRate = 48000, bassEnergy = 0, envelope = 0, kickFast = 0, kickSlow = 0;

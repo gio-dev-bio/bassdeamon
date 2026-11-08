@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "Dsp.h"
+#include "Analyzer.h"
 #include <atomic>
 
 class BassDeamonProcessor final : public juce::AudioProcessor, private juce::Timer {
@@ -31,6 +32,8 @@ public:
     int selectedAB() const noexcept { return abSlot; }
     void requestLearn() noexcept { learnRequested.store(true); }
     juce::AudioProcessorValueTreeState parameters;
+    bassdeamon::AnalysisQueue analysisQueue;
+    std::atomic<float> tubeGainDb{0};
     std::atomic<float> glueReduction{0}, unmaskReduction{0}, outputPeak{0};
     std::array<std::atomic<float>, 3> agcMeters{};
     std::array<std::atomic<float>, bassdeamon::bandCount> spectrumBass{}, spectrumKick{}, spectrumCut{};
@@ -45,11 +48,11 @@ private:
     void timerCallback() override;
     void publishMeters() noexcept;
     bassdeamon::Engine engine;
-    std::array<std::atomic<float>*, 26> raw{};
+    std::array<std::atomic<float>*, 34> raw{};
     std::atomic<bool> learnRequested{false}, resultReady{false};
     std::atomic<float> resultDelay{0};
     std::atomic<bool> resultInvert{false};
-    std::array<std::atomic<float>, 8> runtimeSnapshot{}, restoredRuntime{};
+    std::array<std::atomic<float>, 9> runtimeSnapshot{}, restoredRuntime{};
     std::array<juce::MemoryBlock, 2> abStates;
     int abSlot = 0; // message-thread only; A/B survives editor close/reopen.
     std::atomic<bool> restoreRequested{false};

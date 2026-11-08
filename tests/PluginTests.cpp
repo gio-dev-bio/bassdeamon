@@ -2,6 +2,7 @@
 #include <iostream>
 #include "RealtimeAllocation.h"
 #include <stdexcept>
+#include <cstring>
 
 void require(bool condition, const char* message) { if (!condition) throw std::runtime_error(message); }
 void set(BassDeamonProcessor& p, const char* id, float value) {
@@ -62,6 +63,38 @@ int main(int argc, char** argv) {
         restored.setStateInformation(legacyBytes.getData(), static_cast<int>(legacyBytes.getSize()));
         require(std::abs(restored.parameters.getRawParameterValue("unmask.width")->load()-0.55f) < 0.001f, "Legacy width default was not restored");
         require(restored.parameters.getRawParameterValue("unmask.hold")->load() == 0, "Legacy HOLD default was not restored");
+        // New state fields and legacy migration on an already configured instance.
+        set(p,"tube.on",1);set(p,"tube.drive",9);set(p,"tube.source",210);set(p,"tube.agcLock",1);
+        p.getStateInformation(state);restored.setStateInformation(state.getData(),int(state.getSize()));
+        require(restored.parameters.getRawParameterValue("tube.on")->load()==1,"Tube state lost");
+        require(std::abs(restored.parameters.getRawParameterValue("tube.drive")->load()-9)<.001f,"Tube Drive state lost");
+        require(restored.parameters.getRawParameterValue("tube.agcLock")->load()==1,"Tube gain lock lost");
+        auto v2=p.parameters.copyState();v2.setProperty("schemaVersion",2,nullptr);
+        for(int i=v2.getNumChildren()-1;i>=0;--i)if(v2.getChild(i).getProperty("id").toString().startsWith("tube."))v2.removeChild(i,nullptr);
+        auto xml2=v2.createXml();juce::MemoryBlock bytes2;juce::AudioProcessor::copyXmlToBinary(*xml2,bytes2);
+        restored.setStateInformation(bytes2.getData(),int(bytes2.getSize()));
+        require(restored.parameters.getRawParameterValue("tube.on")->load()==0,"v2 migration must disable Tube");
+        // Independent, identical processors: opening the analyzer only taps the
+        // actual samples. Oversized host blocks exercise bounded chunk storage.
+        for(int channels:{1,2})for(int block:{17,128,511,2048}){
+            BassDeamonProcessor closed,opened;
+            for(auto* processor:{&closed,&opened}){
+                auto l=processor->getBusesLayout();l.inputBuses.set(0,channels==1?juce::AudioChannelSet::mono():juce::AudioChannelSet::stereo());
+                l.outputBuses.set(0,l.inputBuses[0]);l.inputBuses.set(1,juce::AudioChannelSet::mono());
+                require(processor->setBusesLayout(l),"Analyzer layout rejected");set(*processor,"tube.on",1);set(*processor,"phase.on",1);set(*processor,"phase.delay",1.25f);
+                processor->prepareToPlay(48000,64);
+            }
+            opened.analysisQueue.enabled.store(true);
+            juce::AudioBuffer<float> a(channels+1,block),b(channels+1,block);
+            for(int pass=0;pass<12;++pass){
+                for(int c=0;c<a.getNumChannels();++c)for(int n=0;n<block;++n){const float value=float(.25*std::sin(2*bassdeamon::pi*(55+17*c)*(pass*block+n)/48000.));a.setSample(c,n,value);b.setSample(c,n,value);}
+                guardedProcess(closed,a,midi);guardedProcess(opened,b,midi);
+                for(int c=0;c<channels;++c)require(std::memcmp(a.getReadPointer(c),b.getReadPointer(c),size_t(block)*sizeof(float))==0,"Analyzer changes audio");
+                bassdeamon::AnalysisFrame frame;int frames=0;
+                while(opened.analysisQueue.pop(frame)){for(int c=0;c<2;++c)require(frame.post[size_t(c)]==b.getSample(std::min(c,channels-1),frames),"Analyzer POST differs from actual output");++frames;}
+                require(frames==block,"Analyzer loses frames without pressure");
+            }
+        }
         std::cout << "PASS plugin layouts / routing / state / A-B / legacy migration\n";
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

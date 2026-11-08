@@ -27,6 +27,7 @@ private:
     Knob& addKnob(const char*,const char*,const char*,bool,juce::Rectangle<int>,const char*);
     void paintConsole(juce::Graphics&);
     void paintSpectrum(juce::Graphics&);
+    void paintWave(juce::Graphics&);
     void paintVU(juce::Graphics&);
     void timerCallback() override;
     void createTexture();
@@ -36,6 +37,9 @@ private:
     juce::TooltipWindow tooltips{this,600};
     std::vector<std::unique_ptr<Knob>> knobs;
     std::vector<std::unique_ptr<Switch>> switches;
+    bassdeamon::RelationAnalyzer analyzer;
+    juce::TextButton sumButton{"SUM K+B"};
+    bool showSum=false;
     juce::TextButton learn{"LEARN / LOCK"},aButton{"A"},bButton{"B"};
     juce::ComboBox presets,ceiling;
     std::unique_ptr<State::ComboBoxAttachment> ceilingAttachment;
