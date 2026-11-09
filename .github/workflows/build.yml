@@ -53,7 +53,7 @@ jobs:
         run: |
           ditto -c -k --sequesterRsrc --keepParent build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3 BassDeamon-0.2.4-macOS-universal.zip
           zip -j BassDeamon-0.2.4-macOS-universal.zip INSTALL.txt docs/GUIDA_0.2.4_IT.md
-          lipo -verify_arch x86_64 arm64 build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3/Contents/MacOS/BassDeamon
+          lipo build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3/Contents/MacOS/BassDeamon -verify_arch x86_64 arm64
           unzip -t BassDeamon-0.2.4-macOS-universal.zip
       - uses: actions/upload-artifact@v4
         with:
