@@ -34,6 +34,8 @@ int main(){try{
             check(std::abs(double(b)*sr/Analyzer::fftSize-75)<3*sr/Analyzer::fftSize,"unrelated harmonics highlighted");
         auto alternating=render(sr,[&](size_t n){AnalysisFrame f;const float value=tone(hz,n,sr);if(n<Analyzer::fftSize/2)f.pre={value,value};else f.kick={value,value};f.post=f.pre;return f;});
         check(flagged(alternating->maskPre)==0,"non-simultaneous notes falsely collide in long FFT window");
+        auto changedNote=render(sr,[&](size_t n){AnalysisFrame f;const float bass=tone(n<Analyzer::fftSize/2?75:150,n,sr);f.pre={bass,bass};f.post=f.pre;if(n>=Analyzer::fftSize/2){const float kick=tone(75,n,sr);f.kick={kick,kick};}return f;});
+        check(flagged(changedNote->maskPre)==0,"old bass note falsely collides with current kick");
         auto stereo=render(sr,[&](size_t n){AnalysisFrame f;const float value=tone(hz,n,sr);f.pre={value,0};f.post=f.pre;f.kick={0,value};return f;});
         check(flagged(stereo->maskPre)==0,"different stereo channels falsely collide");
         auto post=render(sr,[&](size_t n){AnalysisFrame f;const float value=tone(hz,n,sr);f.pre={value,value};f.post={value*.0630957f,value*.0630957f};f.kick=f.pre;return f;});

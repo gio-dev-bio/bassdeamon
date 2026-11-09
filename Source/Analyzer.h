@@ -66,7 +66,7 @@ private:
 // anti-phase stereo must not disappear from the frequency display.
 class RelationAnalyzer {
 public:
-    static constexpr size_t fftSize=16384,bins=fftSize/2+1,waveSize=512;
+    static constexpr size_t fftSize=16384,bins=fftSize/2+1,waveSize=512,fastSize=4096,fastBins=fastSize/2+1;
     using Spectrum=std::array<float,bins>;
     BeatScope scope;
     Spectrum pre{},post{},kick{},maskPre{},maskPost{};
@@ -77,6 +77,7 @@ public:
         wavePre.fill(0);wavePost.fill(0);waveKick.fill(0);sumPre.fill(0);sumPost.fill(0);
         temporalPole=std::exp(-1/(.005*sr));peakPole=std::exp(-1/(.25*sr));
         windowSum=0;for(size_t i=0;i<fftSize;++i){window[i]=.5-.5*std::cos(2*pi*i/(fftSize-1));windowSum+=window[i];}
+        fastWindowSum=0;for(size_t i=0;i<fastSize;++i){fastWindow[i]=.5-.5*std::cos(2*pi*i/(fastSize-1));fastWindowSum+=fastWindow[i];}
     }
     void consume(AnalysisQueue& queue,double bpm=120,bool hold=false) noexcept {
         AnalysisFrame f;while(queue.pop(f)){
@@ -99,7 +100,8 @@ public:
         if(count==lastCount)return;
         lastCount=count;
         // Do not present a zero-padded startup as a calibrated full-window FFT.
-        if(count>=fftSize){analyze(0,pre);analyze(1,post);analyze(2,kick);updateMask();}
+        if(count>=fftSize){analyze(0,pre);analyze(1,post);analyze(2,kick);
+            analyze(0,pre,true);analyze(1,post,true);analyze(2,kick,true);updateMask();}
         for(size_t i=0;i<waveSize;++i){
             const auto peak=[&](size_t t){return std::abs(scope.low[t][i])>std::abs(scope.high[t][i])?scope.low[t][i]:scope.high[t][i];};
             wavePre[i]=peak(0);wavePost[i]=peak(1);waveKick[i]=peak(2);sumPre[i]=peak(3);sumPost[i]=peak(4);
@@ -118,14 +120,20 @@ private:
     void resetAnalysis() noexcept {
         count=lastCount=0;frames={};pre.fill(-120);post.fill(-120);kick.fill(-120);maskPre.fill(0);maskPost.fill(0);
         for(auto& stream:channelLevels)for(auto& channel:stream)channel.fill(-120);
+        for(auto& stream:fastLevels)for(auto& channel:stream)channel.fill(-120);
         fastPower={};recentPower={};jointPower={};
     }
     void updateMask() noexcept {
-        std::array<std::array<float,2>,3> peaks{};for(auto& p:peaks)p.fill(-120);
+        std::array<std::array<float,2>,3> peaks{},fastPeaks{};for(auto& p:peaks)p.fill(-120);for(auto& p:fastPeaks)p.fill(-120);
         for(size_t b=1;b<bins;++b){const double hz=double(b)*rate/fftSize;
             if(hz<20||hz>20000)continue;
             for(size_t stream=0;stream<3;++stream)for(size_t channel=0;channel<2;++channel)
                 peaks[stream][channel]=std::max(peaks[stream][channel],channelLevels[stream][channel][b]);
+        }
+        for(size_t b=1;b<fastBins;++b){const double hz=double(b)*rate/fastSize;
+            if(hz<20||hz>20000)continue;
+            for(size_t stream=0;stream<3;++stream)for(size_t channel=0;channel<2;++channel)
+                fastPeaks[stream][channel]=std::max(fastPeaks[stream][channel],fastLevels[stream][channel][b]);
         }
         for(size_t b=0;b<bins;++b){maskPre[b]=maskPost[b]=0;const double hz=double(b)*rate/fftSize;
             if(hz<20||hz>20000)continue;
@@ -134,43 +142,58 @@ private:
                 const double floor=std::max(-70.0,10*std::log10(std::max(1e-20,reference))-20);
                 const double jointDb=10*std::log10(std::max(1e-20,jointPower[stream][channel]));
                 const float simultaneous=float(std::clamp((jointDb-floor)/8,0.0,1.0));
-                const float value=simultaneous*mask(channelLevels[stream][channel][b],channelLevels[2][channel][b],peaks[stream][channel],peaks[2][channel]);
+                const auto currentLevel=[&](size_t source){
+                    const double position=double(b)*fastSize/fftSize;const auto lo=std::min(fastBins-1,size_t(position)),hi=std::min(fastBins-1,lo+1);
+                    const double fraction=position-double(lo);
+                    const double power=(1-fraction)*std::pow(10.0,fastLevels[source][channel][lo]/10.0)+fraction*std::pow(10.0,fastLevels[source][channel][hi]/10.0);
+                    return float(10*std::log10(std::max(1e-12,power)));
+                };
+                const float detail=mask(channelLevels[stream][channel][b],channelLevels[2][channel][b],peaks[stream][channel],peaks[2][channel]);
+                // Fine frequency support must also exist in the recent short
+                // window: a previous bass note must not collide with a new kick.
+                const float current=detail>0?mask(currentLevel(stream),currentLevel(2),fastPeaks[stream][channel],fastPeaks[2][channel]):0;
+                const float value=simultaneous*std::min(detail,current);
                 auto& result=stream==0?maskPre[b]:maskPost[b];result=std::max(result,value);
             }
         }
     }
-    void analyze(int stream,Spectrum& destination) noexcept {
+    void analyze(int stream,Spectrum& destination,bool fast=false) noexcept {
         powers.fill(0);
-        const size_t valid=std::min<size_t>(count,fftSize),oldest=count>=fftSize?count%fftSize:0;
+        const size_t length=fast?fastSize:fftSize,valid=std::min(count,length),numBins=length/2+1;
+        const double sum=fast?fastWindowSum:windowSum;
         for(size_t channel=0;channel<2;++channel){
-            for(size_t i=0;i<fftSize;++i){
-                double sample=0;if(i>=fftSize-valid){const auto& f=frames[(oldest+i-(fftSize-valid))%fftSize];
+            for(size_t i=0;i<length;++i){
+                double sample=0;if(i>=length-valid){const auto& f=frames[(count-valid+i-(length-valid))%fftSize];
                     sample=stream==0?f.pre[channel]:stream==1?f.post[channel]:f.kick[channel];}
-                work[i]=sample*window[i];
+                work[i]=sample*(fast?fastWindow[i]:window[i]);
             }
-            for(size_t i=1,j=0;i<fftSize;++i){size_t bit=fftSize>>1;for(;j&bit;bit>>=1)j^=bit;j^=bit;if(i<j)std::swap(work[i],work[j]);}
-            for(size_t length=2;length<=fftSize;length<<=1){
-                const auto step=std::polar(1.0,-2*pi/length);
-                for(size_t base=0;base<fftSize;base+=length){std::complex<double> w{1,0};
-                    for(size_t j=0;j<length/2;++j){const auto u=work[base+j],v=w*work[base+j+length/2];work[base+j]=u+v;work[base+j+length/2]=u-v;w*=step;}}
+            for(size_t i=1,j=0;i<length;++i){size_t bit=length>>1;for(;j&bit;bit>>=1)j^=bit;j^=bit;if(i<j)std::swap(work[i],work[j]);}
+            for(size_t stage=2;stage<=length;stage<<=1){
+                const auto step=std::polar(1.0,-2*pi/stage);
+                for(size_t base=0;base<length;base+=stage){std::complex<double> w{1,0};
+                    for(size_t j=0;j<stage/2;++j){const auto u=work[base+j],v=w*work[base+j+stage/2];work[base+j]=u+v;work[base+j+stage/2]=u-v;w*=step;}}
             }
-            for(size_t b=0;b<bins;++b){
-                const double amplitudeScale=(b==0||b==fftSize/2)?1:2;
-                const double power=std::norm(work[b])*amplitudeScale*amplitudeScale/(windowSum*windowSum);
-                channelLevels[size_t(stream)][channel][b]=float(10*std::log10(std::max(1e-12,power)));
+            for(size_t b=0;b<numBins;++b){
+                const double amplitudeScale=(b==0||b==length/2)?1:2;
+                const double power=std::norm(work[b])*amplitudeScale*amplitudeScale/(sum*sum);
+                const float level=float(10*std::log10(std::max(1e-12,power)));
+                if(fast)fastLevels[size_t(stream)][channel][b]=level;
+                else channelLevels[size_t(stream)][channel][b]=level;
                 powers[b]+=.5*power;
             }
         }
-        for(size_t b=0;b<bins;++b)destination[b]=float(10*std::log10(std::max(1e-12,powers[b])));
+        if(!fast)for(size_t b=0;b<bins;++b)destination[b]=float(10*std::log10(std::max(1e-12,powers[b])));
     }
     double rate=48000,windowSum=1;size_t count=0,lastCount=0;
     bool haveSequence=false;uint64_t nextSequence=0;
     double temporalPole=0,peakPole=0;
     std::array<std::array<Spectrum,2>,3> channelLevels{};
+    std::array<std::array<std::array<float,fastBins>,2>,3> fastLevels{};
     std::array<std::array<double,2>,3> fastPower{},recentPower{};
     std::array<std::array<double,2>,2> jointPower{};
     std::array<AnalysisFrame,fftSize> frames{};
     std::array<double,fftSize> window{};std::array<double,bins> powers{};
+    std::array<double,fastSize> fastWindow{};double fastWindowSum=1;
     std::array<std::complex<double>,fftSize> work{};
 };
 }
