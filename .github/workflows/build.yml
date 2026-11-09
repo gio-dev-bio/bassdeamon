@@ -26,6 +26,7 @@ jobs:
   macos:
     # Temporary Intel-only build while hosted ARM runners lack capacity.
     runs-on: macos-15-intel
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Configure Intel VST3
