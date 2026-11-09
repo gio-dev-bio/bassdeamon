@@ -33,8 +33,33 @@ int captureGui(const juce::File& output){
         std::cerr<<"GUI capture has no real analyzer data\n";return 1;
     }
     if(static_cast<BassDeamonEditor*>(editor.get())->analyzer.scope.completed<1){std::cerr<<"Missing full quarter-note scope capture\n";return 1;}
-    const auto image=editor->createComponentSnapshot(editor->getLocalBounds(),true,1.0f);
-    auto stream=output.createOutputStream();juce::PNGImageFormat format;
-    if(!stream||!format.writeImageToStream(image,*stream))return 1;
+    const auto save=[&](const juce::File& file){
+        const auto image=editor->createComponentSnapshot(editor->getLocalBounds(),true,1.0f);
+        auto stream=file.createOutputStream();juce::PNGImageFormat format;
+        if(!stream||!stream->setPosition(0)||stream->truncate().failed())return false;
+        return format.writeImageToStream(image,*stream);
+    };
+    if(!save(output))return 1;
+    auto* gui=static_cast<BassDeamonEditor*>(editor.get());
+    gui->sumButton.onClick();
+    if(gui->showSum||gui->sumButton.getToggleState())return 1;
+    if(!save(output.getSiblingFile("GUI-SumOff.png")))return 1;
+    gui->sumButton.onClick();
+    for(const char* id:{"glue.timing","unmask.timing"}){
+        auto* parameter=p.parameters.getParameter(id);
+        parameter->setValueNotifyingHost(1);
+    }
+    // Metered milliseconds update in the audio callback, like the real host.
+    // Feed a fresh block after changing timing so this preview shows SYNC's
+    // effective values, rather than the last values from AUTO/MS mode.
+    for(int n=0;n<256;++n){
+        const double t=(800*256+n)/48000.0;
+        const float bass=float(.32*std::sin(2*bassdeamon::pi*75*t));
+        buffer.setSample(0,n,bass);buffer.setSample(1,n,bass*.95f);
+        buffer.setSample(2,n,float(.7*std::exp(-std::fmod(t,.5)*22)*std::sin(2*bassdeamon::pi*60*t)));
+    }
+    p.processBlock(buffer,midi);
+    gui->timerCallback();
+    if(!save(output.getSiblingFile("GUI-Sync.png")))return 1;
     std::cout<<output.getFullPathName()<<'\n';return 0;
 }

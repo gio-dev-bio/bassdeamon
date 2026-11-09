@@ -7,7 +7,7 @@ Installazione: chiudere Cubase, sostituire BassDeamon.vst3 nella cartella VST3 c
 
 Spettro unico sovrapposto: PRE grigio, POST verde, kick ambra. Scala lineare con vero punto 0 Hz. Range predefinito 0–1000 Hz, selezionabili 0–2500 e 0–5000 Hz. FFT Hann 8192, potenze stereo mediate, smoothing solo grafico. La separazione tra PRE e POST include tutta la catena e il trim.
 
-Scope del canale sinistro: una cattura completa di 1/4 musicale, allineata alla posizione PPQ del progetto, senza scorrimento continuo. A 120 BPM dura 500 ms, a 60 BPM 1000 ms. Mostra minimi e massimi per colonna, preservando i transienti. SUM K+B è solo una somma visiva; HOLD ferma il grafico e non l'audio. Quando manca la posizione host usa un clock locale. Se manca anche il BPM usa 120 BPM, indicato FALLBACK. Un loop più corto di 1/4 può impedire una nuova cattura completa.
+Scope del canale sinistro: una cattura completa di 1/4 musicale, allineata alla posizione PPQ del progetto, senza scorrimento continuo. A 120 BPM dura 500 ms, a 60 BPM 1000 ms. Mostra minimi e massimi per colonna, preservando i transienti. SUM K+B mostra o nasconde il grafico della somma; quando è spento non viene sostituito da un altro tracciato. La somma è esclusivamente visiva. HOLD ferma la cattura mostrata e non l'audio. Quando manca la posizione host usa un clock locale. Se manca anche il BPM usa 120 BPM, indicato FALLBACK. Un loop più corto di 1/4 può impedire una nuova cattura completa.
 
 ## Attack e Release
 

@@ -1,10 +1,13 @@
-name: BassDeamon prototype
+name: BassDeamon build and validation
 on:
   push:
     branches: [main, 'codex/**']
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: bassdeamon-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   dsp:
     runs-on: ubuntu-latest
@@ -50,17 +53,23 @@ jobs:
         run: |
           ditto -c -k --sequesterRsrc --keepParent build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3 BassDeamon-0.2.4-macOS-universal.zip
           zip -j BassDeamon-0.2.4-macOS-universal.zip INSTALL.txt docs/GUIDA_0.2.4_IT.md
+          lipo -verify_arch x86_64 arm64 build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3/Contents/MacOS/BassDeamon
+          unzip -t BassDeamon-0.2.4-macOS-universal.zip
       - uses: actions/upload-artifact@v4
         with:
           name: BassDeamon-0.2.4-macOS-universal
+          retention-days: 14
           path: |
             BassDeamon-0.2.4-macOS-universal.zip
             GUI-Preview.png
+            GUI-SumOff.png
+            GUI-Sync.png
             usability-results.txt
             new-feature-results.txt
             tube50.f32
 
   benchmark:
+    if: github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
@@ -113,6 +122,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: SoftTube-native-${{ matrix.runner }}
+          retention-days: 14
           path: |
             new-feature-results.txt
             hardware.txt

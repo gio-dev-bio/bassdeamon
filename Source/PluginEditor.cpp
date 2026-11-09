@@ -77,7 +77,7 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
     addKnob("tube.colour","COLOUR","",true,{689,967,135,125},"Smoothly varies asymmetry and the added-branch tone filter.");
     addSwitch("tube.audition","ADDED ONLY",{872,1005,145,32},"Send the added residual through UNMASK/output, with tube AGC disabled. It may retain fundamental energy.");
     sumButton.setBounds(1002,336,145,26);face.addAndMakeVisible(sumButton);
-    sumButton.setTooltip("Compare complete 1/4-note captures aligned to the project beat. Display only: kick is never mixed into the output.");
+    sumButton.setTooltip("Show or hide the kick + bass sum graph. Complete 1/4-note captures aligned to the project beat. Display only: audio is unchanged.");
     sumButton.onClick=[this]{showSum=!showSum;sumButton.setToggleState(showSum,juce::dontSendNotification);face.repaint();};
     sumButton.setToggleState(true,juce::dontSendNotification);
     addSwitch("view.hold","HOLD",{904,336,88,26},"Freeze the last complete quarter-note capture; audio is unaffected.");
@@ -98,6 +98,7 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
     // leave competing monitoring modes. The main POWER switch stays explicit.
     for(auto& sw:switches){const auto id=sw->button.getComponentID();
         if(id=="tube.audition"||id=="tube.on"||id=="unmask.delta")sw->button.onClick=[this,id,&button=sw->button]{
+            if(!button.userGesture)return;
             const auto set=[&](const char* key,float value){auto* parameter=processor.parameters.getParameter(key);
                 parameter->beginChangeGesture();parameter->setValueNotifyingHost(value);parameter->endChangeGesture();};
             if(id=="tube.audition"&&button.getToggleState()){set("tube.on",1);set("unmask.delta",0);}
@@ -210,7 +211,7 @@ void BassDeamonEditor::paintSpectrum(juce::Graphics& g){
     const auto fy=[&](float db){return plot.getBottom()-juce::jlimit(0.f,1.f,(db+72)/72)*plot.getHeight();};
     for(int level:{-72,-48,-24,0}){const float y=fy(float(level));g.setColour(console::cream.withAlpha(.15f));g.drawHorizontalLine(juce::roundToInt(y),plot.getX(),plot.getRight());
         console::text(g,juce::String(level),{34,y-7,33,14},11,console::cream,juce::Justification::centredRight);}
-    for(int i=0;i<=10;++i){const double hz=maximum*i/10;const float x=fx(hz);g.setColour(console::cream.withAlpha(.13f));g.drawVerticalLine(juce::roundToInt(x),plot.getY(),plot.getBottom());
+    for(int i=0;i<=20;++i){const double hz=maximum*i/20;const float x=fx(hz);g.setColour(console::cream.withAlpha(i%2==0?.13f:.06f));g.drawVerticalLine(juce::roundToInt(x),plot.getY(),plot.getBottom());
         if(i%2==0)console::text(g,juce::String(hz,0),{x-23,282,46,16},12,console::cream,juce::Justification::centred);}
     const juce::Colour postColour(0xff56e6c0);
     console::text(g,"PRE",{72,140,65,20},14,console::cream);console::text(g,"POST",{145,140,65,20},14,postColour);
@@ -218,7 +219,8 @@ void BassDeamonEditor::paintSpectrum(juce::Graphics& g){
     for(int trace=0;trace<3;++trace){const auto& values=trace==0?visualPre:trace==1?visualPost:visualKick;
         juce::Path line;line.startNewSubPath(plot.getX(),fy(values[0]));
         for(size_t b=1;b<values.size();++b){const double hz=double(b)*analyzer.sampleRate()/bassdeamon::RelationAnalyzer::fftSize;
-            if(hz>maximum)break;line.lineTo(fx(hz),fy(values[b]));}
+            if(hz>maximum)break;
+            line.lineTo(fx(hz),fy(values[b]));}
         if(trace==1){auto fill=line;fill.lineTo(plot.getRight(),plot.getBottom());fill.lineTo(plot.getX(),plot.getBottom());fill.closeSubPath();g.setColour(postColour.withAlpha(.10f));g.fillPath(fill);}
         g.setColour(trace==0?console::cream.withAlpha(.7f):trace==1?postColour:console::amber);
         g.strokePath(line,juce::PathStrokeType(trace==0?1.4f:2.f));
@@ -226,14 +228,19 @@ void BassDeamonEditor::paintSpectrum(juce::Graphics& g){
     console::text(g,"Shared scale / PRE before processing / POST actual output",{72,301,740,12},11,console::cream);
 }
 void BassDeamonEditor::paintWave(juce::Graphics& g){
-    console::text(g,showSum?"SCOPE / KICK + BASS PRE & POST":"SCOPE / BASS PRE & POST + KICK",{47,337,650,20},13,console::cream);
+    console::text(g,showSum?"SCOPE / KICK + BASS PRE & POST":"SCOPE / SUM K+B OFF",{47,337,650,20},13,console::cream);
+    if(!showSum){
+        console::text(g,"SUM GRAPH HIDDEN / AUDIO UNCHANGED",{48,390,1104,32},16,console::muted,juce::Justification::centred);
+        return;
+    }
     const juce::Rectangle<float> plot(48,374,1104,75);
     float maximum=.05f;for(const auto& w:analyzer.scope.high)for(float v:w)maximum=std::max(maximum,std::abs(v));
     for(const auto& w:analyzer.scope.low)for(float v:w)maximum=std::max(maximum,std::abs(v));
-    scopeScale=std::max(maximum,scopeScale*.98f);
+    if(processor.parameters.getRawParameterValue("view.hold")->load()<.5f)
+        scopeScale=std::max(maximum,scopeScale*.98f);
     for(int i=0;i<=4;++i){const float x=plot.getX()+i*plot.getWidth()/4;g.setColour(console::cream.withAlpha(.15f));g.drawVerticalLine(int(x),plot.getY(),plot.getBottom());}
     g.setColour(console::cream.withAlpha(.2f));g.drawHorizontalLine(int(plot.getCentreY()),plot.getX(),plot.getRight());
-    for(int trace=0;trace<(showSum?2:3);++trace){const size_t stream=size_t(showSum?trace+3:trace);
+    for(int trace=0;trace<2;++trace){const size_t stream=size_t(trace+3);
         g.setColour(trace==0?console::cream.withAlpha(.65f):trace==1?juce::Colour(0xff56e6c0):console::amber);
         for(size_t i=0;i<bassdeamon::BeatScope::size;++i){const float x=plot.getX()+float(i)*plot.getWidth()/float(bassdeamon::BeatScope::size-1);
             const float y1=plot.getCentreY()-analyzer.scope.low[stream][i]/scopeScale*plot.getHeight()*.48f;

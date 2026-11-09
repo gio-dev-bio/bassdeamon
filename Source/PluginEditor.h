@@ -24,7 +24,16 @@ private:
         juce::Slider slider;
         std::unique_ptr<State::SliderAttachment> attachment;
     };
-    struct Switch {juce::ToggleButton button;std::unique_ptr<State::ButtonAttachment> attachment;};
+    // Host automation/state recall also sends button notifications. Only an
+    // actual GUI gesture may change other parameters to select a monitor mode.
+    struct UserToggle final : juce::ToggleButton {
+        bool userGesture=false;
+        void internalClickCallback(const juce::ModifierKeys& modifiers) override {
+            juce::ScopedValueSetter<bool> gesture(userGesture,true);
+            juce::ToggleButton::internalClickCallback(modifiers);
+        }
+    };
+    struct Switch {UserToggle button;std::unique_ptr<State::ButtonAttachment> attachment;};
     void addSwitch(const char*,const char*,juce::Rectangle<int>,const char* tooltip);
     Knob& addKnob(const char*,const char*,const char*,bool,juce::Rectangle<int>,const char*);
     void addChoice(const char*,const juce::StringArray&,juce::Rectangle<int>);

@@ -139,7 +139,7 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     double bpm = 0,ppq=-1;
     if (auto* playhead = getPlayHead()) {
         if (const auto position = playhead->getPosition()) {
-            if (const auto tempo = position->getBpm()) bpm = *tempo;
+            if (const auto hostTempo = position->getBpm()) bpm = *hostTempo;
             const bool playing = position->getIsPlaying();
             if(playing)if(const auto q=position->getPpqPosition())ppq=*q;
             bool seek = false;
