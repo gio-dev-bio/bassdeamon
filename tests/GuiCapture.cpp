@@ -64,5 +64,17 @@ int captureGui(const juce::File& output){
     p.processBlock(buffer,midi);
     gui->timerCallback();
     if(!save(output.getSiblingFile("GUI-Sync.png")))return 1;
+    // A single shared 75 Hz partial; the bass-only 150 Hz partial must not
+    // acquire a red area. Capture both actual PRE and actual POST displays.
+    for(int block=0;block<160;++block){for(int n=0;n<256;++n){const double t=(801*256+block*256+n)/48000.0;
+        const float bass=float(.3*std::sin(2*bassdeamon::pi*75*t)+.12*std::sin(2*bassdeamon::pi*150*t));
+        buffer.setSample(0,n,bass);buffer.setSample(1,n,bass);
+        buffer.setSample(2,n,float(.4*std::sin(2*bassdeamon::pi*75*t)));}
+        p.processBlock(buffer,midi);if(block%8==0)gui->timerCallback();}
+    gui->timerCallback();
+    if(!save(output.getSiblingFile("GUI-Overlap.png")))return 1;
+    gui->spectrumPre.onClick();
+    if(!save(output.getSiblingFile("GUI-Overlap-Pre.png")))return 1;
+    gui->spectrumPost.onClick();
     std::cout<<output.getFullPathName()<<'\n';return 0;
 }

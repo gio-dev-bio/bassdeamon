@@ -7,16 +7,17 @@
 #include <cstdint>
 
 namespace bassdeamon {
-struct AnalysisFrame {std::array<float,2> pre{},post{},kick{};double beat=-1;};
+struct AnalysisFrame {std::array<float,2> pre{},post{},kick{};double beat=-1;uint64_t sequence=0;};
 // One audio-thread producer, one editor-thread consumer. Never waits for the UI.
 class AnalysisQueue {
 public:
     static_assert(std::atomic<uint32_t>::is_always_lock_free,"Analysis counters must be lock free");
-    static constexpr uint32_t capacity=8192;
+    static constexpr uint32_t capacity=16384;
     bool push(const AnalysisFrame& frame) noexcept {
+        const auto serial=produced++;
         const auto w=write.load(std::memory_order_relaxed),r=read.load(std::memory_order_acquire);
         if(w-r>=capacity){dropped.fetch_add(1,std::memory_order_relaxed);return false;}
-        frames[w%capacity]=frame;write.store(w+1,std::memory_order_release);return true;
+        frames[w%capacity]=frame;frames[w%capacity].sequence=serial;write.store(w+1,std::memory_order_release);return true;
     }
     bool pop(AnalysisFrame& frame) noexcept {
         const auto r=read.load(std::memory_order_relaxed),w=write.load(std::memory_order_acquire);
@@ -27,6 +28,7 @@ public:
 private:
     std::array<AnalysisFrame,capacity> frames{};
     std::atomic<uint32_t> write{0},read{0};
+    uint64_t produced=0; // audio-thread only, includes dropped frames
 };
 
 // Completed quarter-note captures, aligned to host PPQ. Min/max per pixel
@@ -64,39 +66,79 @@ private:
 // anti-phase stereo must not disappear from the frequency display.
 class RelationAnalyzer {
 public:
-    static constexpr size_t fftSize=8192,bins=fftSize/2+1,waveSize=512;
+    static constexpr size_t fftSize=16384,bins=fftSize/2+1,waveSize=512;
     using Spectrum=std::array<float,bins>;
     BeatScope scope;
     Spectrum pre{},post{},kick{},maskPre{},maskPost{};
+    uint64_t discontinuities=0;
     std::array<float,waveSize> wavePre{},wavePost{},waveKick{},sumPre{},sumPost{};
     void prepare(double sr) noexcept {
-        scope.prepare(sr);rate=sr;count=lastCount=0;frames={};pre.fill(-120);post.fill(-120);kick.fill(-120);
-        maskPre.fill(0);maskPost.fill(0);wavePre.fill(0);wavePost.fill(0);waveKick.fill(0);sumPre.fill(0);sumPost.fill(0);
+        scope.prepare(sr);rate=sr;haveSequence=false;discontinuities=0;resetAnalysis();
+        wavePre.fill(0);wavePost.fill(0);waveKick.fill(0);sumPre.fill(0);sumPost.fill(0);
+        temporalPole=std::exp(-1/(.005*sr));peakPole=std::exp(-1/(.25*sr));
         windowSum=0;for(size_t i=0;i<fftSize;++i){window[i]=.5-.5*std::cos(2*pi*i/(fftSize-1));windowSum+=window[i];}
     }
     void consume(AnalysisQueue& queue,double bpm=120,bool hold=false) noexcept {
         AnalysisFrame f;while(queue.pop(f)){
+            if(haveSequence&&f.sequence!=nextSequence){resetAnalysis();scope.prepare(rate);++discontinuities;}
+            haveSequence=true;nextSequence=f.sequence+1;
             for(auto* stream:{&f.pre,&f.post,&f.kick})for(auto& v:*stream)if(!std::isfinite(v))v=0;
+            for(size_t channel=0;channel<2;++channel){
+                const std::array<double,3> energy{double(f.pre[channel])*f.pre[channel],double(f.post[channel])*f.post[channel],double(f.kick[channel])*f.kick[channel]};
+                for(size_t stream=0;stream<3;++stream){
+                    fastPower[stream][channel]=energy[stream]+temporalPole*(fastPower[stream][channel]-energy[stream]);
+                    recentPower[stream][channel]=std::max(fastPower[stream][channel],recentPower[stream][channel]*peakPole);
+                }
+                for(size_t stream=0;stream<2;++stream){
+                    const double joint=std::min(energy[stream],energy[2]);
+                    jointPower[stream][channel]=joint+temporalPole*(jointPower[stream][channel]-joint);
+                }
+            }
             scope.tick(f,bpm,hold);frames[count%fftSize]=f;++count;
         }
         if(count==lastCount)return;
         lastCount=count;
-        analyze(0,pre);analyze(1,post);analyze(2,kick);
-        for(size_t b=0;b<bins;++b){maskPre[b]=mask(pre[b],kick[b]);maskPost[b]=mask(post[b],kick[b]);}
+        // Do not present a zero-padded startup as a calibrated full-window FFT.
+        if(count>=fftSize){analyze(0,pre);analyze(1,post);analyze(2,kick);updateMask();}
         for(size_t i=0;i<waveSize;++i){
             const auto peak=[&](size_t t){return std::abs(scope.low[t][i])>std::abs(scope.high[t][i])?scope.low[t][i]:scope.high[t][i];};
             wavePre[i]=peak(0);wavePost[i]=peak(1);waveKick[i]=peak(2);sumPre[i]=peak(3);sumPost[i]=peak(4);
         }
     }
-    static float mask(float bass,float reference) noexcept {
-        // Potential masking only: both must be audible above a fixed analysis
-        // floor and within 24 dB. Not a psychoacoustic audibility certificate.
-        const float activity=std::clamp((std::min(bass,reference)+72.f)/24.f,0.f,1.f);
-        return activity*std::clamp(1.f-std::abs(bass-reference)/24.f,0.f,1.f);
+    static float mask(float bass,float reference,float bassPeak=-120,float referencePeak=-120) noexcept {
+        // Conservative spectral conflict, not a perceptual masking model.
+        // Reject FFT leakage/noise far below each source's useful spectrum.
+        const float bassFloor=std::max(-60.f,bassPeak-18.f),kickFloor=std::max(-60.f,referencePeak-18.f);
+        const float activity=std::clamp(std::min(bass-bassFloor,reference-kickFloor)/6.f,0.f,1.f);
+        return activity*std::clamp(1.f-std::abs(bass-reference)/12.f,0.f,1.f);
     }
     double sampleRate() const noexcept{return rate;}
 private:
     static constexpr double pi=3.14159265358979323846;
+    void resetAnalysis() noexcept {
+        count=lastCount=0;frames={};pre.fill(-120);post.fill(-120);kick.fill(-120);maskPre.fill(0);maskPost.fill(0);
+        for(auto& stream:channelLevels)for(auto& channel:stream)channel.fill(-120);
+        fastPower={};recentPower={};jointPower={};
+    }
+    void updateMask() noexcept {
+        std::array<std::array<float,2>,3> peaks{};for(auto& p:peaks)p.fill(-120);
+        for(size_t b=1;b<bins;++b){const double hz=double(b)*rate/fftSize;
+            if(hz<20||hz>20000)continue;
+            for(size_t stream=0;stream<3;++stream)for(size_t channel=0;channel<2;++channel)
+                peaks[stream][channel]=std::max(peaks[stream][channel],channelLevels[stream][channel][b]);
+        }
+        for(size_t b=0;b<bins;++b){maskPre[b]=maskPost[b]=0;const double hz=double(b)*rate/fftSize;
+            if(hz<20||hz>20000)continue;
+            for(size_t stream=0;stream<2;++stream)for(size_t channel=0;channel<2;++channel){
+                const double reference=std::min(recentPower[stream][channel],recentPower[2][channel]);
+                const double floor=std::max(-70.0,10*std::log10(std::max(1e-20,reference))-20);
+                const double jointDb=10*std::log10(std::max(1e-20,jointPower[stream][channel]));
+                const float simultaneous=float(std::clamp((jointDb-floor)/8,0.0,1.0));
+                const float value=simultaneous*mask(channelLevels[stream][channel][b],channelLevels[2][channel][b],peaks[stream][channel],peaks[2][channel]);
+                auto& result=stream==0?maskPre[b]:maskPost[b];result=std::max(result,value);
+            }
+        }
+    }
     void analyze(int stream,Spectrum& destination) noexcept {
         powers.fill(0);
         const size_t valid=std::min<size_t>(count,fftSize),oldest=count>=fftSize?count%fftSize:0;
@@ -112,11 +154,21 @@ private:
                 for(size_t base=0;base<fftSize;base+=length){std::complex<double> w{1,0};
                     for(size_t j=0;j<length/2;++j){const auto u=work[base+j],v=w*work[base+j+length/2];work[base+j]=u+v;work[base+j+length/2]=u-v;w*=step;}}
             }
-            for(size_t b=0;b<bins;++b)powers[b]+=.5*std::norm(work[b])*4/(windowSum*windowSum);
+            for(size_t b=0;b<bins;++b){
+                const double amplitudeScale=(b==0||b==fftSize/2)?1:2;
+                const double power=std::norm(work[b])*amplitudeScale*amplitudeScale/(windowSum*windowSum);
+                channelLevels[size_t(stream)][channel][b]=float(10*std::log10(std::max(1e-12,power)));
+                powers[b]+=.5*power;
+            }
         }
         for(size_t b=0;b<bins;++b)destination[b]=float(10*std::log10(std::max(1e-12,powers[b])));
     }
     double rate=48000,windowSum=1;size_t count=0,lastCount=0;
+    bool haveSequence=false;uint64_t nextSequence=0;
+    double temporalPole=0,peakPole=0;
+    std::array<std::array<Spectrum,2>,3> channelLevels{};
+    std::array<std::array<double,2>,3> fastPower{},recentPower{};
+    std::array<std::array<double,2>,2> jointPower{};
     std::array<AnalysisFrame,fftSize> frames{};
     std::array<double,fftSize> window{};std::array<double,bins> powers{};
     std::array<std::complex<double>,fftSize> work{};

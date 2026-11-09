@@ -33,6 +33,8 @@ jobs:
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
       - run: cmake --build build --config Release --parallel 3
       - run: ctest --test-dir build -C Release --output-on-failure
+      - name: Record spectrum precision and selective overlap checks
+        run: build/analyzer_tests > analyzer-results.txt
       - name: Record usability and measured response
         run: build/usability_tests > usability-results.txt
       - name: Record new feature contracts and timings
@@ -52,22 +54,25 @@ jobs:
           arch -x86_64 validator/pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --timeout-ms 60000 --validate "$PWD/build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3"
       - name: Package ad-hoc signed development plugin
         run: |
-          ditto -c -k --sequesterRsrc --keepParent build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3 BassDeamon-0.2.5-macOS-intel.zip
+          ditto -c -k --sequesterRsrc --keepParent build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3 BassDeamon-0.2.6-macOS-intel.zip
           mkdir -p intel-package
-          sed '1s|.*|BASSDEAMON 0.2.5 — VST3 macOS Intel (x86_64)|' INSTALL.txt > intel-package/INSTALL.txt
-          zip -j BassDeamon-0.2.5-macOS-intel.zip intel-package/INSTALL.txt docs/GUIDA_0.2.5_IT.md
+          sed '1s|.*|BASSDEAMON 0.2.6 — VST3 macOS Intel (x86_64)|' INSTALL.txt > intel-package/INSTALL.txt
+          zip -j BassDeamon-0.2.6-macOS-intel.zip intel-package/INSTALL.txt docs/GUIDA_0.2.6_IT.md
           lipo build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3/Contents/MacOS/BassDeamon -verify_arch x86_64
-          unzip -t BassDeamon-0.2.5-macOS-intel.zip
+          unzip -t BassDeamon-0.2.6-macOS-intel.zip
       - uses: actions/upload-artifact@v4
         with:
-          name: BassDeamon-0.2.5-macOS-intel
+          name: BassDeamon-0.2.6-macOS-intel
           retention-days: 14
           path: |
-            BassDeamon-0.2.5-macOS-intel.zip
+            BassDeamon-0.2.6-macOS-intel.zip
             GUI-Preview.png
             GUI-Pre.png
+            GUI-Overlap.png
+            GUI-Overlap-Pre.png
             GUI-SumOff.png
             GUI-Sync.png
+            analyzer-results.txt
             usability-results.txt
             new-feature-results.txt
             tube50.f32

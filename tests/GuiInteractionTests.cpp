@@ -51,12 +51,18 @@ int interactionTests(){
     // exercise the renderer independently of its smoothing/FFT settling time.
     editor->spectrumPre.onClick();
     editor->visualPre[overlapBin]=editor->visualKick[overlapBin]=-12;
+    editor->analyzer.maskPre.fill(0);editor->analyzer.maskPre[overlapBin]=1;
     ensure(!editor->spectrumIsPost()&&editor->spectrumPre.getToggleState(),"PRE selector did not switch view");
     ensure(redInSpectrum()>20,"PRE collision bands missing");
     editor->spectrumPost.onClick();editor->visualPost[overlapBin]=editor->visualKick[overlapBin]=-12;
+    editor->analyzer.maskPost.fill(0);editor->analyzer.maskPost[overlapBin]=1;
     ensure(editor->spectrumIsPost()&&editor->spectrumPost.getToggleState(),"POST selector did not switch view");
     ensure(redInSpectrum()>20,"POST collision bands missing");
-    editor->visualPost.fill(-120);
+    const auto lower=editor->face.createComponentSnapshot({72,240,742,38});int lowerRed=0;
+    for(int y=0;y<lower.getHeight();++y)for(int x=0;x<lower.getWidth();++x){const auto colour=lower.getPixelAt(x,y);
+        if(colour.getRed()>colour.getGreen()*1.6&&colour.getRed()>colour.getBlue()*1.6&&colour.getRed()>50)++lowerRed;}
+    ensure(lowerRed==0,"Collision ribbon filled unrelated lower spectrum");
+    editor->visualPost.fill(-120);editor->analyzer.maskPost.fill(0);
     ensure(redInSpectrum()==0,"POST collision bands incorrectly use PRE");
     BassDeamonEditor::UserToggle* added=nullptr;
     for(auto& sw:editor->switches)if(sw->button.getButtonText()=="ADDED ONLY")added=&sw->button;

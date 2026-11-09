@@ -1,4 +1,4 @@
-BASSDEAMON 0.2.5 — VST3 macOS Intel (x86_64)
+BASSDEAMON 0.2.6 — VST3 macOS Intel (x86_64)
 
 1. Chiudi Cubase.
 2. Estrai lo ZIP e copia BassDeamon.vst3 in:
@@ -19,7 +19,7 @@ BASSDEAMON 0.2.5 — VST3 macOS Intel (x86_64)
    Il risultato è statico fino a una nuova analisi o a una modifica manuale.
 
 La GUI mostra:
-- spettro selezionabile con PRE / POST, kick di riferimento e collisioni potenziali in rosso;
+- spettro selezionabile con PRE / POST, kick di riferimento e conflitti spettrali significativi con marcatori rossi locali;
 - intervallo libero in Hz con FROM / TO, modificabile trascinando o digitando i valori;
 - scope L a 1/4 in sync, cattura completa stabile, HOLD, somma kick+basso esclusivamente visiva;
 - GLUE: AUTO, MS o SYNC; UNMASK: MS o SYNC. Attack sempre in ms; solo Release in note con SYNC.

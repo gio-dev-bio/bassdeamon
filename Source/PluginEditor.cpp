@@ -226,7 +226,7 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g){
     console::text(g,"IN "+juce::String(std::max(inputDb,-99.0f),1)+"  /  OUT "+juce::String(std::max(outputDb,-99.0f),1)+" dBFS RMS",{221,808,315,26},13,console::muted);
     console::text(g,"PEAK "+juce::String(std::max(peak,-99.0f),1)+" dBFS",{548,808,180,26},14,clipFrames>0?console::orange:console::cream);
     console::text(g,"TRIM",{762,808,60,26},13,console::muted);
-    console::text(g,"v0.2.5",{1090,808,66,26},13,console::muted,juce::Justification::centredRight);
+    console::text(g,"v0.2.6",{1090,808,66,26},13,console::muted,juce::Justification::centredRight);
     }
     g.drawImageAt(grain,0,0);
 }
@@ -255,23 +255,10 @@ void BassDeamonEditor::paintSpectrum(juce::Graphics& g){
     console::text(g,"FROM",{526,166,130,15},11,console::muted);
     console::text(g,"TO",{682,166,132,15},11,console::muted);
     const bool post=spectrumIsPost();const auto& selected=post?visualPost:visualPre;
+    const auto& collisions=post?analyzer.maskPost:analyzer.maskPre;
     const double binWidth=analyzer.sampleRate()/bassdeamon::RelationAnalyzer::fftSize;
     {
         juce::Graphics::ScopedSaveState clip(g);g.reduceClipRegion(plot.toNearestInt());
-        for(size_t b=1;b<selected.size();++b){const double hz=double(b)*binWidth;
-            if(hz+binWidth*.5<minimum)continue;if(hz-binWidth*.5>maximum)break;
-            const float overlap=bassdeamon::RelationAnalyzer::mask(selected[b],visualKick[b]);
-            if(overlap<.08f)continue;
-            const float left=std::max(plot.getX(),fx(hz-binWidth*.5));
-            const float right=std::min(plot.getRight(),fx(hz+binWidth*.5));
-            // Same potential-overlap criterion in both views, derived from the
-            // selected bass and kick levels; never display commanded EQ cuts.
-            g.setColour(collisionColour.withAlpha(.08f+.20f*overlap));
-            g.fillRect(left,plot.getY(),std::max(.5f,right-left),plot.getHeight());
-            const float top=fy(std::min(selected[b],visualKick[b]));
-            g.setColour(collisionColour.withAlpha(.25f+.45f*overlap));
-            g.fillRect(left,top,std::max(.5f,right-left),plot.getBottom()-top);
-        }
         for(int trace=0;trace<2;++trace){const auto& values=trace==0?selected:visualKick;
             juce::Path line;bool started=false;
             for(size_t b=0;b<values.size();++b){const double hz=double(b)*binWidth;
@@ -284,8 +271,20 @@ void BassDeamonEditor::paintSpectrum(juce::Graphics& g){
             g.setColour(trace==0?(post?postColour:console::cream):console::amber);
             g.strokePath(line,juce::PathStrokeType(2.f));
         }
+        // Local ribbon on the bass curve. No full-height blocks or red fill
+        // down to the floor: band width follows actual FFT support only.
+        for(size_t b=1;b<selected.size();++b){const double hz=double(b)*binWidth;
+            if(hz+binWidth*.5<minimum)continue;if(hz-binWidth*.5>maximum)break;
+            const float overlap=collisions[b];if(overlap<.2f)continue;
+            const float left=std::max(plot.getX(),fx(hz-binWidth*.5));
+            const float right=std::min(plot.getRight(),fx(hz+binWidth*.5));
+            const float top=fy(selected[b]),height=std::min(plot.getBottom()-top,2+4*overlap);
+            g.setColour(collisionColour.withAlpha(.35f+.5f*overlap));
+            g.fillRect(left,top,std::max(.5f,right-left),height);
+            g.drawLine(left,top,right,top,1.5f);
+        }
     }
-    console::text(g,(post?"POST output":"PRE input")+juce::String(" + KICK / RED: potential overlap / ")+juce::String(minimum,1)+" - "+juce::String(maximum,1)+" Hz / dBFS",{72,301,740,12},11,console::cream);
+    console::text(g,(post?"POST output":"PRE input")+juce::String(" + KICK / RED: significant overlap / ")+juce::String(minimum,1)+" - "+juce::String(maximum,1)+" Hz / bin "+juce::String(binWidth,2)+" Hz / dBFS",{72,301,740,12},11,console::cream);
 }
 void BassDeamonEditor::paintWave(juce::Graphics& g){
     console::text(g,showSum?"SCOPE / KICK + BASS PRE & POST":"SCOPE / SUM K+B OFF",{47,337,650,20},13,console::cream);
@@ -331,7 +330,9 @@ void BassDeamonEditor::timerCallback(){
     const double rate=processor.getSampleRate()>0?processor.getSampleRate():48000;
     if(rate!=analyzer.sampleRate())analyzer.prepare(rate);
     analyzer.consume(processor.analysisQueue,processor.tempo.load(),processor.parameters.getRawParameterValue("view.hold")->load()>.5f);
-    for(size_t i=0;i<visualPre.size();++i)for(int t=0;t<3;++t){auto& v=t==0?visualPre[i]:t==1?visualPost[i]:visualKick[i];const float target=t==0?analyzer.pre[i]:t==1?analyzer.post[i]:analyzer.kick[i];v+=(target-v)*(target>v?.35f:.10f);}
+    // The FFT window already stabilises the display. Extra dB smoothing used
+    // to leave old traces overlapping after one source had stopped.
+    visualPre=analyzer.pre;visualPost=analyzer.post;visualKick=analyzer.kick;
     const int timing=int(processor.parameters.getRawParameterValue("glue.timing")->load());
     const bool sync=processor.parameters.getRawParameterValue("unmask.timing")->load()>.5f;
     spectrumPre.setToggleState(!spectrumIsPost(),juce::dontSendNotification);
