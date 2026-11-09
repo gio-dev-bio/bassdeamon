@@ -41,6 +41,8 @@ private:
     void paintSpectrum(juce::Graphics&);
     void paintWave(juce::Graphics&);
     void paintVU(juce::Graphics&);
+    bool spectrumIsPost() const;
+    std::array<double,2> spectrumLimits() const;
     void timerCallback() override;
     void createTexture();
     BassDeamonProcessor& processor;
@@ -51,6 +53,9 @@ private:
     std::vector<std::unique_ptr<Switch>> switches;
     bassdeamon::RelationAnalyzer analyzer;
     juce::TextButton sumButton{"SUM K+B"};
+    juce::TextButton spectrumPre{"PRE"},spectrumPost{"POST"};
+    juce::Slider spectrumMin,spectrumMax;
+    std::unique_ptr<State::SliderAttachment> spectrumMinAttachment,spectrumMaxAttachment;
     bool showSum=true;
     struct Choice {juce::ComboBox box;std::unique_ptr<State::ComboBoxAttachment> attachment;};
     std::vector<std::unique_ptr<Choice>> choices;

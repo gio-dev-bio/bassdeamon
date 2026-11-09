@@ -25,14 +25,28 @@ int main(){try{
         check(std::abs(scope.milliseconds-60000/bpm)<.001,"scope time scale wrong");
     }
     // The old state starts with automatic GLUE and manual UNMASK milliseconds.
-    Engine e;e.prepare(48000);Settings s;s.glueTiming=2;s.glueAttackNote=3;s.glueReleaseNote=4;
-    s.unmaskSync=true;s.unmaskAttackNote=2;s.unmaskReleaseNote=5;
+    Engine e;e.prepare(48000);Settings s;s.glueTiming=2;s.glueAttackNote=3;s.glueReleaseNote=4;s.glueAttackMs=17;
+    s.unmaskSync=true;s.unmaskAttackNote=2;s.unmaskReleaseNote=5;s.unmaskAttackMs=7;
     std::array<float,256> x{};float* out[]{x.data()};
     e.process(out,1,nullptr,0,256,s,120);
-    check(e.getMeters().attackMs==250&&e.getMeters().releaseMs==500,"GLUE sync conversion");
-    check(e.getMeters().unmaskAttackMs==125&&e.getMeters().unmaskReleaseMs==1000,"UNMASK sync conversion");
+    check(e.getMeters().attackMs==17&&e.getMeters().releaseMs==500,"GLUE attack must remain ms in SYNC");
+    check(e.getMeters().unmaskAttackMs==7&&e.getMeters().unmaskReleaseMs==1000,"UNMASK attack must remain ms in SYNC");
     e.process(out,1,nullptr,0,256,s,60);
     check(e.getMeters().releaseMs==1000&&e.getMeters().unmaskReleaseMs==2000,"tempo change ignored");
+    check(e.getMeters().attackMs==17&&e.getMeters().unmaskAttackMs==7,"tempo changed attack in SYNC");
+    s.glueAttackNote=8;s.unmaskAttackNote=8;
+    e.process(out,1,nullptr,0,256,s,173);
+    check(e.getMeters().attackMs==17&&e.getMeters().unmaskAttackMs==7,"legacy attack note affected SYNC attack");
+    // Measured PRE/POST collision maps must follow the actual selected signal.
+    AnalysisQueue queue;RelationAnalyzer relation;relation.prepare(48000);
+    for(size_t n=0;n<RelationAnalyzer::fftSize;++n){
+        AnalysisFrame f;const float tone=float(.3*std::sin(2*pi*75*n/48000.));
+        f.pre={tone,-tone};f.post={tone*.001f,-tone*.001f};f.kick={tone,tone};
+        check(queue.push(f),"collision fixture queue overflow");
+    }
+    relation.consume(queue);const size_t bin=size_t(std::round(75.*RelationAnalyzer::fftSize/48000.));
+    check(relation.maskPre[bin]>.8f&&relation.maskPost[bin]==0,"PRE/POST collision maps ignore attenuation");
+    check(RelationAnalyzer::mask(-120,-12)==0&&RelationAnalyzer::mask(-12,-120)==0,"silence marked as collision");
     // Learn must reach its decision across short looping transport seeks.
     e.prepare(48000);e.startLearn();s=Settings{};s.glue=s.unmask=false;
     std::mt19937 rng(91);std::uniform_real_distribution<float> rnd(-.4f,.4f);

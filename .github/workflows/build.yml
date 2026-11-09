@@ -52,19 +52,20 @@ jobs:
           arch -x86_64 validator/pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --timeout-ms 60000 --validate "$PWD/build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3"
       - name: Package ad-hoc signed development plugin
         run: |
-          ditto -c -k --sequesterRsrc --keepParent build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3 BassDeamon-0.2.4-macOS-intel.zip
+          ditto -c -k --sequesterRsrc --keepParent build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3 BassDeamon-0.2.5-macOS-intel.zip
           mkdir -p intel-package
-          sed '1s|.*|BASSDEAMON 0.2.4 — VST3 macOS Intel (x86_64)|' INSTALL.txt > intel-package/INSTALL.txt
-          zip -j BassDeamon-0.2.4-macOS-intel.zip intel-package/INSTALL.txt docs/GUIDA_0.2.4_IT.md
+          sed '1s|.*|BASSDEAMON 0.2.5 — VST3 macOS Intel (x86_64)|' INSTALL.txt > intel-package/INSTALL.txt
+          zip -j BassDeamon-0.2.5-macOS-intel.zip intel-package/INSTALL.txt docs/GUIDA_0.2.5_IT.md
           lipo build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3/Contents/MacOS/BassDeamon -verify_arch x86_64
-          unzip -t BassDeamon-0.2.4-macOS-intel.zip
+          unzip -t BassDeamon-0.2.5-macOS-intel.zip
       - uses: actions/upload-artifact@v4
         with:
-          name: BassDeamon-0.2.4-macOS-intel
+          name: BassDeamon-0.2.5-macOS-intel
           retention-days: 14
           path: |
-            BassDeamon-0.2.4-macOS-intel.zip
+            BassDeamon-0.2.5-macOS-intel.zip
             GUI-Preview.png
+            GUI-Pre.png
             GUI-SumOff.png
             GUI-Sync.png
             usability-results.txt

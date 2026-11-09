@@ -31,7 +31,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: Extended-signal-results-0.2.4-${{ matrix.runner }}
+          name: Extended-signal-results-0.2.5-${{ matrix.runner }}
           retention-days: 14
           path: |
             signal-results/*.csv

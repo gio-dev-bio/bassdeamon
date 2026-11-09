@@ -328,7 +328,7 @@ public:
             deltaMix = s.delta && s.unmask && !(s.tube.enabled&&s.tube.audition) ? 1 : 0;
             smoothedFilterQ = 3.5 - 2.6 * std::clamp(s.unmaskWidth, 0.0, 1.0);
         }
-        meters.unmaskAttackMs=s.unmaskSync?noteMilliseconds(s.unmaskAttackNote,bpm):std::clamp(s.unmaskAttackMs,1.0,50.0);
+        meters.unmaskAttackMs=std::clamp(s.unmaskAttackMs,1.0,50.0);
         meters.unmaskReleaseMs=s.unmaskSync?noteMilliseconds(s.unmaskReleaseNote,bpm):std::clamp(s.unmaskReleaseMs,30.0,500.0);
         cutAttackA = pole(meters.unmaskAttackMs, sampleRate);
         cutReleaseA = pole(meters.unmaskReleaseMs, sampleRate);
@@ -378,7 +378,7 @@ public:
                     releaseMs = follow(releaseMs, std::clamp(context * 0.4, 80.0, 300.0), parameterA);
                 }
                 if(s.glueTiming!=0){
-                    attackMs=s.glueTiming==2?noteMilliseconds(s.glueAttackNote,bpm):std::clamp(s.glueAttackMs,.1,500.0);
+                    attackMs=std::clamp(s.glueAttackMs,.1,500.0);
                     releaseMs=s.glueTiming==2?noteMilliseconds(s.glueReleaseNote,bpm):std::clamp(s.glueReleaseMs,1.0,4000.0);
                 }
                 attackA = pole(attackMs, sampleRate); releaseA = pole(releaseMs, sampleRate);

@@ -29,6 +29,35 @@ int interactionTests(){
     editor->sumButton.onClick();
     ensure(editor->showSum&&editor->sumButton.getToggleState(),"SUM ON must restore the sum graph");
     ensure(p.parameters.copyState().toXmlString()==stateBeforeSum,"SUM changed audio parameters");
+    ensure(editor->spectrumIsPost(),"Spectrum must default to POST");
+    for(auto* button:{&editor->spectrumPre,&editor->spectrumPost})
+        ensure(editor->face.getComponentAt(button->getBounds().getCentre())==button,"Spectrum selector hit target covered");
+    // Arbitrary typed values, not the former fixed frequency presets.
+    editor->spectrumMin.setValue(37.5,juce::sendNotificationSync);
+    editor->spectrumMax.setValue(437.25,juce::sendNotificationSync);
+    const auto limits=editor->spectrumLimits();
+    ensure(std::abs(limits[0]-37.5)<.01&&std::abs(limits[1]-437.25)<.01,"Arbitrary spectrum limits not attached");
+    editor->visualPre.fill(-120);editor->visualPost.fill(-120);editor->visualKick.fill(-120);
+    const size_t overlapBin=size_t(std::round(75.*bassdeamon::RelationAnalyzer::fftSize/48000.));
+    editor->visualPre[overlapBin]=editor->visualPost[overlapBin]=editor->visualKick[overlapBin]=-12;
+    const auto redInSpectrum=[&]{
+        const auto image=editor->face.createComponentSnapshot({72,190,742,88});int red=0;
+        for(int y=0;y<image.getHeight();++y)for(int x=0;x<image.getWidth();++x){const auto c=image.getPixelAt(x,y);
+            if(c.getRed()>c.getGreen()*1.6&&c.getRed()>c.getBlue()*1.6&&c.getRed()>50)++red;
+        }
+        return red;
+    };
+    // Select via real buttons, then inject deterministic analysis levels to
+    // exercise the renderer independently of its smoothing/FFT settling time.
+    editor->spectrumPre.onClick();
+    editor->visualPre[overlapBin]=editor->visualKick[overlapBin]=-12;
+    ensure(!editor->spectrumIsPost()&&editor->spectrumPre.getToggleState(),"PRE selector did not switch view");
+    ensure(redInSpectrum()>20,"PRE collision bands missing");
+    editor->spectrumPost.onClick();editor->visualPost[overlapBin]=editor->visualKick[overlapBin]=-12;
+    ensure(editor->spectrumIsPost()&&editor->spectrumPost.getToggleState(),"POST selector did not switch view");
+    ensure(redInSpectrum()>20,"POST collision bands missing");
+    editor->visualPost.fill(-120);
+    ensure(redInSpectrum()==0,"POST collision bands incorrectly use PRE");
     BassDeamonEditor::UserToggle* added=nullptr;
     for(auto& sw:editor->switches)if(sw->button.getButtonText()=="ADDED ONLY")added=&sw->button;
     ensure(added!=nullptr,"Missing ADDED ONLY GUI control");
@@ -64,8 +93,24 @@ int interactionTests(){
     // Test real parameter attachments, not a decorative timing display.
     for(auto& choice:editor->choices)if(choice->box.getComponentID()=="glue.timing")choice->box.setSelectedId(3,juce::sendNotificationSync);
     ensure(get("glue.timing")==2,"GLUE SYNC selector attachment");
+    set("glue.attackMs",17);set("unmask.timing",1);set("unmask.attack",7);
     set("glue.releaseNote",4);host.bpm=90;buffer.clear();p.processBlock(buffer,midi);editor->timerCallback();
     ensure(std::abs(p.glueRelease.load()-60000.f/90)<.01,"GLUE timing ignores host tempo");
+    ensure(std::abs(p.glueAttack.load()-17)<.01&&std::abs(p.unmaskAttack.load()-7)<.01,"SYNC changed manual attack");
+    ensure(editor->glueAttackSlider.isVisible()&&editor->unmaskAttackKnob->isVisible(),"SYNC hid millisecond attack controls");
+    ensure(!editor->glueReleaseSlider.isVisible()&&!editor->unmaskReleaseKnob->isVisible(),"SYNC retained manual release controls");
+    bool glueRelease=false,unmaskRelease=false;
+    for(auto& choice:editor->choices){const auto id=choice->box.getComponentID();
+        ensure(id!="glue.attackNote"&&id!="unmask.attackNote","Attack note selector still present");
+        if(id=="glue.releaseNote")glueRelease=choice->box.isVisible();
+        if(id=="unmask.releaseNote")unmaskRelease=choice->box.isVisible();
+    }
+    ensure(glueRelease&&unmaskRelease,"SYNC release note selectors missing");
+    // View selection and exact limits survive save/recall.
+    set("view.spectrum",0);juce::MemoryBlock viewState;p.getStateInformation(viewState);
+    set("view.spectrum",1);set("view.maxHz",1000);
+    p.setStateInformation(viewState.getData(),int(viewState.getSize()));
+    ensure(get("view.spectrum")==0&&std::abs(get("view.maxHz")-437.25)<.01,"Spectrum view state recall failed");
     set("glue.timing",0);set("unmask.delta",0);
     ensure(editor->face.getComponentAt(editor->learn.getBounds().getCentre())==&editor->learn,"Learn hit target covered");
     editor->learn.onClick();
@@ -80,7 +125,7 @@ int interactionTests(){
     ensure(get("phase.on")==0,"Learn silently enabled PHASE");
     // Schema-3 sessions restore the original timing modes on an existing instance.
     auto old=p.parameters.copyState();old.setProperty("schemaVersion",3,nullptr);
-    const juce::StringArray newIds{"glue.timing","glue.attackMs","glue.releaseMs","glue.attackNote","glue.releaseNote","unmask.timing","unmask.attackNote","unmask.releaseNote","view.range","view.hold"};
+    const juce::StringArray newIds{"glue.timing","glue.attackMs","glue.releaseMs","glue.attackNote","glue.releaseNote","unmask.timing","unmask.attackNote","unmask.releaseNote","view.range","view.hold","view.spectrum","view.minHz","view.maxHz"};
     for(int i=old.getNumChildren()-1;i>=0;--i)if(newIds.contains(old.getChild(i).getProperty("id").toString()))old.removeChild(i,nullptr);
     set("glue.timing",2);set("unmask.timing",1);juce::MemoryBlock bytes;auto xml=old.createXml();juce::AudioProcessor::copyXmlToBinary(*xml,bytes);
     p.setStateInformation(bytes.getData(),int(bytes.getSize()));ensure(get("glue.timing")==0&&get("unmask.timing")==0,"Old session did not reset new timing modes");

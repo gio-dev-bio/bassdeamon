@@ -41,6 +41,9 @@ int captureGui(const juce::File& output){
     };
     if(!save(output))return 1;
     auto* gui=static_cast<BassDeamonEditor*>(editor.get());
+    gui->spectrumPre.onClick();
+    if(!save(output.getSiblingFile("GUI-Pre.png")))return 1;
+    gui->spectrumPost.onClick();
     gui->sumButton.onClick();
     if(gui->showSum||gui->sumButton.getToggleState())return 1;
     if(!save(output.getSiblingFile("GUI-SumOff.png")))return 1;

@@ -81,17 +81,46 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
     sumButton.onClick=[this]{showSum=!showSum;sumButton.setToggleState(showSum,juce::dontSendNotification);face.repaint();};
     sumButton.setToggleState(true,juce::dontSendNotification);
     addSwitch("view.hold","HOLD",{904,336,88,26},"Freeze the last complete quarter-note capture; audio is unaffected.");
-    addChoice("view.range",{"0-1000 Hz","0-2500 Hz","0-5000 Hz"},{658,136,165,24});
+    spectrumPre.setBounds(72,136,66,26);spectrumPost.setBounds(145,136,72,26);
+    for(auto* button:{&spectrumPre,&spectrumPost}){
+        face.addAndMakeVisible(*button);
+        button->setTooltip("Select one bass spectrum: PRE before processing or POST actual output. Kick remains the reference. Display only.");
+    }
+    const auto selectSpectrum=[this](float mode){
+        auto* parameter=processor.parameters.getParameter("view.spectrum");
+        parameter->beginChangeGesture();parameter->setValueNotifyingHost(parameter->convertTo0to1(mode));parameter->endChangeGesture();
+        timerCallback();
+    };
+    spectrumPre.onClick=[selectSpectrum]{selectSpectrum(0);};spectrumPost.onClick=[selectSpectrum]{selectSpectrum(1);};
+    for(auto* slider:{&spectrumMin,&spectrumMax}){
+        slider->setSliderStyle(juce::Slider::LinearBar);
+        slider->setTextBoxStyle(juce::Slider::TextBoxLeft,false,130,26);
+        slider->setTextValueSuffix(" Hz");slider->setNumDecimalPlacesToDisplay(1);slider->setScrollWheelEnabled(false);
+        slider->setTooltip("Drag or type a frequency in Hz. Set FROM below TO; a minimum 20 Hz window is displayed. Display only.");
+        face.addAndMakeVisible(*slider);
+    }
+    spectrumMin.setBounds(526,136,132,26);spectrumMax.setBounds(682,136,132,26);
+    spectrumMinAttachment=std::make_unique<State::SliderAttachment>(processor.parameters,"view.minHz",spectrumMin);
+    spectrumMaxAttachment=std::make_unique<State::SliderAttachment>(processor.parameters,"view.maxHz",spectrumMax);
+    spectrumMin.onValueChange=[this]{
+        if(spectrumMin.getValue()>spectrumMax.getValue()-20)
+            spectrumMax.setValue(spectrumMin.getValue()+20,juce::sendNotificationSync);
+    };
+    spectrumMax.onValueChange=[this]{
+        if(spectrumMax.getValue()<spectrumMin.getValue()+20)
+            spectrumMin.setValue(spectrumMax.getValue()-20,juce::sendNotificationSync);
+    };
     addChoice("glue.timing",{"AUTO","MS","SYNC"},{249,623,122,26});
     addChoice("unmask.timing",{"MS","SYNC"},{832,918,185,22});
     const juce::StringArray notes{"1/64","1/32","1/16","1/8","1/4","1/2","1/1","1/8 T","1/8 D"};
-    addChoice("glue.attackNote",notes,{249,680,122,32});addChoice("glue.releaseNote",notes,{249,759,122,32});
-    addChoice("unmask.attackNote",notes,{824,862,99,30});addChoice("unmask.releaseNote",notes,{926,862,99,30});
+    addChoice("glue.releaseNote",notes,{249,759,122,32});
+    addChoice("unmask.releaseNote",notes,{926,862,99,30});
     for(auto* slider:{&glueAttackSlider,&glueReleaseSlider}){
         slider->setSliderStyle(juce::Slider::LinearBar);slider->setTextBoxStyle(juce::Slider::TextBoxLeft,false,122,32);
         slider->setTextValueSuffix(" ms");slider->setNumDecimalPlacesToDisplay(1);slider->setScrollWheelEnabled(false);face.addAndMakeVisible(slider);
     }
     glueAttackSlider.setBounds(249,680,122,32);glueReleaseSlider.setBounds(249,759,122,32);
+    glueAttackSlider.setTooltip("Attack is always in milliseconds in MS and SYNC. Only release follows note values in SYNC.");
     glueAttackAttachment=std::make_unique<State::SliderAttachment>(processor.parameters,"glue.attackMs",glueAttackSlider);
     glueReleaseAttachment=std::make_unique<State::SliderAttachment>(processor.parameters,"glue.releaseMs",glueReleaseSlider);
     // A request to listen to the added signal must turn on its generator and
@@ -177,13 +206,11 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g){
     console::text(g,"FOCUS  "+juce::String(focus,1)+" Hz",{1026,439,118,18},13,console::amber);
     }
     if(processor.parameters.getRawParameterValue("glue.timing")->load()>1.5f){
-        console::text(g,juce::String(processor.glueAttack.load(),1)+" ms",{249,714,122,18},12,console::cream);
         console::text(g,juce::String(processor.glueRelease.load(),1)+" ms",{249,793,122,18},12,console::cream);
     }
     if(processor.parameters.getRawParameterValue("unmask.timing")->load()>.5f){
-        console::text(g,"A "+juce::String(processor.unmaskAttack.load(),1)+" ms",{824,838,101,20},12,console::cream);
         console::text(g,"R "+juce::String(processor.unmaskRelease.load(),1)+" ms",{926,838,101,20},12,console::cream);
-        console::text(g,"ATTACK",{824,896,99,18},12,console::cream);console::text(g,"RELEASE",{926,896,99,18},12,console::cream);
+        console::text(g,"RELEASE",{926,896,99,18},12,console::cream);
     }
     console::panel(g,{24,960,1152,144});
     console::text(g,"04  SOFT TUBE",{52,944,300,14},13,console::copper);
@@ -199,33 +226,66 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g){
     console::text(g,"IN "+juce::String(std::max(inputDb,-99.0f),1)+"  /  OUT "+juce::String(std::max(outputDb,-99.0f),1)+" dBFS RMS",{221,808,315,26},13,console::muted);
     console::text(g,"PEAK "+juce::String(std::max(peak,-99.0f),1)+" dBFS",{548,808,180,26},14,clipFrames>0?console::orange:console::cream);
     console::text(g,"TRIM",{762,808,60,26},13,console::muted);
-    console::text(g,"v0.2.4",{1090,808,66,26},13,console::muted,juce::Justification::centredRight);
+    console::text(g,"v0.2.5",{1090,808,66,26},13,console::muted,juce::Justification::centredRight);
     }
     g.drawImageAt(grain,0,0);
 }
+bool BassDeamonEditor::spectrumIsPost() const {
+    return processor.parameters.getRawParameterValue("view.spectrum")->load()>.5f;
+}
+std::array<double,2> BassDeamonEditor::spectrumLimits() const {
+    const double ceiling=std::min(20000.0,analyzer.sampleRate()*.5);
+    const double minimum=juce::jlimit(0.0,ceiling-20.0,double(processor.parameters.getRawParameterValue("view.minHz")->load()));
+    const double maximum=juce::jlimit(minimum+20.0,ceiling,double(processor.parameters.getRawParameterValue("view.maxHz")->load()));
+    return {minimum,maximum};
+}
 void BassDeamonEditor::paintSpectrum(juce::Graphics& g){
-    const juce::Rectangle<float> plot(72,178,742,100);
-    const int choice=int(processor.parameters.getRawParameterValue("view.range")->load());
-    const double maximum=choice==0?1000:choice==1?2500:5000;
-    const auto fx=[&](double hz){return plot.getX()+float(hz/maximum)*plot.getWidth();};
+    const juce::Rectangle<float> plot(72,190,742,88);
+    const auto limits=spectrumLimits();const double minimum=limits[0],maximum=limits[1];
+    const auto fx=[&](double hz){return plot.getX()+float((hz-minimum)/(maximum-minimum))*plot.getWidth();};
     const auto fy=[&](float db){return plot.getBottom()-juce::jlimit(0.f,1.f,(db+72)/72)*plot.getHeight();};
     for(int level:{-72,-48,-24,0}){const float y=fy(float(level));g.setColour(console::cream.withAlpha(.15f));g.drawHorizontalLine(juce::roundToInt(y),plot.getX(),plot.getRight());
         console::text(g,juce::String(level),{34,y-7,33,14},11,console::cream,juce::Justification::centredRight);}
-    for(int i=0;i<=20;++i){const double hz=maximum*i/20;const float x=fx(hz);g.setColour(console::cream.withAlpha(i%2==0?.13f:.06f));g.drawVerticalLine(juce::roundToInt(x),plot.getY(),plot.getBottom());
-        if(i%2==0)console::text(g,juce::String(hz,0),{x-23,282,46,16},12,console::cream,juce::Justification::centred);}
+    for(int i=0;i<=10;++i){const double hz=minimum+(maximum-minimum)*i/10;const float x=fx(hz);g.setColour(console::cream.withAlpha(i%2==0?.13f:.06f));g.drawVerticalLine(juce::roundToInt(x),plot.getY(),plot.getBottom());
+        if(i%2==0)console::text(g,juce::String(hz,hz<100?1:0),{x-27,282,54,16},12,console::cream,juce::Justification::centred);}
     const juce::Colour postColour(0xff56e6c0);
-    console::text(g,"PRE",{72,140,65,20},14,console::cream);console::text(g,"POST",{145,140,65,20},14,postColour);
-    console::text(g,"KICK",{225,140,65,20},14,console::amber);console::text(g,"dBFS / LINEAR Hz",{325,140,240,20},12,console::cream);
-    for(int trace=0;trace<3;++trace){const auto& values=trace==0?visualPre:trace==1?visualPost:visualKick;
-        juce::Path line;line.startNewSubPath(plot.getX(),fy(values[0]));
-        for(size_t b=1;b<values.size();++b){const double hz=double(b)*analyzer.sampleRate()/bassdeamon::RelationAnalyzer::fftSize;
-            if(hz>maximum)break;
-            line.lineTo(fx(hz),fy(values[b]));}
-        if(trace==1){auto fill=line;fill.lineTo(plot.getRight(),plot.getBottom());fill.lineTo(plot.getX(),plot.getBottom());fill.closeSubPath();g.setColour(postColour.withAlpha(.10f));g.fillPath(fill);}
-        g.setColour(trace==0?console::cream.withAlpha(.7f):trace==1?postColour:console::amber);
-        g.strokePath(line,juce::PathStrokeType(trace==0?1.4f:2.f));
+    const juce::Colour collisionColour(0xffff4545);
+    console::text(g,"KICK",{235,140,58,20},13,console::amber);
+    console::text(g,"COLLISION",{318,140,118,20},13,collisionColour);
+    console::text(g,"FROM",{526,166,130,15},11,console::muted);
+    console::text(g,"TO",{682,166,132,15},11,console::muted);
+    const bool post=spectrumIsPost();const auto& selected=post?visualPost:visualPre;
+    const double binWidth=analyzer.sampleRate()/bassdeamon::RelationAnalyzer::fftSize;
+    {
+        juce::Graphics::ScopedSaveState clip(g);g.reduceClipRegion(plot.toNearestInt());
+        for(size_t b=1;b<selected.size();++b){const double hz=double(b)*binWidth;
+            if(hz+binWidth*.5<minimum)continue;if(hz-binWidth*.5>maximum)break;
+            const float overlap=bassdeamon::RelationAnalyzer::mask(selected[b],visualKick[b]);
+            if(overlap<.08f)continue;
+            const float left=std::max(plot.getX(),fx(hz-binWidth*.5));
+            const float right=std::min(plot.getRight(),fx(hz+binWidth*.5));
+            // Same potential-overlap criterion in both views, derived from the
+            // selected bass and kick levels; never display commanded EQ cuts.
+            g.setColour(collisionColour.withAlpha(.08f+.20f*overlap));
+            g.fillRect(left,plot.getY(),std::max(.5f,right-left),plot.getHeight());
+            const float top=fy(std::min(selected[b],visualKick[b]));
+            g.setColour(collisionColour.withAlpha(.25f+.45f*overlap));
+            g.fillRect(left,top,std::max(.5f,right-left),plot.getBottom()-top);
+        }
+        for(int trace=0;trace<2;++trace){const auto& values=trace==0?selected:visualKick;
+            juce::Path line;bool started=false;
+            for(size_t b=0;b<values.size();++b){const double hz=double(b)*binWidth;
+                if(hz+binWidth<minimum)continue;
+                if(!started){line.startNewSubPath(fx(hz),fy(values[b]));started=true;}
+                else line.lineTo(fx(hz),fy(values[b]));
+                if(hz>maximum)break;
+            }
+            if(trace==0&&started){auto fill=line;fill.lineTo(plot.getRight(),plot.getBottom());fill.lineTo(plot.getX(),plot.getBottom());fill.closeSubPath();g.setColour((post?postColour:console::cream).withAlpha(.08f));g.fillPath(fill);}
+            g.setColour(trace==0?(post?postColour:console::cream):console::amber);
+            g.strokePath(line,juce::PathStrokeType(2.f));
+        }
     }
-    console::text(g,"Shared scale / PRE before processing / POST actual output",{72,301,740,12},11,console::cream);
+    console::text(g,(post?"POST output":"PRE input")+juce::String(" + KICK / RED: potential overlap / ")+juce::String(minimum,1)+" - "+juce::String(maximum,1)+" Hz / dBFS",{72,301,740,12},11,console::cream);
 }
 void BassDeamonEditor::paintWave(juce::Graphics& g){
     console::text(g,showSum?"SCOPE / KICK + BASS PRE & POST":"SCOPE / SUM K+B OFF",{47,337,650,20},13,console::cream);
@@ -274,11 +334,13 @@ void BassDeamonEditor::timerCallback(){
     for(size_t i=0;i<visualPre.size();++i)for(int t=0;t<3;++t){auto& v=t==0?visualPre[i]:t==1?visualPost[i]:visualKick[i];const float target=t==0?analyzer.pre[i]:t==1?analyzer.post[i]:analyzer.kick[i];v+=(target-v)*(target>v?.35f:.10f);}
     const int timing=int(processor.parameters.getRawParameterValue("glue.timing")->load());
     const bool sync=processor.parameters.getRawParameterValue("unmask.timing")->load()>.5f;
-    glueAttackSlider.setVisible(timing==1);glueReleaseSlider.setVisible(timing==1);
-    unmaskAttackKnob->setVisible(!sync);unmaskReleaseKnob->setVisible(!sync);
+    spectrumPre.setToggleState(!spectrumIsPost(),juce::dontSendNotification);
+    spectrumPost.setToggleState(spectrumIsPost(),juce::dontSendNotification);
+    glueAttackSlider.setVisible(timing!=0);glueReleaseSlider.setVisible(timing==1);
+    unmaskAttackKnob->setVisible(true);unmaskReleaseKnob->setVisible(!sync);
     for(auto& c:choices){const auto id=c->box.getComponentID();
-        if(id=="glue.attackNote"||id=="glue.releaseNote")c->box.setVisible(timing==2);
-        if(id=="unmask.attackNote"||id=="unmask.releaseNote")c->box.setVisible(sync);
+        if(id=="glue.releaseNote")c->box.setVisible(timing==2);
+        if(id=="unmask.releaseNote")c->box.setVisible(sync);
     }
     for(size_t i=0;i<bass.size();++i){bass[i]=0.7f*bass[i]+0.3f*processor.spectrumBass[i].load();kick[i]=0.7f*kick[i]+0.3f*processor.spectrumKick[i].load();cut[i]=processor.spectrumCut[i].load();}
     for(size_t i=0;i<3;++i)compensation[i]=processor.agcMeters[i].load();

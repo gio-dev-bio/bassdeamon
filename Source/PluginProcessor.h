@@ -50,7 +50,7 @@ private:
     void timerCallback() override;
     void publishMeters() noexcept;
     bassdeamon::Engine engine;
-    std::array<std::atomic<float>*, 44> raw{};
+    std::array<std::atomic<float>*, 47> raw{};
     std::atomic<bool> learnRequested{false}, resultReady{false};
     std::atomic<float> resultDelay{0};
     std::atomic<bool> resultInvert{false};
