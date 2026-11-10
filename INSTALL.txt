@@ -1,4 +1,4 @@
-BASSDEAMON 0.2.6 — VST3 macOS Intel (x86_64)
+BASSDEAMON 0.2.7 — VST3 macOS Intel (x86_64)
 
 1. Chiudi Cubase.
 2. Estrai lo ZIP e copia BassDeamon.vst3 in:
@@ -27,7 +27,8 @@ La GUI mostra:
 - VU della gain reduction GLUE;
 - AGC indipendente e Lock per ogni modulo;
 - AUTO FOCUS / HOLD FOCUS e focus manuale per UNMASK;
-- A/B, quattro starting point, output trim e peak indicator.
+- UNDO / REDO per modifiche e starting point; A/B, output trim e peak indicator.
+- DSP CPU: percentuale del tempo disponibile per il callback audio; ANALYZER in ms separati; OVR conta i superamenti del budget.
 
 AUTO FOCUS non è un riconoscitore di note/fondamentale.
 Nessun limiter è attivo: riduci il trim se il peak diventa rosso.

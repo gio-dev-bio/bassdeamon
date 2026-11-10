@@ -65,6 +65,11 @@ private:
     Knob *unmaskAttackKnob=nullptr,*unmaskReleaseKnob=nullptr;
     float scopeScale=1;
     juce::TextButton learn{"LEARN / LOCK"},aButton{"A"},bButton{"B"};
+    juce::TextButton undoButton{"UNDO"},redoButton{"REDO"};
+    juce::Label cpuLabel;
+    double analyzerMilliseconds=0;
+    double lastAnalysisTime=0;
+    bool staleAnalysis=false;
     juce::ComboBox presets,ceiling;
     std::unique_ptr<State::ComboBoxAttachment> ceilingAttachment;
     juce::Slider output;

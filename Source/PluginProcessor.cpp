@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include <optional>
 
 namespace {
 constexpr std::array<const char*, 47> ids{
@@ -18,15 +19,17 @@ BassDeamonProcessor::BassDeamonProcessor()
     : AudioProcessor(BusesProperties().withInput("Bass", juce::AudioChannelSet::stereo(), true)
          .withInput("Kick reference", juce::AudioChannelSet::stereo(), false)
          .withOutput("Bass output", juce::AudioChannelSet::stereo(), true)),
-      parameters(*this, nullptr, "BassDeamonState", layout()) {
+      parameters(*this, &undoManager, "BassDeamonState", layout()) {
     for (size_t i = 0; i < ids.size(); ++i) raw[i] = parameters.getRawParameterValue(ids[i]);
     const bassdeamon::Engine::RuntimeState initial{-24, 2, 20, 180, 0, 0, 0, 75,0};
     for (size_t i = 0; i < initial.size(); ++i) runtimeSnapshot[i].store(static_cast<float>(initial[i]));
     for (auto& v : spectrumBass) v.store(-120);
     for (auto& v : spectrumKick) v.store(-120);
+    parameters.copyState();undoManager.clearUndoHistory();
+    for(auto* parameter:getParameters())parameter->addListener(this);
     startTimerHz(30);
 }
-BassDeamonProcessor::~BassDeamonProcessor() { stopTimer(); }
+BassDeamonProcessor::~BassDeamonProcessor() { stopTimer();for(auto* parameter:getParameters())parameter->removeListener(this); }
 
 juce::AudioProcessorValueTreeState::ParameterLayout BassDeamonProcessor::layout() {
     juce::AudioProcessorValueTreeState::ParameterLayout p;
@@ -89,7 +92,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout BassDeamonProcessor::layout(
     return p;
 }
 
-void BassDeamonProcessor::prepareToPlay(double sr, int) {
+void BassDeamonProcessor::prepareToPlay(double sr, int maximumBlock) {
+    cpuLoad.reset(sr,std::max(1,maximumBlock));
     engine.prepare(sr); setLatencySamples(0);
     bassdeamon::Engine::RuntimeState r{};
     const bool restoring = restoreRequested.load();
@@ -130,6 +134,8 @@ bassdeamon::Settings BassDeamonProcessor::readSettings() const noexcept {
     return s;
 }
 void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) {
+    std::optional<juce::AudioProcessLoadMeasurer::ScopedTimer> cpuTimer;
+    if(buffer.getNumSamples()>0)cpuTimer.emplace(cpuLoad,buffer.getNumSamples());
     juce::ScopedNoDenormals noDenormals;
     midi.clear();
     auto bass = getBusBuffer(buffer, false, 0);
@@ -207,6 +213,8 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     wasLearning = engine.learning(); publishMeters();
 }
 void BassDeamonProcessor::processBlockBypassed(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) {
+    std::optional<juce::AudioProcessLoadMeasurer::ScopedTimer> cpuTimer;
+    if(buffer.getNumSamples()>0)cpuTimer.emplace(cpuLoad,buffer.getNumSamples());
     if(analysisQueue.enabled.load(std::memory_order_relaxed)){
         auto bass=getBusBuffer(buffer,false,0);auto side=getBusBuffer(buffer,true,1);
         for(int n=0;n<buffer.getNumSamples();++n){bassdeamon::AnalysisFrame frame;
@@ -239,13 +247,16 @@ void BassDeamonProcessor::publishMeters() noexcept {
     for (size_t i = 0; i < runtime.size(); ++i) runtimeSnapshot[i].store(static_cast<float>(runtime[i]));
 }
 void BassDeamonProcessor::timerCallback() {
+    refreshHistory();
     if (!resultReady.exchange(false)) return;
+    undoManager.beginNewTransaction("Learn phase");
     // Host parameter notifications happen on the message thread, never in the audio callback.
     const auto set = [&](const char* id, float value) {
         auto* p = parameters.getParameter(id);
         p->beginChangeGesture(); p->setValueNotifyingHost(p->convertTo0to1(value)); p->endChangeGesture();
     };
     set("phase.delay", resultDelay.load()); set("phase.invert", resultInvert.load() ? 1.0f : 0.0f);
+    parameters.copyState();undoManager.beginNewTransaction();
     // Learn does not silently enable PHASE. User can compare with the active switch.
 }
 void BassDeamonProcessor::getStateInformation(juce::MemoryBlock& dest) {
@@ -291,6 +302,7 @@ void BassDeamonProcessor::setStateInformation(const void* data, int bytes) {
                 restoredRuntime[i].store(static_cast<float>(std::isfinite(value) ? value : defaults[i]));
             }
             restoreRequested.store(true);
+            historyResetRequested.store(true);
         }
     }
 }
@@ -308,6 +320,7 @@ void BassDeamonProcessor::selectAB(int slot) {
 }
 void BassDeamonProcessor::loadStartingPoint(int preset) {
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    refreshHistory();undoManager.beginNewTransaction("Starting point");
     for (const auto* id : ids) {
         auto* p = parameters.getParameter(id);
         p->beginChangeGesture(); p->setValueNotifyingHost(p->getDefaultValue()); p->endChangeGesture();
@@ -322,4 +335,21 @@ void BassDeamonProcessor::loadStartingPoint(int preset) {
     const bassdeamon::Engine::RuntimeState initial{-24, 2, 20, 180, 0, 0, 0, 75,0};
     for (size_t i = 0; i < initial.size(); ++i) restoredRuntime[i].store(static_cast<float>(initial[i]));
     restoreRequested.store(true);
+    parameters.copyState();undoManager.beginNewTransaction();
+}
+
+void BassDeamonProcessor::refreshHistory(){
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    parameters.copyState();
+    if(historyResetRequested.exchange(false))undoManager.clearUndoHistory();
+}
+bool BassDeamonProcessor::undoEdit(){refreshHistory();return undoManager.undo();}
+bool BassDeamonProcessor::redoEdit(){refreshHistory();return undoManager.redo();}
+
+void BassDeamonProcessor::parameterGestureChanged(int,bool starting){
+    // Flush UI gestures before another control starts a transaction, even if
+    // two clicks occur inside one APVTS timer interval. Never lock audio.
+    auto* messages=juce::MessageManager::getInstanceWithoutCreating();
+    if(!starting&&messages!=nullptr&&messages->isThisTheMessageThread())
+        refreshHistory();
 }

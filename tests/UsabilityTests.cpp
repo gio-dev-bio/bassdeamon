@@ -41,7 +41,7 @@ int main(){try{
     AnalysisQueue queue;RelationAnalyzer relation;relation.prepare(48000);
     for(size_t n=0;n<RelationAnalyzer::fftSize;++n){
         AnalysisFrame f;const float tone=float(.3*std::sin(2*pi*75*n/48000.));
-        f.pre={tone,-tone};f.post={tone*.001f,-tone*.001f};f.kick={tone,tone};
+        f.pre={tone,-tone};f.post={0,0};f.kick={tone,tone};
         check(queue.push(f),"collision fixture queue overflow");
     }
     relation.consume(queue);const size_t bin=size_t(std::round(75.*RelationAnalyzer::fftSize/48000.));

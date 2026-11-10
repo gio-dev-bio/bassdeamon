@@ -21,6 +21,37 @@ int interactionTests(){
     const auto set=[&](const char* id,float value){auto* param=p.parameters.getParameter(id);param->setValueNotifyingHost(param->convertTo0to1(value));};
     const auto get=[&](const char* id){return p.parameters.getRawParameterValue(id)->load();};
     std::unique_ptr<BassDeamonEditor> editor(static_cast<BassDeamonEditor*>(p.createEditor()));
+    // Real JUCE gestures and APVTS undo, including intermediate drag values.
+    p.refreshHistory();p.undoManager.clearUndoHistory();
+    const float originalDrive=get("tube.drive");
+    juce::ParameterAttachment drive(*p.parameters.getParameter("tube.drive"),[](float){},&p.undoManager);
+    drive.beginGesture();
+    for(float value:{3.f,8.f,13.f}){drive.setValueAsPartOfGesture(value);p.refreshHistory();}
+    drive.endGesture();p.refreshHistory();editor->timerCallback();
+    ensure(editor->undoButton.isEnabled(),"Undo button disabled after gesture");
+    editor->undoButton.onClick();ensure(std::abs(get("tube.drive")-originalDrive)<.001,"Undo did not group entire knob gesture");
+    ensure(editor->redoButton.isEnabled(),"Redo unavailable after undo");
+    editor->redoButton.onClick();ensure(std::abs(get("tube.drive")-13)<.001,"Redo did not restore knob value");
+    editor->undoButton.onClick();drive.setValueAsCompleteGesture(5);p.refreshHistory();
+    ensure(!p.canRedo(),"New edit failed to discard redo branch");
+    drive.setValueAsCompleteGesture(7);drive.setValueAsCompleteGesture(9);
+    ensure(p.undoEdit()&&std::abs(get("tube.drive")-7)<.001,"Rapid consecutive gestures were merged");
+    ensure(p.undoEdit()&&std::abs(get("tube.drive")-5)<.001,"Rapid gesture undo lost previous value");
+    const auto beforePreset=p.parameters.copyState().toXmlString();
+    p.loadStartingPoint(3);const auto afterPreset=p.parameters.copyState().toXmlString();
+    ensure(beforePreset!=afterPreset&&p.undoEdit(),"Starting point not undoable");
+    ensure(p.parameters.copyState().toXmlString()==beforePreset,"Undo did not restore complete preset state");
+    ensure(p.redoEdit()&&p.parameters.copyState().toXmlString()==afterPreset,"Preset redo incomplete");
+    p.loadStartingPoint(0);p.refreshHistory();p.undoManager.clearUndoHistory();
+    juce::MemoryBlock cleanState;p.getStateInformation(cleanState);
+    drive.setValueAsCompleteGesture(12);p.refreshHistory();ensure(p.canUndo(),"History lost edit");
+    p.setStateInformation(cleanState.getData(),int(cleanState.getSize()));p.refreshHistory();
+    ensure(!p.canUndo()&&!p.canRedo(),"State recall retained stale undo history");
+    juce::AudioProcessLoadMeasurer calibration;calibration.reset(48000,480);
+    for(int n=0;n<100;++n)calibration.registerRenderTime(5,480);
+    ensure(std::abs(calibration.getLoadAsPercentage()-50)<.01,"CPU meter denominator/calibration wrong");
+    calibration.registerRenderTime(20,480);ensure(calibration.getXRunCount()==1,"CPU over-budget count missing");
+    calibration.reset();ensure(calibration.getLoadAsPercentage()==0&&calibration.getXRunCount()==0,"CPU reset failed");
     ensure(editor->showSum,"SUM must be default");ensure(get("view.range")==0,"Spectrum must default 0-1000");
     ensure(editor->face.getComponentAt(editor->sumButton.getBounds().getCentre())==&editor->sumButton,"SUM hit target covered");
     const auto stateBeforeSum=p.parameters.copyState().toXmlString();
@@ -58,7 +89,7 @@ int interactionTests(){
     editor->analyzer.maskPost.fill(0);editor->analyzer.maskPost[overlapBin]=1;
     ensure(editor->spectrumIsPost()&&editor->spectrumPost.getToggleState(),"POST selector did not switch view");
     ensure(redInSpectrum()>20,"POST collision bands missing");
-    const auto lower=editor->face.createComponentSnapshot({72,240,742,38});int lowerRed=0;
+    const auto lower=editor->face.createComponentSnapshot({72,240,742,27});int lowerRed=0;
     for(int y=0;y<lower.getHeight();++y)for(int x=0;x<lower.getWidth();++x){const auto colour=lower.getPixelAt(x,y);
         if(colour.getRed()>colour.getGreen()*1.6&&colour.getRed()>colour.getBlue()*1.6&&colour.getRed()>50)++lowerRed;}
     ensure(lowerRed==0,"Collision ribbon filled unrelated lower spectrum");
@@ -74,13 +105,37 @@ int interactionTests(){
     ensure(get("tube.on")==0,"GUI notification silently enabled automated Tube");
     set("tube.audition",0);
     const auto clickAdded=[&]{added->internalClickCallback(juce::ModifierKeys{});};
-    set("unmask.delta",1);clickAdded();
+    set("unmask.delta",1);p.refreshHistory();clickAdded();p.refreshHistory();
     ensure(get("tube.audition")==1,"GUI click did not set Tube audition");
     ensure(get("tube.on")==1&&get("unmask.delta")==0,"Tube audition did not enable generator and clear DELTA");
+    ensure(p.undoEdit()&&get("tube.audition")==0&&get("tube.on")==0&&get("unmask.delta")==1,"Compound monitor edit did not undo together");
+    ensure(p.redoEdit()&&get("tube.audition")==1&&get("tube.on")==1&&get("unmask.delta")==0,"Compound monitor redo incomplete");
     set("glue.on",0);set("unmask.on",0);set("tube.drive",18);set("tube.amount",1);
     juce::AudioBuffer<float> buffer(2,256);juce::MidiBuffer midi;double output=0;
+    // End-to-end: actual processor -> SPSC -> FFT -> PRE/POST -> red pixels.
+    // No manually assigned FFT levels/maps in this regression test.
+    juce::MemoryBlock audioState;p.getStateInformation(audioState);
+    set("tube.on",0);set("tube.audition",0);set("unmask.on",0);set("phase.on",0);set("glue.on",0);
+    editor->analyzer.prepare(48000);bassdeamon::AnalysisFrame discarded;while(p.analysisQueue.pop(discarded)){}
+    int preHits=0,postHits=0;bool prePainted=false,postPainted=false;
+    for(int b=0;b<240;++b){for(int n=0;n<256;++n){const double t=(b*256+n)/48000.,since=std::fmod(t,.5);
+        buffer.setSample(0,n,float(.3*std::sin(2*bassdeamon::pi*75*t)+.12*std::sin(2*bassdeamon::pi*150*t)));
+        const double envelope=since<.020?std::pow(std::sin(bassdeamon::pi*since/.020),2):0;
+        buffer.setSample(1,n,float(.012*envelope*std::sin(2*bassdeamon::pi*75*t)));}
+        host.time=b*256/48000.;p.processBlock(buffer,midi);
+        if(b%6==0){editor->timerCallback();
+            if(editor->analyzer.summary(false).regions){++preHits;editor->spectrumPre.onClick();prePainted|=redInSpectrum()>10;}
+            if(editor->analyzer.summary(true).regions){++postHits;editor->spectrumPost.onClick();postPainted|=redInSpectrum()>10;}
+            const auto unrelated=size_t(std::round(150.*bassdeamon::RelationAnalyzer::fftSize/48000.));
+            ensure(editor->analyzer.maskPre[unrelated]<.12f&&editor->analyzer.maskPost[unrelated]<.12f,"Real GUI marks bass-only harmonic");
+        }
+    }
+    ensure(preHits>0&&postHits>0&&prePainted&&postPainted,"Real short/quiet kick has no visible PRE/POST collisions");
+    p.setStateInformation(audioState.getData(),int(audioState.getSize()));editor->timerCallback();
     for(int b=0;b<200;++b){host.time=b*256/48000.;for(int n=0;n<256;++n){buffer.setSample(0,n,float(.6*std::sin(2*bassdeamon::pi*75*(b*256+n)/48000.)));buffer.setSample(1,n,0);}
         p.processBlock(buffer,midi);if(b>100)output+=buffer.getRMSLevel(0,0,256);editor->timerCallback();}
+    ensure(std::isfinite(p.cpuLoad.getLoadAsPercentage())&&p.cpuLoad.getLoadAsPercentage()>0,"Real callback CPU not measured");
+    ensure(editor->cpuLabel.getText().contains("DSP CPU")&&editor->cpuLabel.getText().contains("ANALYZER"),"CPU display missing");
     ensure(output>1,"GUI audition path has no added audio");ensure(p.tubeAddedDb.load()>-50,"GUI added signal meter missing");
     const auto greenInScope=[&]{
         const auto image=editor->face.createComponentSnapshot({48,374,1104,75});
@@ -119,6 +174,7 @@ int interactionTests(){
     ensure(get("view.spectrum")==0&&std::abs(get("view.maxHz")-437.25)<.01,"Spectrum view state recall failed");
     set("glue.timing",0);set("unmask.delta",0);
     ensure(editor->face.getComponentAt(editor->learn.getBounds().getCentre())==&editor->learn,"Learn hit target covered");
+    const float delayBeforeLearn=get("phase.delay"),invertBeforeLearn=get("phase.invert");
     editor->learn.onClick();
     std::mt19937 rng(79);std::uniform_real_distribution<float> random(-.4f,.4f);
     std::vector<float> noise(4*48000+256);for(auto& v:noise)v=random(rng);
@@ -129,12 +185,14 @@ int interactionTests(){
     p.timerCallback();
     ensure(std::abs(get("phase.delay")-2)<.26&&get("phase.invert")==1,"Learn did not apply delay and polarity to host parameters");
     ensure(get("phase.on")==0,"Learn silently enabled PHASE");
+    ensure(p.undoEdit()&&std::abs(get("phase.delay")-delayBeforeLearn)<.001&&get("phase.invert")==invertBeforeLearn,"Learn undo incomplete");
+    ensure(p.redoEdit()&&std::abs(get("phase.delay")-2)<.26&&get("phase.invert")==1,"Learn redo incomplete");
     // Schema-3 sessions restore the original timing modes on an existing instance.
     auto old=p.parameters.copyState();old.setProperty("schemaVersion",3,nullptr);
     const juce::StringArray newIds{"glue.timing","glue.attackMs","glue.releaseMs","glue.attackNote","glue.releaseNote","unmask.timing","unmask.attackNote","unmask.releaseNote","view.range","view.hold","view.spectrum","view.minHz","view.maxHz"};
     for(int i=old.getNumChildren()-1;i>=0;--i)if(newIds.contains(old.getChild(i).getProperty("id").toString()))old.removeChild(i,nullptr);
     set("glue.timing",2);set("unmask.timing",1);juce::MemoryBlock bytes;auto xml=old.createXml();juce::AudioProcessor::copyXmlToBinary(*xml,bytes);
     p.setStateInformation(bytes.getData(),int(bytes.getSize()));ensure(get("glue.timing")==0&&get("unmask.timing")==0,"Old session did not reset new timing modes");
-    std::cout<<"PASS real GUI attachments / Tube audition audio / host timing / Learn across short cycles / legacy timing\n";
+    std::cout<<"PASS undo/redo gestures, presets, recall / calibrated CPU / real PRE+POST collision pixels / real GUI attachments / Tube audition audio / host timing / Learn across short cycles / legacy timing\n";
     return 0;
 }

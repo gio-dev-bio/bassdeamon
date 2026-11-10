@@ -41,9 +41,17 @@ int captureGui(const juce::File& output){
     };
     if(!save(output))return 1;
     auto* gui=static_cast<BassDeamonEditor*>(editor.get());
-    gui->spectrumPre.onClick();
+    // Freeze one real audio frame for paired pictures. Rendering a full PNG
+    // may take >500 ms in Debug: do not run the no-audio expiry between shots.
+    // Real button callbacks are exercised separately by interactionTests.
+    const auto selectViewForCapture=[&](bool post){
+        p.parameters.getParameter("view.spectrum")->setValueNotifyingHost(post?1.f:0.f);
+        gui->spectrumPre.setToggleState(!post,juce::dontSendNotification);
+        gui->spectrumPost.setToggleState(post,juce::dontSendNotification);
+    };
+    selectViewForCapture(false);
     if(!save(output.getSiblingFile("GUI-Pre.png")))return 1;
-    gui->spectrumPost.onClick();
+    selectViewForCapture(true);
     gui->sumButton.onClick();
     if(gui->showSum||gui->sumButton.getToggleState())return 1;
     if(!save(output.getSiblingFile("GUI-SumOff.png")))return 1;
@@ -73,8 +81,27 @@ int captureGui(const juce::File& output){
         p.processBlock(buffer,midi);if(block%8==0)gui->timerCallback();}
     gui->timerCallback();
     if(!save(output.getSiblingFile("GUI-Overlap.png")))return 1;
-    gui->spectrumPre.onClick();
+    selectViewForCapture(false);
     if(!save(output.getSiblingFile("GUI-Overlap-Pre.png")))return 1;
-    gui->spectrumPost.onClick();
+    selectViewForCapture(true);
+    // Freeze a genuine 20 ms kick hit at -28 dB relative to the bass, with
+    // red derived exclusively from processor samples and the real analyzer.
+    for(const char* id:{"tube.on","tube.audition","glue.on","phase.on","unmask.on"})
+        p.parameters.getParameter(id)->setValueNotifyingHost(0);
+    gui->analyzer.prepare(48000);bassdeamon::AnalysisFrame discarded;
+    while(p.analysisQueue.pop(discarded)){}
+    bool captured=false;
+    for(int block=0;block<240&&!captured;++block){for(int n=0;n<256;++n){const double t=(block*256+n)/48000.,since=std::fmod(t,.5);
+        const float bass=float(.3*std::sin(2*bassdeamon::pi*75*t)+.12*std::sin(2*bassdeamon::pi*150*t));
+        buffer.setSample(0,n,bass);buffer.setSample(1,n,bass);
+        const double envelope=since<.020?std::pow(std::sin(bassdeamon::pi*since/.020),2):0;
+        buffer.setSample(2,n,float(.012*envelope*std::sin(2*bassdeamon::pi*75*t)));}
+        p.processBlock(buffer,midi);
+        if(block%6==0){gui->timerCallback();if(gui->analyzer.summary(false).regions&&gui->analyzer.summary(true).regions){
+            selectViewForCapture(true);if(!save(output.getSiblingFile("GUI-ShortKick-Post.png")))return 1;
+            selectViewForCapture(false);if(!save(output.getSiblingFile("GUI-ShortKick-Pre.png")))return 1;captured=true;
+        }}
+    }
+    if(!captured){std::cerr<<"No real short-kick collision for capture\n";return 1;}
     std::cout<<output.getFullPathName()<<'\n';return 0;
 }

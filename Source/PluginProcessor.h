@@ -4,7 +4,7 @@
 #include "Analyzer.h"
 #include <atomic>
 
-class BassDeamonProcessor final : public juce::AudioProcessor, private juce::Timer {
+class BassDeamonProcessor final : public juce::AudioProcessor, private juce::Timer, private juce::AudioProcessorParameter::Listener {
 public:
     BassDeamonProcessor();
     ~BassDeamonProcessor() override;
@@ -31,7 +31,14 @@ public:
     void loadStartingPoint(int preset);
     int selectedAB() const noexcept { return abSlot; }
     void requestLearn() noexcept { learnRequested.store(true); }
+    bool undoEdit();
+    bool redoEdit();
+    void refreshHistory();
+    bool canUndo() const { return !historyResetRequested.load()&&undoManager.canUndo(); }
+    bool canRedo() const { return !historyResetRequested.load()&&undoManager.canRedo(); }
+    juce::UndoManager undoManager;
     juce::AudioProcessorValueTreeState parameters;
+    juce::AudioProcessLoadMeasurer cpuLoad;
     bassdeamon::AnalysisQueue analysisQueue;
     std::atomic<float> tubeGainDb{0},tubeAddedDb{-120},tempo{120},unmaskAttack{8},unmaskRelease{120},learnProgress{0};
     std::atomic<bool> tempoFromHost{false};
@@ -48,6 +55,8 @@ private:
     static juce::AudioProcessorValueTreeState::ParameterLayout layout();
     bassdeamon::Settings readSettings() const noexcept;
     void timerCallback() override;
+    void parameterValueChanged(int,float) override {}
+    void parameterGestureChanged(int,bool starting) override;
     void publishMeters() noexcept;
     bassdeamon::Engine engine;
     std::array<std::atomic<float>*, 47> raw{};
@@ -58,6 +67,7 @@ private:
     std::array<juce::MemoryBlock, 2> abStates;
     int abSlot = 0; // message-thread only; A/B survives editor close/reopen.
     std::atomic<bool> restoreRequested{false};
+    std::atomic<bool> historyResetRequested{false};
     bool wasLearning = false, wasPlaying = false, wasBypassed = false;
     double lastTimeSeconds = -1;
     int lastBlockSamples = 0;

@@ -23,6 +23,8 @@ jobs:
           /tmp/dsp-sanitized
           g++ -std=c++17 -O1 -g -pthread -fsanitize=address,undefined -fno-omit-frame-pointer -ISource tests/NewFeatureTests.cpp -o /tmp/features-sanitized
           /tmp/features-sanitized
+          g++ -std=c++17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -ISource tests/AnalyzerTests.cpp -o /tmp/analyzer-sanitized
+          /tmp/analyzer-sanitized
   macos:
     # Temporary Intel-only build while hosted ARM runners lack capacity.
     runs-on: macos-15-intel
@@ -32,9 +34,13 @@ jobs:
       - name: Configure Intel VST3
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
       - run: cmake --build build --config Release --parallel 3
-      - run: ctest --test-dir build -C Release --output-on-failure
+      - run: ctest --test-dir build -C Release --verbose --output-log validation-results.txt
       - name: Record spectrum precision and selective overlap checks
         run: build/analyzer_tests > analyzer-results.txt
+      - name: Record full audio collision matrix
+        run: |
+          cp build/analyzer-matrix.csv analyzer-matrix.csv
+          sed -n '/Real Soft Tube/,/Matrix:/p' validation-results.txt > analyzer-matrix-results.txt
       - name: Record usability and measured response
         run: build/usability_tests > usability-results.txt
       - name: Record new feature contracts and timings
@@ -51,27 +57,34 @@ jobs:
           curl --fail --location --retry 3 https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_macOS.zip --output pluginval.zip
           ditto -x -k pluginval.zip validator
           chmod +x validator/pluginval.app/Contents/MacOS/pluginval
-          arch -x86_64 validator/pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --timeout-ms 60000 --validate "$PWD/build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3"
+          set -o pipefail
+          arch -x86_64 validator/pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --repeat 2 --randomise --random-seed 2702 --timeout-ms 60000 --validate "$PWD/build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3" 2>&1 | tee pluginval-results.txt
       - name: Package ad-hoc signed development plugin
         run: |
-          ditto -c -k --sequesterRsrc --keepParent build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3 BassDeamon-0.2.6-macOS-intel.zip
+          ditto -c -k --sequesterRsrc --keepParent build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3 BassDeamon-0.2.7-macOS-intel.zip
           mkdir -p intel-package
-          sed '1s|.*|BASSDEAMON 0.2.6 — VST3 macOS Intel (x86_64)|' INSTALL.txt > intel-package/INSTALL.txt
-          zip -j BassDeamon-0.2.6-macOS-intel.zip intel-package/INSTALL.txt docs/GUIDA_0.2.6_IT.md
+          sed '1s|.*|BASSDEAMON 0.2.7 — VST3 macOS Intel (x86_64)|' INSTALL.txt > intel-package/INSTALL.txt
+          zip -j BassDeamon-0.2.7-macOS-intel.zip intel-package/INSTALL.txt docs/GUIDA_0.2.7_IT.md analyzer-matrix.csv analyzer-matrix-results.txt analyzer-results.txt validation-results.txt pluginval-results.txt
           lipo build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3/Contents/MacOS/BassDeamon -verify_arch x86_64
-          unzip -t BassDeamon-0.2.6-macOS-intel.zip
+          unzip -t BassDeamon-0.2.7-macOS-intel.zip
       - uses: actions/upload-artifact@v4
         with:
-          name: BassDeamon-0.2.6-macOS-intel
+          name: BassDeamon-0.2.7-macOS-intel
           retention-days: 14
           path: |
-            BassDeamon-0.2.6-macOS-intel.zip
+            BassDeamon-0.2.7-macOS-intel.zip
             GUI-Preview.png
             GUI-Pre.png
             GUI-Overlap.png
             GUI-Overlap-Pre.png
+            GUI-ShortKick-Post.png
+            GUI-ShortKick-Pre.png
             GUI-SumOff.png
             GUI-Sync.png
+            pluginval-results.txt
+            validation-results.txt
+            analyzer-matrix.csv
+            analyzer-matrix-results.txt
             analyzer-results.txt
             usability-results.txt
             new-feature-results.txt

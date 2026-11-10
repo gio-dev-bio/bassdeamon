@@ -110,7 +110,7 @@ int main(int argc,char** argv){
     std::ofstream csv(root/"cpu.csv");csv<<std::setprecision(10)<<"revision,sample_rate,buffer,mode,mean_us,p50_us,p95_us,p99_us,max_us,one_core_percent,callback_allocations\n";
     for(double sr:{44100.0,48000.0,96000.0})for(int block:{64,128,256,512})for(const std::string mode:{"bypass","glue","unmask","all","agc","learn"}){
         performance<bassdeamon_baseline::Engine,bassdeamon_baseline::Settings>(csv,"0.2.0",sr,block,mode);
-        performance<bassdeamon::Engine,bassdeamon::Settings>(csv,"0.2.2",sr,block,mode);
+        performance<bassdeamon::Engine,bassdeamon::Settings>(csv,"working-tree-0.2.7",sr,block,mode);
     }
     nullTests(root);fixtures<bassdeamon::Engine,bassdeamon::Settings>(root);fixtures<bassdeamon_baseline::Engine,bassdeamon_baseline::Settings>(root/"reference");std::cout<<"Benchmark complete: "<<root<<" checksum "<<checksum<<'\n';
 }
