@@ -7,7 +7,7 @@ int captureGui(const juce::File& output){
     auto layout=p.getBusesLayout();layout.inputBuses.set(1,juce::AudioChannelSet::mono());
     if(!p.setBusesLayout(layout))return 1;
     p.prepareToPlay(48000,256);juce::AudioBuffer<float> buffer(3,256);juce::MidiBuffer midi;
-    std::unique_ptr<juce::AudioProcessorEditor> editor(p.createEditor());editor->setSize(1200,1180);
+    std::unique_ptr<juce::AudioProcessorEditor> editor(p.createEditor());editor->setSize(1200,1252);
     auto* tube=p.parameters.getParameter("tube.on");tube->setValueNotifyingHost(1);
     // Known synthetic test signals exercise the REAL graph and metering, not decorative traces.
     for(int block=0;block<800;++block){
@@ -45,7 +45,7 @@ int captureGui(const juce::File& output){
     // may take >500 ms in Debug: do not run the no-audio expiry between shots.
     // Real button callbacks are exercised separately by interactionTests.
     const auto selectViewForCapture=[&](bool post){
-        p.parameters.getParameter("view.spectrum")->setValueNotifyingHost(post?1.f:0.f);
+        p.setSpectrumView(post?1:0);
         gui->spectrumPre.setToggleState(!post,juce::dontSendNotification);
         gui->spectrumPost.setToggleState(post,juce::dontSendNotification);
     };

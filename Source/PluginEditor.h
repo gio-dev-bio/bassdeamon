@@ -74,7 +74,7 @@ private:
     std::unique_ptr<State::ComboBoxAttachment> ceilingAttachment;
     juce::Slider output;
     std::unique_ptr<State::SliderAttachment> outputAttachment;
-    Knob* frequencyKnob=nullptr;
+    Knob *frequencyKnob=nullptr,*attenuationKnob=nullptr,*depthKnob=nullptr;
     juce::Image grain;
     std::array<float,bassdeamon::bandCount> bass{},kick{},cut{};
     std::array<float,3> compensation{};

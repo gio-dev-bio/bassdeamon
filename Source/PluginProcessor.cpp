@@ -3,7 +3,7 @@
 #include <optional>
 
 namespace {
-constexpr std::array<const char*, 47> ids{
+constexpr std::array<const char*, 49> ids{
     "glue.on", "glue.amount", "glue.lock", "phase.on", "phase.invert", "phase.delay",
     "phase.rotate", "phase.frequency", "unmask.on", "unmask.amount", "unmask.delta",
     "glue.agc", "glue.agcLock", "phase.agc", "phase.agcLock", "unmask.agc", "unmask.agcLock",
@@ -12,7 +12,7 @@ constexpr std::array<const char*, 47> ids{
     "tube.on","tube.drive","tube.amount","tube.source","tube.colour","tube.agc","tube.agcLock","tube.audition",
     "glue.timing","glue.attackMs","glue.releaseMs","glue.attackNote","glue.releaseNote",
     "unmask.timing","unmask.attackNote","unmask.releaseNote","view.range","view.hold",
-    "view.spectrum","view.minHz","view.maxHz"};
+    "view.spectrum","view.minHz","view.maxHz","unmask.attenuation","unmask.controlDb"};
 }
 
 BassDeamonProcessor::BassDeamonProcessor()
@@ -89,6 +89,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout BassDeamonProcessor::layout(
     choice("view.spectrum","Spectrum signal",{"PRE","POST"},1);
     continuous("view.minHz","Spectrum from (Hz)",0,19980,0);
     continuous("view.maxHz","Spectrum to (Hz)",20,20000,1000);
+    continuous("unmask.attenuation","UNMASK attenuation (dB)",0,24,6);
+    boolean("unmask.controlDb","UNMASK control in dB",true);
     return p;
 }
 
@@ -124,6 +126,7 @@ bassdeamon::Settings BassDeamonProcessor::readSettings() const noexcept {
     s.unmaskFrequency = value(21); s.unmaskWidth = value(22);
     s.unmaskAttackMs = value(23); s.unmaskReleaseMs = value(24);
     s.unmaskMaxCutDb = 3 * (1 + std::clamp(static_cast<int>(value(25)), 0, 3));
+    s.unmaskAttenuationDb=value(47);s.unmaskDirect=value(48)>.5f;
     s.active=value(18)>.5f;
     s.tube.enabled=value(26)>.5f;s.tube.driveDb=value(27);s.tube.amount=value(28);
     s.tube.sourceHz=value(29);s.tube.colour=value(30);s.tube.autoGain=value(31)>.5f;
@@ -260,14 +263,15 @@ void BassDeamonProcessor::timerCallback() {
     // Learn does not silently enable PHASE. User can compare with the active switch.
 }
 void BassDeamonProcessor::getStateInformation(juce::MemoryBlock& dest) {
-    auto state = parameters.copyState(); state.setProperty("schemaVersion", 5, nullptr);
+    auto state = parameters.copyState(); state.setProperty("schemaVersion", 6, nullptr);
+    state.setProperty("visualSpectrumView",spectrumView(),nullptr);
     for (size_t i = 0; i < runtimeSnapshot.size(); ++i)
         state.setProperty("runtime" + juce::String(static_cast<int>(i)), runtimeSnapshot[i].load(), nullptr);
     if (auto xml = state.createXml()) copyXmlToBinary(*xml, dest);
 }
 void BassDeamonProcessor::setStateInformation(const void* data, int bytes) {
     if (auto xml = getXmlFromBinary(data, bytes)) {
-        if (xml->hasTagName(parameters.state.getType()) && xml->getIntAttribute("schemaVersion", 1) <= 5) {
+        if (xml->hasTagName(parameters.state.getType()) && xml->getIntAttribute("schemaVersion", 1) <= 6) {
             if(xml->getIntAttribute("schemaVersion",1)<5)
                 for(size_t i=44;i<ids.size();++i){auto* param=parameters.getParameter(ids[i]);param->setValueNotifyingHost(param->getDefaultValue());}
             if(xml->getIntAttribute("schemaVersion",1)<4){
@@ -296,6 +300,11 @@ void BassDeamonProcessor::setStateInformation(const void* data, int bytes) {
                 const int oldRange=int(parameters.getRawParameterValue("view.range")->load());
                 limit->setValueNotifyingHost(limit->convertTo0to1(oldRange==0?1000.f:oldRange==1?2500.f:5000.f));
             }
+            if(xml->getIntAttribute("schemaVersion",1)<6){
+                auto* mode=parameters.getParameter("unmask.controlDb");mode->setValueNotifyingHost(0);
+                auto* amount=parameters.getParameter("unmask.attenuation");amount->setValueNotifyingHost(amount->convertTo0to1(6));
+            }
+            setSpectrumView(xml->getIntAttribute("visualSpectrumView",int(parameters.getRawParameterValue("view.spectrum")->load())));
             const bassdeamon::Engine::RuntimeState defaults{-24, 2, 20, 180, 0, 0, 0, 75,0};
             for (size_t i = 0; i < defaults.size(); ++i) {
                 const double value = xml->getDoubleAttribute("runtime" + juce::String(static_cast<int>(i)), defaults[i]);
@@ -329,9 +338,9 @@ void BassDeamonProcessor::loadStartingPoint(int preset) {
         auto* p = parameters.getParameter(id);
         p->beginChangeGesture(); p->setValueNotifyingHost(p->convertTo0to1(value)); p->endChangeGesture();
     };
-    if (preset == 1) { set("glue.amount", 0.45f); set("unmask.amount", 0.3f); set("unmask.width", 0.7f); set("unmask.release", 180); }
-    if (preset == 2) { set("glue.amount", 0.25f); set("unmask.amount", 0.65f); set("unmask.attack", 3); set("unmask.release", 90); set("unmask.maxCut", 3); }
-    if (preset == 3) { set("glue.amount", 0.2f); set("unmask.amount", 0.35f); set("unmask.track", 0); set("unmask.frequency", 48); set("unmask.width", 0.35f); set("unmask.release", 220); }
+    if (preset == 1) { set("unmask.attenuation",3.5f);set("glue.amount", 0.45f); set("unmask.amount", 0.3f); set("unmask.width", 0.7f); set("unmask.release", 180); }
+    if (preset == 2) { set("unmask.attenuation",12);set("glue.amount", 0.25f); set("unmask.amount", 0.65f); set("unmask.attack", 3); set("unmask.release", 90); set("unmask.maxCut", 3); }
+    if (preset == 3) { set("unmask.attenuation",6);set("glue.amount", 0.2f); set("unmask.amount", 0.35f); set("unmask.track", 0); set("unmask.frequency", 48); set("unmask.width", 0.35f); set("unmask.release", 220); }
     const bassdeamon::Engine::RuntimeState initial{-24, 2, 20, 180, 0, 0, 0, 75,0};
     for (size_t i = 0; i < initial.size(); ++i) restoredRuntime[i].store(static_cast<float>(initial[i]));
     restoreRequested.store(true);

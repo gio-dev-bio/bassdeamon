@@ -36,6 +36,7 @@ struct Settings {
     double delayMs = 0.0, rotationHz = 90.0;
     bool unmask = true, delta = false;
     double unmaskAmount = 0.4, outputDb = 0.0;
+    bool unmaskDirect=false;double unmaskAttenuationDb=6;
     std::array<AgcSettings, 3> agc{};
     bool unmaskTrack = true, unmaskHold = false;
     double unmaskFrequency = 75, unmaskWidth = 0.55;
@@ -247,7 +248,7 @@ public:
         inputPowerMeter = outputPowerMeter = outputHeld = kickHeld = 0;
         focusHz = 75; trackedFocusHz = 75;
         cachedRotationHz = -1; cachedAllpassA = 0;
-        cutDb.fill(0); kickE.fill(0); bassE.fill(0);
+        cutDb.fill(0); kickE.fill(0); bassE.fill(0);directCutDb=0;directMix=0;directFilters={};
         allpassX.fill(0); allpassY.fill(0);
         for (auto& d : delays) d.prepare(sampleRate);
         learner.prepare(sampleRate);tube.prepare(sampleRate);tubeAgc.prepare(sampleRate,5000);
@@ -296,7 +297,7 @@ public:
         bassE.fill(0); kickE.fill(0); bassEnergy = envelope = kickFast = kickSlow = 0;
         inputPowerMeter = outputPowerMeter = outputHeld = kickHeld = 0;
         if(!preserveLearn)learner.cancel();
-        tube.clear();
+        tube.clear();directCutDb=0;directFilters={};
     }
 
     void process(float* const* bass, int channels, const float* const* kick, int kickChannels,
@@ -326,6 +327,7 @@ public:
             rotationHz = s.rotationHz; outputGain = gain(s.outputDb); smoothed = true;
             previousDelaySamples=delaySamples;delayFade.reset(1);polarityRamp.reset(polarity);
             deltaMix = s.delta && s.unmask && !(s.tube.enabled&&s.tube.audition) ? 1 : 0;
+            directMix=s.unmaskDirect?1:0;
             smoothedFilterQ = 3.5 - 2.6 * std::clamp(s.unmaskWidth, 0.0, 1.0);
         }
         meters.unmaskAttackMs=std::clamp(s.unmaskAttackMs,1.0,50.0);
@@ -481,7 +483,9 @@ public:
             if(tubeGain!=1)for(auto& v:x)v*=tubeGain;
             meters.tubeAgcDb=db(tubeGain);budget-=std::max(0.0,meters.tubeAgcDb);
             const auto beforeUnmask = x;
-            double maxCut = 0;
+            double maxCut = 0,directActivity=0;
+            const double maxWeight=*std::max_element(focusWeights.begin(),focusWeights.end());
+            auto legacy=x;
             for (size_t b = 0; b < frequencies.size(); ++b) {
                 double be = 0, ke = 0;
                 for (int c = 0; c < channels; ++c) {
@@ -500,9 +504,26 @@ public:
                 const double target = -unmaskDepth * activity * focusWeights[b];
                 cutDb[b] = follow(cutDb[b], target, target < cutDb[b] ? cutAttackA : cutReleaseA);
                 maxCut = std::max(maxCut, -cutDb[b]);
-                for (int c = 0; c < channels; ++c) x[c] = filters[b][c].tick(x[c]);
+                directActivity=std::max(directActivity,activity*focusWeights[b]/std::max(1e-12,maxWeight));
+                for (int c = 0; c < channels; ++c) legacy[c] = filters[b][c].tick(legacy[c]);
             }
-            for (int c = 0; c < channels; ++c) x[c] = beforeUnmask[c] + unmaskMix*(x[c]-beforeUnmask[c]);
+            // dB control is a calibrated single dynamic bell: the requested
+            // attenuation is its centre gain at full detector activity. Legacy
+            // sessions keep the former distributed-band path until dB is selected.
+            const double directTarget=-std::clamp(s.unmaskAttenuationDb,0.0,24.0)*directActivity;
+            directCutDb=follow(directCutDb,directTarget,directTarget<directCutDb?cutAttackA:cutReleaseA);
+            if(controlCounter%32==0){
+                directFilters[0].peak(focusHz,smoothedFilterQ,directCutDb,sampleRate);
+                auto& a=directFilters[0];auto& b=directFilters[1];
+                b.b0=a.b0;b.b1=a.b1;b.b2=a.b2;b.a1=a.a1;b.a2=a.a2;
+                if(std::abs(directCutDb)<1e-12)b.z1=b.z2=0;
+            }
+            directMix=follow(directMix,s.unmaskDirect?1:0,smoothA);
+            for (int c = 0; c < channels; ++c){
+                const double direct=directFilters[size_t(c)].tick(beforeUnmask[c]);
+                const double processed=directMix==0?legacy[c]:directMix==1?direct:legacy[c]+directMix*(direct-legacy[c]);
+                x[c]=beforeUnmask[c]+unmaskMix*(processed-beforeUnmask[c]);
+            }
             const auto afterUnmask = x;
             const double unmaskAgc = compensate(2, power(beforeUnmask, channels), power(x, channels), unmaskMix);
             outputGain = follow(outputGain, trimTarget, smoothA);
@@ -519,7 +540,7 @@ public:
                 static_cast<double>(bass[0][n])*bass[0][n]/channels
                 + (channels == 2 ? static_cast<double>(bass[1][n])*bass[1][n]/channels : 0), energyA);
             meters.glueReductionDb = glueReduction * glueMix;
-            meters.unmaskReductionDb = maxCut * unmaskMix; // maximum individual band, not total cut
+            meters.unmaskReductionDb = (s.unmaskDirect?-directCutDb:maxCut) * unmaskMix; // maximum individual band, not total cut
         }
         meters.tubeAddedDb=db(std::sqrt(tube.addedPower()));
         meters.peak = outputHeld; meters.kickPeak = kickHeld;
@@ -545,6 +566,7 @@ private:
     double thresholdDb = -24, ratio = 2, attackMs = 20, releaseMs = 180, glueReduction = 0;
     double energyA = 0, rmsA = 0, smoothA = 0, bandA = 0, parameterA = 0;
     double kickFastA = 0, kickSlowA = 0, attackA = 0, releaseA = 0, cutAttackA = 0, cutReleaseA = 0;
+    std::array<Biquad,2> directFilters{};double directCutDb=0,directMix=0;
     double glueMix = 0, phaseMix = 0, unmaskMix = 0, delaySamples = 0, polarity = 1;
     double rotationMix = 0, rotationHz = 90, outputGain = 1, kickIntervalMs = 0;
     double deltaMix = 0;

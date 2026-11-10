@@ -29,6 +29,8 @@ public:
     void setStateInformation(const void*, int) override;
     void selectAB(int slot);
     void loadStartingPoint(int preset);
+    int spectrumView() const noexcept { return visualSpectrumView.load(std::memory_order_relaxed); }
+    void setSpectrumView(int view) noexcept { visualSpectrumView.store(view?1:0,std::memory_order_relaxed); }
     int selectedAB() const noexcept { return abSlot; }
     void requestLearn() noexcept { learnRequested.store(true); }
     bool undoEdit();
@@ -59,12 +61,13 @@ private:
     void parameterGestureChanged(int,bool starting) override;
     void publishMeters() noexcept;
     bassdeamon::Engine engine;
-    std::array<std::atomic<float>*, 47> raw{};
+    std::array<std::atomic<float>*, 49> raw{};
     std::atomic<bool> learnRequested{false}, resultReady{false};
     std::atomic<float> resultDelay{0};
     std::atomic<bool> resultInvert{false};
     std::array<std::atomic<float>, 9> runtimeSnapshot{}, restoredRuntime{};
     std::array<juce::MemoryBlock, 2> abStates;
+    std::atomic<int> visualSpectrumView{1};
     int abSlot = 0; // message-thread only; A/B survives editor close/reopen.
     std::atomic<bool> restoreRequested{false};
     std::atomic<bool> historyResetRequested{false};
