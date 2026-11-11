@@ -40,6 +40,7 @@ private:
     void addChoice(const char*,const juce::StringArray&,juce::Rectangle<int>);
     void paintConsole(juce::Graphics&);
     void paintSpectrum(juce::Graphics&);
+    int paintSpectrumPlot(juce::Graphics&, juce::Rectangle<float>, bool post, bool overlay);
     void paintWave(juce::Graphics&);
     void paintVU(juce::Graphics&);
     bool spectrumIsPost() const;
@@ -57,7 +58,10 @@ private:
     bassdeamon::SpectrumDisplay spectrumDisplay;
     juce::ComboBox analyzerRateBox;
     juce::TextButton sumButton{"SUM K+B"};
-    juce::TextButton spectrumPre{"PRE"},spectrumPost{"POST"},spectrumBoth{"BOTH"};
+    juce::TextButton spectrumPre{"PRE"},spectrumPost{"POST"},spectrumBoth{"BOTH"},spectrumSplit{"SPLIT"};
+    juce::TextButton kickEqLearn{"LEARN"}, dryCompare{"DRY"}, matchCompare{"LEVEL MATCH"};
+    juce::Slider kickEqFrequency,kickEqCut;
+    std::unique_ptr<State::SliderAttachment> kickEqFrequencyAttachment,kickEqCutAttachment;
     juce::Slider focusMin,focusMax;
     std::unique_ptr<State::SliderAttachment> focusMinAttachment,focusMaxAttachment;
     juce::Slider spectrumMin,spectrumMax;

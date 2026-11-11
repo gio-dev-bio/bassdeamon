@@ -3,7 +3,7 @@
 #include <optional>
 
 namespace {
-constexpr std::array<const char*, 52> ids{
+constexpr std::array<const char*, 55> ids{
     "glue.on", "glue.amount", "glue.lock", "phase.on", "phase.invert", "phase.delay",
     "phase.rotate", "phase.frequency", "unmask.on", "unmask.amount", "unmask.delta",
     "glue.agc", "glue.agcLock", "phase.agc", "phase.agcLock", "unmask.agc", "unmask.agcLock",
@@ -12,7 +12,7 @@ constexpr std::array<const char*, 52> ids{
     "tube.on","tube.drive","tube.amount","tube.source","tube.colour","tube.agc","tube.agcLock","tube.audition",
     "glue.timing","glue.attackMs","glue.releaseMs","glue.attackNote","glue.releaseNote",
     "unmask.timing","unmask.attackNote","unmask.releaseNote","view.range","view.hold",
-    "view.spectrum","view.minHz","view.maxHz","unmask.attenuation","unmask.controlDb","unmask.stereoMode","unmask.focusMinHz","unmask.focusMaxHz"};
+    "view.spectrum","view.minHz","view.maxHz","unmask.attenuation","unmask.controlDb","unmask.stereoMode","unmask.focusMinHz","unmask.focusMaxHz","kickEq.on","kickEq.frequency","kickEq.cut"};
 }
 
 BassDeamonProcessor::BassDeamonProcessor()
@@ -94,6 +94,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout BassDeamonProcessor::layout(
     choice("unmask.stereoMode","UNMASK stereo mode",{"Stereo","Mid","Side"},0);
     continuous("unmask.focusMinHz","Auto Focus minimum (Hz)",30,250,30);
     continuous("unmask.focusMaxHz","Auto Focus maximum (Hz)",30,250,250);
+    boolean("kickEq.on","Kick EQ enabled",false);
+    continuous("kickEq.frequency","Kick EQ frequency (Hz)",0,130,0);
+    continuous("kickEq.cut","Kick EQ cut (dB)",0,4,1.5f);
     return p;
 }
 
@@ -103,6 +106,8 @@ void BassDeamonProcessor::prepareToPlay(double sr, int maximumBlock) {
     setRateAndBufferSizeDetails(sr,maximumBlock);
     cpuLoad.reset(sr,std::max(1,maximumBlock));
     engine.prepare(sr); setLatencySamples(0);
+    kickEqGeneration.fetch_add(1);
+    kickEqStatus.store(0);
     bassdeamon::Engine::RuntimeState r{};
     const bool restoring = restoreRequested.load();
     for (size_t i = 0; i < r.size(); ++i) r[i] = restoring ? restoredRuntime[i].load() : runtimeSnapshot[i].load();
@@ -136,6 +141,11 @@ bassdeamon::Settings BassDeamonProcessor::readSettings() const noexcept {
     s.unmaskStereoMode = static_cast<bassdeamon::UnmaskStereoMode>(std::clamp(int(value(49)),0,2));
     s.unmaskFocusMinHz = value(50);
     s.unmaskFocusMaxHz = value(51);
+    s.kickEqEnabled = value(52) > .5f;
+    s.kickEqFrequency = value(53);
+    s.kickEqCut = value(54);
+    s.auditionDry = compareDry.load(std::memory_order_relaxed);
+    s.matchEnabled = compareMatch.load(std::memory_order_relaxed);
     s.active=value(18)>.5f;
     s.tube.enabled=value(26)>.5f;s.tube.driveDb=value(27);s.tube.amount=value(28);
     s.tube.sourceHz=value(29);s.tube.colour=value(30);s.tube.autoGain=value(31)>.5f;
@@ -190,6 +200,29 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     const float* kick[2]{nullptr, nullptr};
     const int sideChannels = side.getNumChannels();
     for (int c = 0; c < sideChannels; ++c) kick[c] = side.getReadPointer(c);
+    auto captureState = kickEqCaptureState.load(std::memory_order_acquire);
+    const auto generation = kickEqGeneration.load(std::memory_order_relaxed);
+    if (captureState == CaptureState::recording &&
+        (!settings.active || generation != captureGeneration)) {
+        captureState = CaptureState::idle;
+        kickEqCaptureState.store(captureState, std::memory_order_release);
+        kickEqStatus.store(0);
+    }
+    if (captureState != CaptureState::ready && kickEqLearnRequested.exchange(false)) {
+        if (settings.active && sideChannels > 0) {
+            kickEqCapture.start(getSampleRate());
+            captureStartFrequency = float(settings.kickEqFrequency);
+            captureGeneration = generation;
+            captureState = CaptureState::recording;
+            kickEqCaptureState.store(captureState, std::memory_order_release);
+            kickEqStatus.store(1);
+        } else {
+            kickEqStatus.store(2);
+        }
+    }
+    if (captureState == CaptureState::recording &&
+        kickEqCapture.push(kick, sideChannels, bass.getNumSamples()))
+        kickEqCaptureState.store(CaptureState::ready, std::memory_order_release);
     if(!analysisQueue.enabled.load(std::memory_order_relaxed)){
         engine.process(bass.getArrayOfWritePointers(),bass.getNumChannels(),
                        sideChannels>0?kick:nullptr,sideChannels,bass.getNumSamples(),settings,bpm);
@@ -236,11 +269,16 @@ void BassDeamonProcessor::processBlockBypassed(juce::AudioBuffer<float>& buffer,
             analysisQueue.push(frame);
         }
     }
+    if (kickEqCaptureState.load(std::memory_order_relaxed) == CaptureState::recording) {
+        kickEqCaptureState.store(CaptureState::idle, std::memory_order_release);
+        kickEqStatus.store(0);
+    }
     midi.clear(); wasBypassed = true;
     // Matching main input/output layouts and zero algorithmic latency: leave bass untouched.
 }
 void BassDeamonProcessor::publishMeters() noexcept {
     const auto& m = engine.getMeters();
+    comparisonGainDb.store(float(m.matchGainDb), std::memory_order_relaxed);
     tubeAddedDb.store(float(m.tubeAddedDb));unmaskAttack.store(float(m.unmaskAttackMs));unmaskRelease.store(float(m.unmaskReleaseMs));
     tubeGainDb.store(static_cast<float>(m.tubeAgcDb));
     glueReduction.store(static_cast<float>(m.glueReductionDb));
@@ -260,6 +298,26 @@ void BassDeamonProcessor::publishMeters() noexcept {
 }
 void BassDeamonProcessor::timerCallback() {
     refreshHistory();
+    if (kickEqCaptureState.load(std::memory_order_acquire) == CaptureState::ready) {
+        const double hz = kickEqCapture.frequency();
+        const bool current = captureGeneration == kickEqGeneration.load() &&
+            captureStartFrequency == raw[53]->load();
+        if (current && hz > 0) {
+            undoManager.beginNewTransaction("Learn kick frequency");
+            const auto set = [&](const char* id, float value) {
+                auto* parameter = parameters.getParameter(id);
+                parameter->beginChangeGesture();
+                parameter->setValueNotifyingHost(parameter->convertTo0to1(value));
+                parameter->endChangeGesture();
+            };
+            set("kickEq.frequency", float(hz));
+            set("kickEq.on", 1);
+            parameters.copyState();
+            undoManager.beginNewTransaction();
+        }
+        kickEqStatus.store(current ? (hz > 0 ? 3 : 2) : 0);
+        kickEqCaptureState.store(CaptureState::idle, std::memory_order_release);
+    }
     if (!resultReady.exchange(false)) return;
     undoManager.beginNewTransaction("Learn phase");
     // Host parameter notifications happen on the message thread, never in the audio callback.
@@ -272,7 +330,7 @@ void BassDeamonProcessor::timerCallback() {
     // Learn does not silently enable PHASE. User can compare with the active switch.
 }
 void BassDeamonProcessor::getStateInformation(juce::MemoryBlock& dest) {
-    auto state = parameters.copyState(); state.setProperty("schemaVersion", 7, nullptr);
+    auto state = parameters.copyState(); state.setProperty("schemaVersion", 8, nullptr);
     state.setProperty("visualSpectrumView",spectrumView(),nullptr);
     state.setProperty("visualAnalyzerRate",analyzerRate(),nullptr);
     for (size_t i = 0; i < runtimeSnapshot.size(); ++i)
@@ -281,7 +339,16 @@ void BassDeamonProcessor::getStateInformation(juce::MemoryBlock& dest) {
 }
 void BassDeamonProcessor::setStateInformation(const void* data, int bytes) {
     if (auto xml = getXmlFromBinary(data, bytes)) {
-        if (xml->hasTagName(parameters.state.getType()) && xml->getIntAttribute("schemaVersion", 1) <= 7) {
+        if (xml->hasTagName(parameters.state.getType()) && xml->getIntAttribute("schemaVersion", 1) <= 8) {
+            kickEqGeneration.fetch_add(1);
+            kickEqLearnRequested.store(false);
+            kickEqStatus.store(0);
+            if (xml->getIntAttribute("schemaVersion", 1) < 8) {
+                for (size_t i = 52; i < ids.size(); ++i) {
+                    auto* parameter = parameters.getParameter(ids[i]);
+                    parameter->setValueNotifyingHost(parameter->getDefaultValue());
+                }
+            }
             if (xml->getIntAttribute("schemaVersion", 1) < 7) {
                 for (size_t i = 49; i < ids.size(); ++i) {
                     auto* parameter = parameters.getParameter(ids[i]);
@@ -346,6 +413,9 @@ void BassDeamonProcessor::selectAB(int slot) {
 }
 void BassDeamonProcessor::loadStartingPoint(int preset) {
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    kickEqGeneration.fetch_add(1);
+    kickEqLearnRequested.store(false);
+    kickEqStatus.store(0);
     refreshHistory();undoManager.beginNewTransaction("Starting point");
     for (const auto* id : ids) {
         auto* p = parameters.getParameter(id);

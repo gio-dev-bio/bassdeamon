@@ -47,6 +47,8 @@ jobs:
         run: build/usability_tests > usability-results.txt
       - name: Record new feature contracts and timings
         run: build/new_feature_tests tube50.f32 > new-feature-results.txt
+      - name: Measure Kick EQ and comparison callback cost
+        run: build/kick_eq_tests --benchmark | tee kick-eq-performance.csv
       - name: Render the real plugin GUI for visual review
         run: build/plugin_tests_artefacts/Release/plugin_tests --capture "$PWD/GUI-Preview.png"
       - name: Sign the complete bundle after manifest generation
@@ -63,22 +65,28 @@ jobs:
           arch -x86_64 validator/pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --repeat 2 --randomise --random-seed 2702 --timeout-ms 60000 --validate "$PWD/build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3" 2>&1 | tee pluginval-results.txt
       - name: Package ad-hoc signed development plugin
         run: |
-          ditto -c -k --sequesterRsrc --keepParent build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3 BassDeamon-0.2.10-macOS-intel.zip
+          package="$PWD/BassDeamon-0.2.11-macOS-intel.zip"
+          (cd build/BassDeamon_artefacts/Release/VST3 && zip -Xqr "$package" BassDeamon.vst3)
+          mkdir -p package-verification
+          unzip -q "$package" -d package-verification
+          codesign --verify --strict --verbose=2 package-verification/BassDeamon.vst3
           mkdir -p intel-package
-          sed '1s|.*|BASSDEAMON 0.2.10 — VST3 macOS Intel (x86_64)|' INSTALL.txt > intel-package/INSTALL.txt
-          zip -j BassDeamon-0.2.10-macOS-intel.zip intel-package/INSTALL.txt docs/GUIDA_0.2.10_IT.md analyzer-matrix.csv analyzer-matrix-results.txt analyzer-results.txt validation-results.txt pluginval-results.txt attenuation-results.txt
+          sed '1s|.*|BASSDEAMON 0.2.11 — VST3 macOS Intel (x86_64)|' INSTALL.txt > intel-package/INSTALL.txt
+          zip -Xj BassDeamon-0.2.11-macOS-intel.zip intel-package/INSTALL.txt docs/GUIDA_0.2.11_IT.md analyzer-matrix.csv analyzer-matrix-results.txt analyzer-results.txt validation-results.txt pluginval-results.txt attenuation-results.txt kick-eq-performance.csv
           lipo build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3/Contents/MacOS/BassDeamon -verify_arch x86_64
-          unzip -t BassDeamon-0.2.10-macOS-intel.zip
+          unzip -t BassDeamon-0.2.11-macOS-intel.zip
       - uses: actions/upload-artifact@v4
         with:
-          name: BassDeamon-0.2.10-macOS-intel
+          name: BassDeamon-0.2.11-macOS-intel
           retention-days: 14
           path: |
-            BassDeamon-0.2.10-macOS-intel.zip
+            BassDeamon-0.2.11-macOS-intel.zip
             GUI-Post-20dB.png
             GUI-Pre-20dB.png
             GUI-Preview.png
             GUI-Both.png
+            GUI-Split.png
+            kick-eq-performance.csv
             GUI-Pre.png
             GUI-Overlap.png
             GUI-Overlap-Pre.png

@@ -28,6 +28,8 @@ enum class UnmaskStereoMode { stereo, mid, side };
 
 struct Settings {
     bool active = true;
+    bool kickEqEnabled = false, matchEnabled = false, auditionDry = false;
+    double kickEqFrequency = 0, kickEqCut = 1.5;
     TubeSettings tube;
     bool glue = true, glueLocked = false;
     double glueAmount = 0.35;
@@ -49,6 +51,7 @@ struct Settings {
 constexpr size_t bandCount = 12;
 inline constexpr std::array<double, bandCount> bandFrequencies{30, 38, 48, 60, 75, 94, 118, 148, 186, 234, 295, 370};
 struct Meters {
+    double matchGainDb = 0;
     double glueReductionDb = 0.0, unmaskReductionDb = 0.0;
     std::array<double, 3> agcDb{};
     double peak = 0.0, kickPeak = 0.0, inputRmsDb = -120, outputRmsDb = -120;
@@ -244,6 +247,14 @@ class Engine {
 public:
     void prepare(double sr) {
         sampleRate = std::clamp(sr, 8000.0, 384000.0);
+        kickEqFilters = {};
+        nextKickEqFilters = {};
+        kickEqRetune.reset(1);
+        kickEqHz = kickEqDb = 0;
+        kickEqMix.reset(0);
+        monitorMix.reset(0);
+        monitorGain.reset(1);
+        wetPower = 0;
         bassEnergy = envelope = kickFast = kickSlow = 0;
         thresholdDb = -24; ratio = 2; attackMs = 20; releaseMs = 180;
         glueReduction = 0; onsetClock = lastOnset = 0; kickIntervalMs = 0;
@@ -302,6 +313,9 @@ public:
         inputPowerMeter = outputPowerMeter = outputHeld = kickHeld = 0;
         if(!preserveLearn)learner.cancel();
         tube.clear();directCutDb=0;directFilters={};
+        for (auto& filter : kickEqFilters) filter.z1 = filter.z2 = 0;
+        for (auto& filter : nextKickEqFilters) filter.z1 = filter.z2 = 0;
+        wetPower = 0;
     }
 
     void process(float* const* bass, int channels, const float* const* kick, int kickChannels,
@@ -314,6 +328,7 @@ public:
         if(!s.active&&globalRamp.finished()){
             if(!globalPaused){clearHistory();globalPaused=true;}
             // Leave every input bit untouched, including IEEE signed zeros/subnormals.
+            meters.matchGainDb=0;
             meters.glueReductionDb=meters.unmaskReductionDb=meters.tubeAgcDb=0;meters.agcDb.fill(0);meters.cutsDb.fill(0);
             for(int n=0;n<samples;++n){
                 std::array<double,2> dry{};for(int c=0;c<channels;++c)dry[c]=bass[c][n];
@@ -354,6 +369,40 @@ public:
         polarityRamp.set(s.invert?-1:1,rampSamples);
         midMix.set(midTarget, rampSamples);
         sideMix.set(sideTarget, rampSamples);
+        const bool eqOn = s.kickEqEnabled && s.kickEqFrequency >= 30 && s.kickEqCut > 0;
+        const double eqHz = std::clamp(s.kickEqFrequency, 30.0, 130.0);
+        const double eqDb = std::clamp(s.kickEqCut, 0.0, 4.0);
+        if (eqOn && kickEqRetune.finished() && (eqHz != kickEqHz || eqDb != kickEqDb)) {
+            kickEqHz = eqHz;
+            kickEqDb = eqDb;
+            const bool retune = kickEqMix.value() > 0;
+            auto& filters = retune ? nextKickEqFilters : kickEqFilters;
+            filters = {};
+            for (auto& filter : filters)
+                filter.peak(kickEqHz, 3.0, -kickEqDb, sampleRate);
+            if (retune) {
+                kickEqRetune.reset(0);
+                kickEqRetune.set(1, rampSamples);
+            }
+        }
+        kickEqMix.set(eqOn ? 1 : 0, rampSamples);
+        const bool runEq = eqOn || !kickEqMix.finished();
+        if (!runEq) {
+            for (auto& filter : kickEqFilters) filter.z1 = filter.z2 = 0;
+            if (!kickEqRetune.finished()) {
+                kickEqFilters = nextKickEqFilters;
+                for (auto& filter : kickEqFilters) filter.z1 = filter.z2 = 0;
+                kickEqRetune.reset(1);
+            }
+        }
+        const bool normalMonitoring = !s.delta && !(s.tube.enabled && s.tube.audition);
+        monitorMix.set(s.auditionDry && normalMonitoring ? 1 : 0, rampSamples);
+        const bool match = s.matchEnabled && normalMonitoring;
+        const double matchDb = match && inputPowerMeter > 1e-9 && wetPower > 1e-9
+            ? std::clamp(10 * std::log10(inputPowerMeter / wetPower), -12.0, 12.0) : 0;
+        monitorGain.set(matchDb == 0 ? 1 : gain(matchDb), rampSamples);
+        const bool monitor = match || !monitorMix.finished() || monitorMix.value() != 0 || !monitorGain.finished();
+        if (!match) wetPower = 0;
         for (int n = 0; n < samples; ++n) {
             const float dryLeft=bass[0][n],dryRight=channels==2?bass[1][n]:0;
             const double activeMix=globalRamp.next();
@@ -367,8 +416,25 @@ public:
                 k[0] = std::isfinite(kick[0][n]) ? kick[0][n] : 0;
                 k[1] = kickChannels > 1 ? (std::isfinite(kick[1][n]) ? kick[1][n] : 0) : k[0];
             }
-            const double inputPower = power(x, channels), kp = power(k, 2);
+            double inputPower = power(x, channels);
             inputPowerMeter = follow(inputPowerMeter, inputPower, energyA);
+            if (runEq) {
+                const double mix = kickEqMix.next();
+                if (kickEqRetune.finished()) {
+                    for (int c = 0; c < channels; ++c)
+                        x[c] += mix * (kickEqFilters[c].tick(x[c]) - x[c]);
+                } else {
+                    const double fade = kickEqRetune.next();
+                    for (int c = 0; c < channels; ++c) {
+                        const double old = kickEqFilters[c].tick(x[c]);
+                        const double next = nextKickEqFilters[c].tick(x[c]);
+                        x[c] += mix * (old + fade * (next - old) - x[c]);
+                    }
+                    if (kickEqRetune.finished()) kickEqFilters = nextKickEqFilters;
+                }
+                inputPower = power(x, channels);
+            }
+            const double kp = power(k, 2);
             kickHeld = std::max(std::max(std::abs(k[0]), std::abs(k[1])), kickHeld * peakA);
             bassEnergy = follow(bassEnergy, inputPower, energyA);
             envelope = follow(envelope, inputPower, rmsA);
@@ -577,20 +643,31 @@ public:
                 applySelectedChange(x, x[0] * (unmaskAgc - 1), x[1] * (unmaskAgc - 1));
             outputGain = follow(outputGain, trimTarget, smoothA);
             deltaMix = follow(deltaMix, s.delta && s.unmask && !(s.tube.enabled&&s.tube.audition) ? 1 : 0, smoothA);
+            const double listenDry = monitor ? monitorMix.next() : 0;
+            const double listenGain = monitor ? monitorGain.next() : 1;
+            double wet = 0;
             for (int c = 0; c < channels; ++c) {
                 // Delta is removed bass BEFORE AGC/output trim; never includes kick.
                 const double normal = (linked ? x[c]*unmaskAgc : x[c])*outputGain;
-                const double out = normal + deltaMix*(beforeUnmask[c]-afterUnmask[c]-normal);
+                double out = normal + deltaMix*(beforeUnmask[c]-afterUnmask[c]-normal);
                 const float dry=c==0?dryLeft:dryRight;
+                if (monitor) {
+                    if (match) wet += out * out;
+                    const double reference = std::isfinite(dry) ? dry : 0;
+                    const double matched = out * listenGain;
+                    out = matched + listenDry * (reference - matched);
+                }
                 bass[c][n] = activeMix==0?dry:static_cast<float>(activeMix==1?out:static_cast<double>(dry)+activeMix*(out-dry));
                 outputHeld = std::max(std::abs(static_cast<double>(bass[c][n])), outputHeld * peakA);
             }
+            if (match) wetPower = follow(wetPower, wet / channels, energyA);
             outputPowerMeter = follow(outputPowerMeter,
                 static_cast<double>(bass[0][n])*bass[0][n]/channels
                 + (channels == 2 ? static_cast<double>(bass[1][n])*bass[1][n]/channels : 0), energyA);
             meters.glueReductionDb = glueReduction * glueMix;
             meters.unmaskReductionDb = (s.unmaskDirect?-directCutDb:maxCut) * unmaskMix; // maximum individual band, not total cut
         }
+        meters.matchGainDb = match ? db(monitorGain.value()) : 0;
         meters.tubeAddedDb=db(std::sqrt(tube.addedPower()));
         meters.peak = outputHeld; meters.kickPeak = kickHeld;
         meters.inputRmsDb = db(std::sqrt(inputPowerMeter)); meters.outputRmsDb = db(std::sqrt(outputPowerMeter));
@@ -602,6 +679,9 @@ public:
         }
     }
 private:
+    std::array<Biquad, 2> kickEqFilters{}, nextKickEqFilters{};
+    Ramp kickEqMix, kickEqRetune, monitorMix, monitorGain;
+    double kickEqHz = 0, kickEqDb = 0, wetPower = 0;
     static constexpr auto frequencies = bandFrequencies;
     std::array<std::array<Biquad, 2>, bandCount> detectorsBass{}, detectorsKick{}, filters{};
     std::array<double, bandCount> bassE{}, kickE{}, cutDb{}, focusWeights{};

@@ -2,6 +2,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "Dsp.h"
 #include "Analyzer.h"
+#include "KickEqLearn.h"
 #include <atomic>
 
 class BassDeamonProcessor final : public juce::AudioProcessor, private juce::Timer, private juce::AudioProcessorParameter::Listener {
@@ -32,8 +33,12 @@ public:
     int analyzerRate() const noexcept { return visualAnalyzerRate.load(std::memory_order_relaxed); }
     void setAnalyzerRate(int value) noexcept { visualAnalyzerRate.store(std::clamp(value,0,3),std::memory_order_relaxed); }
     int spectrumView() const noexcept { return visualSpectrumView.load(std::memory_order_relaxed); }
-    void setSpectrumView(int view) noexcept { visualSpectrumView.store(juce::jlimit(0,2,view),std::memory_order_relaxed); }
+    void setSpectrumView(int view) noexcept { visualSpectrumView.store(juce::jlimit(0,3,view),std::memory_order_relaxed); }
     int selectedAB() const noexcept { return abSlot; }
+    void requestKickEqLearn() noexcept { kickEqLearnRequested.store(true); }
+    std::atomic<bool> compareDry{false}, compareMatch{false};
+    std::atomic<float> comparisonGainDb{0};
+    std::atomic<int> kickEqStatus{0}; // idle, recording, failed, locked
     void requestLearn() noexcept { learnRequested.store(true); }
     bool undoEdit();
     bool redoEdit();
@@ -63,7 +68,14 @@ private:
     void parameterGestureChanged(int,bool starting) override;
     void publishMeters() noexcept;
     bassdeamon::Engine engine;
-    std::array<std::atomic<float>*, 52> raw{};
+    bassdeamon::KickEqCapture kickEqCapture;
+    enum class CaptureState { idle, recording, ready };
+    std::atomic<CaptureState> kickEqCaptureState{CaptureState::idle};
+    std::atomic<bool> kickEqLearnRequested{false};
+    std::atomic<unsigned> kickEqGeneration{0};
+    unsigned captureGeneration = 0; // published with CaptureState::ready
+    float captureStartFrequency = 0;
+    std::array<std::atomic<float>*, 55> raw{};
     std::atomic<bool> learnRequested{false}, resultReady{false};
     std::atomic<float> resultDelay{0};
     std::atomic<bool> resultInvert{false};

@@ -28,7 +28,9 @@ int interactionTests(){
         const auto before=a.parameters.copyState().toXmlString();
         juce::AudioBuffer<float> x(3,256),y(3,256);juce::MidiBuffer midi;
         for(int block=0;block<360;++block){
-            if(block%2)gui->spectrumPre.onClick();else gui->spectrumPost.onClick();
+            if(block%3==0)gui->spectrumSplit.onClick();
+            else if(block%3==1)gui->spectrumPre.onClick();
+            else gui->spectrumPost.onClick();
             if(block%30==0)gui->analyzerRateBox.setSelectedId(1+(block/30)%4,juce::sendNotificationSync);
             for(int n=0;n<256;++n){const double t=(block*256+n)/48000.;const float bass=float(.3*std::sin(2*bassdeamon::pi*55*t)+.08*std::sin(2*bassdeamon::pi*110*t));
                 x.setSample(0,n,bass);x.setSample(1,n,bass*.85f);x.setSample(2,n,float(.5*std::exp(-std::fmod(t,.5)*25)*std::sin(2*bassdeamon::pi*57*t)));}
@@ -100,7 +102,7 @@ int interactionTests(){
     for(auto* button:{&editor->spectrumPre,&editor->spectrumPost,&editor->spectrumBoth})
         ensure(editor->face.getComponentAt(button->getBounds().getCentre())==button,"Spectrum selector hit target covered");
     for(auto* limit:{&editor->focusMin,&editor->focusMax})
-        ensure(limit->getY()==613 && limit->getBottom()<editor->attenuationKnob->getY(),
+        ensure(limit->getY()==677 && limit->getBottom()<editor->attenuationKnob->getY(),
                "Auto Focus range controls must be above the UNMASK knobs");
     // Arbitrary typed values, not the former fixed frequency presets.
     editor->spectrumMin.setValue(37.5,juce::sendNotificationSync);
@@ -242,6 +244,34 @@ int interactionTests(){
     ensure(get("phase.on")==0,"Learn silently enabled PHASE");
     ensure(p.undoEdit()&&std::abs(get("phase.delay")-delayBeforeLearn)<.001&&get("phase.invert")==invertBeforeLearn,"Learn undo incomplete");
     ensure(p.redoEdit()&&std::abs(get("phase.delay")-2)<.26&&get("phase.invert")==1,"Learn redo incomplete");
+    ensure(editor->face.getComponentAt(editor->kickEqLearn.getBounds().getCentre())==&editor->kickEqLearn,
+           "Kick EQ Learn hit target covered");
+    const auto captureKick = [&](bool hasKick) {
+        editor->kickEqLearn.onClick();
+        for (int pos=0;pos<4*48000;pos+=256) {
+            host.time=std::fmod(pos/48000.,.5);
+            for(int n=0;n<256;++n) {
+                const double age=std::fmod((pos+n)/48000.,.5);
+                buffer.setSample(0,n,0);
+                buffer.setSample(1,n,hasKick?float(.6*std::exp(-age*21)*std::sin(2*bassdeamon::pi*60*age)):0);
+            }
+            p.processBlock(buffer,midi);
+        }
+        p.timerCallback();
+    };
+    captureKick(true);
+    const float lockedHz=get("kickEq.frequency");
+    ensure(std::abs(lockedHz-60)<1 && get("kickEq.on")>.5f,"Kick EQ did not apply learned centre");
+    captureKick(false);
+    ensure(p.kickEqStatus.load()==2 && get("kickEq.frequency")==lockedHz,"Failed learn replaced locked centre");
+    juce::MemoryBlock eqState;
+    p.getStateInformation(eqState);
+    set("kickEq.frequency",80);
+    p.setStateInformation(eqState.getData(),int(eqState.getSize()));
+    ensure(get("kickEq.frequency")==lockedHz,"Kick EQ centre was not recalled");
+    editor->matchCompare.onClick();editor->dryCompare.onClick();
+    ensure(p.compareMatch.load()&&p.compareDry.load(),"Comparison controls did not toggle");
+    editor->matchCompare.onClick();editor->dryCompare.onClick();
     // Schema-3 sessions restore the original timing modes on an existing instance.
     auto old=p.parameters.copyState();old.setProperty("schemaVersion",3,nullptr);
     const juce::StringArray newIds{"glue.timing","glue.attackMs","glue.releaseMs","glue.attackNote","glue.releaseNote","unmask.timing","unmask.attackNote","unmask.releaseNote","view.range","view.hold","view.spectrum","view.minHz","view.maxHz"};
