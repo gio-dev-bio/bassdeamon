@@ -102,7 +102,7 @@ int interactionTests(){
     for(auto* button:{&editor->spectrumPre,&editor->spectrumPost,&editor->spectrumBoth})
         ensure(editor->face.getComponentAt(button->getBounds().getCentre())==button,"Spectrum selector hit target covered");
     for(auto* limit:{&editor->focusMin,&editor->focusMax})
-        ensure(limit->getY()==677 && limit->getBottom()<editor->attenuationKnob->getY(),
+        ensure(limit->getY()==737 && limit->getBottom()<editor->attenuationKnob->getY(),
                "Auto Focus range controls must be above the UNMASK knobs");
     // Arbitrary typed values, not the former fixed frequency presets.
     editor->spectrumMin.setValue(37.5,juce::sendNotificationSync);

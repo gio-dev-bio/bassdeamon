@@ -7,7 +7,7 @@ int captureGui(const juce::File& output){
     auto layout=p.getBusesLayout();layout.inputBuses.set(1,juce::AudioChannelSet::mono());
     if(!p.setBusesLayout(layout))return 1;
     p.prepareToPlay(48000,256);juce::AudioBuffer<float> buffer(3,256);juce::MidiBuffer midi;
-    std::unique_ptr<juce::AudioProcessorEditor> editor(p.createEditor());editor->setSize(1200,1316);
+    std::unique_ptr<juce::AudioProcessorEditor> editor(p.createEditor());editor->setSize(1200,1376);
     auto* timedGui=static_cast<BassDeamonEditor*>(editor.get());timedGui->stopTimer();double visualClock=0;
     const auto visualTick=[&]{visualClock+=1000./30;timedGui->refreshVisuals(visualClock);};
     auto* tube=p.parameters.getParameter("tube.on");tube->setValueNotifyingHost(1);

@@ -211,12 +211,14 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
     kickEqFrequency.updateText();kickEqCut.updateText();
     kickEqFrequency.setTooltip("Locked frequency in Hz. Type 30 to 130 Hz for manual control.");
     kickEqCut.setTooltip("Static cut from 0 to -4 dB.");
-    setResizable(true,true);setResizeLimits(780,855,1560,1711);
-    if(auto* c=getConstrainer())c->setFixedAspectRatio(1200.0/1316.0);
-    setSize(900,987);timerCallback();startTimerHz(30);
+    for (auto* child : face.getChildren())
+        if (child->getY() >= 400) child->setTopLeftPosition(child->getX(),child->getY()+60);
+    setResizable(true,true);setResizeLimits(780,894,1560,1789);
+    if(auto* c=getConstrainer())c->setFixedAspectRatio(1200.0/1376.0);
+    setSize(900,1032);timerCallback();startTimerHz(30);
 }
 BassDeamonEditor::~BassDeamonEditor(){stopTimer();processor.analysisQueue.enabled.store(false,std::memory_order_release);setLookAndFeel(nullptr);}
-void BassDeamonEditor::resized(){face.setBounds(0,0,1200,1316);face.setTransform(juce::AffineTransform::scale(static_cast<float>(getWidth())/1200.0f));}
+void BassDeamonEditor::resized(){face.setBounds(0,0,1200,1376);face.setTransform(juce::AffineTransform::scale(static_cast<float>(getWidth())/1200.0f));}
 void BassDeamonEditor::addSwitch(const char* id,const char* name,juce::Rectangle<int> bounds,const char* tip){
     auto s=std::make_unique<Switch>();s->button.setButtonText(name);s->button.setComponentID(id);s->button.setBounds(bounds);s->button.setTooltip(tip);
     face.addAndMakeVisible(s->button);s->attachment=std::make_unique<State::ButtonAttachment>(processor.parameters,id,s->button);switches.push_back(std::move(s));
@@ -230,21 +232,24 @@ void BassDeamonEditor::addChoice(const char* id,const juce::StringArray& values,
     face.addAndMakeVisible(c->box);c->attachment=std::make_unique<State::ComboBoxAttachment>(processor.parameters,id,c->box);choices.push_back(std::move(c));
 }
 void BassDeamonEditor::createTexture(){
-    grain=juce::Image(juce::Image::ARGB,1200,1316,true);juce::Random random(0xBADB00B);
+    grain=juce::Image(juce::Image::ARGB,1200,1376,true);juce::Random random(0xBADB00B);
     juce::Image::BitmapData data(grain,juce::Image::BitmapData::writeOnly);
-    for(int y=0;y<1316;++y)for(int x=0;x<1200;++x){const int n=random.nextInt(9);data.setPixelColour(x,y,juce::Colour::fromRGBA(230,216,180,static_cast<juce::uint8>(n)));}
+    for(int y=0;y<1376;++y)for(int x=0;x<1200;++x){const int n=random.nextInt(9);data.setPixelColour(x,y,juce::Colour::fromRGBA(230,216,180,static_cast<juce::uint8>(n)));}
 }
 void BassDeamonEditor::paintConsole(juce::Graphics& g){
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff302e2a),0,0,console::ink,1200,1316,false));g.fillAll();
-    console::panel(g,{5,5,1190,1306});
-    g.setColour(console::copper.withAlpha(0.35f));g.drawRoundedRectangle(juce::Rectangle<float>(9,9,1182,1298),10,2);
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff302e2a),0,0,console::ink,1200,1376,false));g.fillAll();
+    console::panel(g,{5,5,1190,1366});
+    g.setColour(console::copper.withAlpha(0.35f));g.drawRoundedRectangle(juce::Rectangle<float>(9,9,1182,1358),10,2);
     juce::Random scratches(1829);
     for(int i=0;i<160;++i){const float x=static_cast<float>(scratches.nextInt(1190)+5),y=i%2==0?static_cast<float>(scratches.nextInt(10)+5):static_cast<float>(scratches.nextInt(10)+1235);g.setColour(console::copper.withAlpha(0.4f));g.drawLine(x,y,x+static_cast<float>(scratches.nextInt(12)+2),y+1);}
     console::demon(g,{30,22,80,86});
     g.setColour(console::cream);g.setFont(console::font(49,true));g.drawText("BASSDEAMON",124,19,470,61,juce::Justification::centredLeft);
     console::text(g,"By Guy_BioRg",{128,80,240,22},16,console::copper.brighter());
-    console::panel(g,{24,128,820,260},true);paintSpectrum(g);
-    console::panel(g,{862,128,314,260});{juce::Graphics::ScopedSaveState v(g);g.addTransform(juce::AffineTransform::translation(0,36));paintVU(g);}
+    console::panel(g,{24,128,820,320},true);paintSpectrum(g);
+    console::panel(g,{862,128,314,320});{juce::Graphics::ScopedSaveState v(g);g.addTransform(juce::AffineTransform::translation(0,66));paintVU(g);}
+    {
+    juce::Graphics::ScopedSaveState eqLayout(g);
+    g.addTransform(juce::AffineTransform::translation(0,60));
     console::panel(g,{24,552,1152,62});
     console::text(g,"KICK EQ",{46,561,156,25},23);
     console::text(g,"PRE-GLUE / Q 3",{47,587,150,15},11,console::muted);
@@ -256,7 +261,8 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g){
     console::text(g,eqStatus,{756,570,176,24},12,kickState==2?console::orange:console::cream);
     if (processor.compareMatch.load())
         console::text(g,"MATCH "+juce::String(processor.comparisonGainDb.load(),1)+" dB",{1011,597,140,14},10,console::muted,juce::Justification::centred);
-    {juce::Graphics::ScopedSaveState body(g);g.addTransform(juce::AffineTransform::translation(0,72));
+    }
+    {juce::Graphics::ScopedSaveState body(g);g.addTransform(juce::AffineTransform::translation(0,132));
     console::panel(g,{24,328,1152,144},true);paintWave(g);
     g.addTransform(juce::AffineTransform::translation(0,64));
     {juce::Graphics::ScopedSaveState moduleScope(g);g.addTransform(juce::AffineTransform::translation(0,160));
@@ -350,7 +356,7 @@ void BassDeamonEditor::paintSpectrum(juce::Graphics& g) {
     const auto fps = juce::String(bassdeamon::SpectrumDisplay::fps(processor.analyzerRate()));
     const juce::String comparison = processor.compareDry.load() ? "  /  DRY AUDITION" : "";
     console::text(g,status+"  /  UNMASK GR "+gr+" dB  /  "+fps+" fps"+comparison,
-                  {72,373,740,14},13,console::cream);
+                  {72,433,740,14},13,console::cream);
 }
 
 int BassDeamonEditor::paintSpectrumPlot(juce::Graphics& g,juce::Rectangle<float> plot,bool post,bool overlay) {
@@ -413,31 +419,32 @@ int BassDeamonEditor::paintSpectrumPlot(juce::Graphics& g,juce::Rectangle<float>
                 if(first){highlight.startNewSubPath(point);first=false;}else highlight.lineTo(point);}
             g.strokePath(highlight,juce::PathStrokeType(4.f));
         }
-        float previousRight=plot.getX()-4;
+    }
+    {
         const auto formatDb=[](float value){
             return (value>=0?juce::String("+"):juce::String{})+juce::String(value,1)+" dB";
         };
-        for (const auto& region : regions) {
+        // Keep readouts below the plot, leaving the actual peaks visible.
+        const float width=post?162.f:144.f;
+        const auto visible=std::min<size_t>(regions.size(),size_t((plot.getWidth()+4)/(width+4)));
+        for (size_t i=0;i<visible;++i) {
+            const auto& region=regions[i];
             const auto bin=region.peak;
             const auto& pairs=spectrumDisplay.paired;
             const float pre=pairs[0][bin], after=pairs[1][bin], kickDb=pairs[2][bin];
             const float bassDb=post?after:pre;
             const auto relation=bassDb>-110 && kickDb>-110 ? formatDb(bassDb-kickDb) : juce::String("--");
             const auto delta=pre>-110 && after>-110 ? formatDb(after-pre) : juce::String("--");
-            const float width=post?162.f:144.f;
-            const float x=juce::jlimit(plot.getX(),plot.getRight(),fx(region.hz));
-            const float boxX=std::max(previousRight+4,std::min(plot.getRight()-width,x-width*.5f));
-            if(boxX+width>plot.getRight()) continue;
+            const float boxX=plot.getX()+float(i)*(width+4);
             const bool resolved=region.strength==0;
             const auto accent=resolved?juce::Colour(0xffa8bdb0):red.withAlpha(.45f+.55f*region.strength);
-            juce::Rectangle<float> label(boxX,plot.getY()+3,width,post?50.f:35.f);
+            juce::Rectangle<float> label(boxX,374,width,50);
             g.setColour(console::ink);g.fillRoundedRectangle(label,4);
-            g.setColour(accent);g.drawRoundedRectangle(label,4,1);
+            g.setColour(console::muted.withAlpha(.45f));g.drawRoundedRectangle(label,4,1);
             console::text(g,juce::String(region.hz,1)+" Hz",label.withHeight(18).reduced(6,0),14,accent);
             console::text(g,"BASS - KICK  "+relation,label.withTrimmedTop(18).withHeight(15).reduced(6,0),12,console::cream);
             if(post)console::text(g,"POST - PRE  "+delta,label.withTrimmedTop(33).withHeight(15).reduced(6,0),12,console::cream);
-            g.setColour(accent);g.drawLine(label.getCentreX(),label.getBottom(),x,label.getBottom()+10,1);
-            previousRight=label.getRight();
+
         }
     }
     return activeRegions;
