@@ -367,7 +367,7 @@ int BassDeamonEditor::paintSpectrumPlot(juce::Graphics& g,juce::Rectangle<float>
         console::text(g,juce::String(level),{plot.getX()-38,y-7,33,14},12,console::cream,juce::Justification::centredRight);}
     const int divisions = plot.getWidth()<400 ? 6 : 10;
     for(int i=0;i<=divisions;++i){const double hz=minimum+(maximum-minimum)*i/divisions;const float x=fx(hz);g.setColour(console::cream.withAlpha(i%2==0?.12f:.05f));g.drawVerticalLine(juce::roundToInt(x),plot.getY(),plot.getBottom());
-        if(i%2==0)console::text(g,juce::String(hz,hz<100?1:0),{x-27,353,54,17},13,console::cream,juce::Justification::centred);}
+        if(i%2==0)console::text(g,juce::String(double(hz),hz<100?1:0),{x-27,353,54,17},13,console::cream,juce::Justification::centred);}
     const juce::Colour postColour(0xff56e6c0),red(0xffff5555);
     const auto& selected=post?visualPost:visualPre;
     const auto& collisions=post?visualMaskPost:visualMaskPre;
@@ -411,7 +411,12 @@ int BassDeamonEditor::paintSpectrumPlot(juce::Graphics& g,juce::Rectangle<float>
         }
         // Exact spectral interval, curve highlight and a one-pixel centre
         // leader. Labels have their own boxes: label width is NOT band width.
-        for(const auto& region:regions){if (region.strength==0) continue;const float x=juce::jlimit(plot.getX(),plot.getRight(),fx(region.hz));
+        for(const auto& region:regions){const float x=juce::jlimit(plot.getX(),plot.getRight(),fx(region.hz));
+            if (region.strength==0) {
+                g.setColour(console::muted.withAlpha(.45f));
+                g.drawVerticalLine(juce::roundToInt(x),plot.getY(),plot.getBottom());
+                continue;
+            }
             const float lo=std::max(plot.getX(),fx((double(region.first)-.5)*binWidth)),hi=std::min(plot.getRight(),fx((double(region.last)+.5)*binWidth));
             g.setColour(red.withAlpha(.15f+.65f*region.strength));g.drawVerticalLine(juce::roundToInt(x),plot.getY()+24,plot.getBottom()-8);
             g.setColour(red.withAlpha(.2f+.8f*region.strength));g.fillRect(lo,plot.getBottom()-7,std::max(1.5f,hi-lo),5.f);

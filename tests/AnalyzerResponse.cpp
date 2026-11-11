@@ -23,6 +23,10 @@ int main(){try{
         const float expected=float(std::pow(10.,-reduction/20));
         if(std::abs(post/pre-expected)>.025f){std::cerr<<sr<<" mode "<<mode<<" cut "<<reduction<<" scores "<<pre<<" "<<post<<" expected "<<expected<<'\n';return 1;}
         if(reduction>=20)require(post<.12f,"20+ dB actual cut still displays same red collision");
+        const size_t peakBin=size_t(std::round(75*RelationAnalyzer::fftSize/sr));
+        const auto& paired=display->paired;
+        require(std::abs(paired[0][peakBin]-paired[2][peakBin])<.01,"BASS - KICK readout not calibrated");
+        require(std::abs(paired[1][peakBin]-paired[0][peakBin]+reduction)<.3,"POST - PRE readout not calibrated");
         ++cases;
     }
     // Knob says 12 dB, final trim restores all 12 dB: POST must still flag.

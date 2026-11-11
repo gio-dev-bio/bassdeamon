@@ -17,18 +17,23 @@ public:
         if(!a.ready()){reset();return;}
         if(setting!=mode){mode=setting;ready=false;pendingData=false;clearPending();}
         if(samples>0){
-            const std::array<const Spectrum*,5> input{&a.pre,&a.post,&a.kick,&a.maskPre,&a.maskPost};
-            // Keep all three levels from one analysis frame for each bin.
-            // Peak-held display curves may peak at different times.
+            // For each bin, prefer a shared frame with the strongest kick.
+            // The three numbers come from that same frame, even during peak hold.
             for (size_t b = 0; b < RelationAnalyzer::bins; ++b) {
-                const float score = std::max(a.maskPre[b], a.maskPost[b]);
-                if (!pendingData || score >= std::max(pending[3][b], pending[4][b])) {
+                const bool shared = std::max(a.maskPre[b], a.maskPost[b]) >= .12f;
+                const bool hadShared = std::max(pending[3][b], pending[4][b]) >= .12f;
+                if (!pendingData || (shared && !hadShared) ||
+                    (shared == hadShared && a.kick[b] > pendingPaired[2][b])) {
                     pendingPaired[0][b] = a.pre[b];
                     pendingPaired[1][b] = a.post[b];
                     pendingPaired[2][b] = a.kick[b];
                 }
+                pending[0][b] = std::max(pending[0][b], a.pre[b]);
+                pending[1][b] = std::max(pending[1][b], a.post[b]);
+                pending[2][b] = std::max(pending[2][b], a.kick[b]);
+                pending[3][b] = std::max(pending[3][b], a.maskPre[b]);
+                pending[4][b] = std::max(pending[4][b], a.maskPost[b]);
             }
-            for(size_t t=0;t<5;++t)for(size_t b=0;b<RelationAnalyzer::bins;++b)pending[t][b]=std::max(pending[t][b],(*input[t])[b]);
             pendingData=true;
         }
         const double period=1.0/fps(setting);
