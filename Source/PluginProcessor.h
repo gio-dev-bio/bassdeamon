@@ -32,7 +32,7 @@ public:
     int analyzerRate() const noexcept { return visualAnalyzerRate.load(std::memory_order_relaxed); }
     void setAnalyzerRate(int value) noexcept { visualAnalyzerRate.store(std::clamp(value,0,3),std::memory_order_relaxed); }
     int spectrumView() const noexcept { return visualSpectrumView.load(std::memory_order_relaxed); }
-    void setSpectrumView(int view) noexcept { visualSpectrumView.store(view?1:0,std::memory_order_relaxed); }
+    void setSpectrumView(int view) noexcept { visualSpectrumView.store(juce::jlimit(0,2,view),std::memory_order_relaxed); }
     int selectedAB() const noexcept { return abSlot; }
     void requestLearn() noexcept { learnRequested.store(true); }
     bool undoEdit();
@@ -63,7 +63,7 @@ private:
     void parameterGestureChanged(int,bool starting) override;
     void publishMeters() noexcept;
     bassdeamon::Engine engine;
-    std::array<std::atomic<float>*, 49> raw{};
+    std::array<std::atomic<float>*, 52> raw{};
     std::atomic<bool> learnRequested{false}, resultReady{false};
     std::atomic<float> resultDelay{0};
     std::atomic<bool> resultInvert{false};

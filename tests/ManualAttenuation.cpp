@@ -3,7 +3,77 @@
 #include <iostream>
 #include <stdexcept>
 #include "RealtimeAllocation.h"
+static void checkStereoModes() {
+    using namespace bassdeamon;
+    constexpr double sampleRate = 48000, frequency = 75;
+    for (auto mode : {UnmaskStereoMode::mid, UnmaskStereoMode::side}) {
+        for (bool autoGain : {false, true}) {
+            Engine engine;
+            engine.prepare(sampleRate);
+            Settings settings;
+            settings.glue = settings.phase = settings.unmaskTrack = false;
+            settings.unmaskDirect = true;
+            settings.unmaskAttenuationDb = 12;
+            settings.unmaskFrequency = frequency;
+            settings.unmaskStereoMode = mode;
+            settings.agc[2].enabled = autoGain;
+            std::array<float, 128> left{}, right{}, kick{}, originalLeft{}, originalRight{};
+            float* output[]{left.data(), right.data()};
+            const float* reference[]{kick.data()};
+            double selectedInput = 0, selectedOutput = 0;
+            for (int block = 0; block < 750; ++block) {
+                for (int n = 0; n < 128; ++n) {
+                    const double phase = 2 * pi * frequency * (block * 128 + n) / sampleRate;
+                    const double mid = .24 * std::sin(phase), side = .19 * std::cos(phase);
+                    originalLeft[n] = left[n] = float(mid + side);
+                    originalRight[n] = right[n] = float(mid - side);
+                    kick[n] = float(.4 * std::sin(phase));
+                }
+                engine.process(output, 2, reference, 1, 128, settings);
+                const double sign = mode == UnmaskStereoMode::mid ? 1 : -1;
+                for (size_t n = 0; n < left.size(); ++n) {
+                    const double dryOther = double(originalLeft[n]) - sign * originalRight[n];
+                    const double wetOther = double(left[n]) - sign * right[n];
+                    if (std::abs(dryOther - wetOther) > 6e-8)
+                        throw std::runtime_error("UNMASK changed the other M/S component");
+                    if (block > 700) {
+                        const double dry = double(originalLeft[n]) + sign * originalRight[n];
+                        const double wet = double(left[n]) + sign * right[n];
+                        selectedInput += dry * dry;
+                        selectedOutput += wet * wet;
+                    }
+                }
+            }
+            if (!autoGain && std::abs(-10 * std::log10(selectedOutput / selectedInput) - 12) > .25)
+                throw std::runtime_error("M/S calibrated attenuation differs from requested cut");
+        }
+    }
+    Engine mono;
+    mono.prepare(sampleRate);
+    Settings settings;
+    settings.glue = settings.phase = false;
+    settings.unmaskDirect = true;
+    settings.unmaskAttenuationDb = 24;
+    settings.unmaskStereoMode = UnmaskStereoMode::side;
+    std::array<float, 128> bass{}, kick{};
+    float* output[]{bass.data()};
+    const float* reference[]{kick.data()};
+    for (int block = 0; block < 300; ++block) {
+        for (int n = 0; n < 128; ++n)
+            bass[n] = kick[n] = float(.4 * std::sin(2 * pi * frequency * (block * 128 + n) / sampleRate));
+        mono.process(output, 1, reference, 1, 128, settings);
+        if (bass != kick) throw std::runtime_error("SIDE processed mono bass");
+    }
+    settings.unmaskStereoMode = UnmaskStereoMode::stereo;
+    settings.unmaskFocusMinHz = 40;
+    settings.unmaskFocusMaxHz = 60;
+    mono.process(output, 1, reference, 1, 128, settings);
+    const double focus = mono.getMeters().focusHz;
+    if (focus < 40 || focus > 60) throw std::runtime_error("Auto Focus outside requested range");
+    std::cout << "PASS M/S isolation with and without AGC, calibrated cut, mono SIDE unity and focus limits\n";
+}
 int main(){try{
+    checkStereoModes();
     int cases=0;double worst=0;
     for(double sr:{44100.,48000.,96000.})for(double hz:{40.,55.,75.,110.,220.})for(double amount:{0.,3.5,6.,12.,18.,24.}){
         bassdeamon::Engine e;e.prepare(sr);bassdeamon::Settings s;s.glue=s.phase=false;s.unmaskDirect=true;s.unmaskAttenuationDb=amount;s.unmaskTrack=false;s.unmaskFrequency=hz;

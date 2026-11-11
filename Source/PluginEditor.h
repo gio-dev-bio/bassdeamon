@@ -57,7 +57,9 @@ private:
     bassdeamon::SpectrumDisplay spectrumDisplay;
     juce::ComboBox analyzerRateBox;
     juce::TextButton sumButton{"SUM K+B"};
-    juce::TextButton spectrumPre{"PRE"},spectrumPost{"POST"};
+    juce::TextButton spectrumPre{"PRE"},spectrumPost{"POST"},spectrumBoth{"BOTH"};
+    juce::Slider focusMin,focusMax;
+    std::unique_ptr<State::SliderAttachment> focusMinAttachment,focusMaxAttachment;
     juce::Slider spectrumMin,spectrumMax;
     std::unique_ptr<State::SliderAttachment> spectrumMinAttachment,spectrumMaxAttachment;
     bool showSum=true;

@@ -3,7 +3,7 @@
 #include <optional>
 
 namespace {
-constexpr std::array<const char*, 49> ids{
+constexpr std::array<const char*, 52> ids{
     "glue.on", "glue.amount", "glue.lock", "phase.on", "phase.invert", "phase.delay",
     "phase.rotate", "phase.frequency", "unmask.on", "unmask.amount", "unmask.delta",
     "glue.agc", "glue.agcLock", "phase.agc", "phase.agcLock", "unmask.agc", "unmask.agcLock",
@@ -12,7 +12,7 @@ constexpr std::array<const char*, 49> ids{
     "tube.on","tube.drive","tube.amount","tube.source","tube.colour","tube.agc","tube.agcLock","tube.audition",
     "glue.timing","glue.attackMs","glue.releaseMs","glue.attackNote","glue.releaseNote",
     "unmask.timing","unmask.attackNote","unmask.releaseNote","view.range","view.hold",
-    "view.spectrum","view.minHz","view.maxHz","unmask.attenuation","unmask.controlDb"};
+    "view.spectrum","view.minHz","view.maxHz","unmask.attenuation","unmask.controlDb","unmask.stereoMode","unmask.focusMinHz","unmask.focusMaxHz"};
 }
 
 BassDeamonProcessor::BassDeamonProcessor()
@@ -91,6 +91,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout BassDeamonProcessor::layout(
     continuous("view.maxHz","Spectrum to (Hz)",20,20000,1000);
     continuous("unmask.attenuation","UNMASK attenuation (dB)",0,24,6);
     boolean("unmask.controlDb","UNMASK control in dB",true);
+    choice("unmask.stereoMode","UNMASK stereo mode",{"Stereo","Mid","Side"},0);
+    continuous("unmask.focusMinHz","Auto Focus minimum (Hz)",30,250,30);
+    continuous("unmask.focusMaxHz","Auto Focus maximum (Hz)",30,250,250);
     return p;
 }
 
@@ -130,6 +133,9 @@ bassdeamon::Settings BassDeamonProcessor::readSettings() const noexcept {
     s.unmaskAttackMs = value(23); s.unmaskReleaseMs = value(24);
     s.unmaskMaxCutDb = 3 * (1 + std::clamp(static_cast<int>(value(25)), 0, 3));
     s.unmaskAttenuationDb=value(47);s.unmaskDirect=value(48)>.5f;
+    s.unmaskStereoMode = static_cast<bassdeamon::UnmaskStereoMode>(std::clamp(int(value(49)),0,2));
+    s.unmaskFocusMinHz = value(50);
+    s.unmaskFocusMaxHz = value(51);
     s.active=value(18)>.5f;
     s.tube.enabled=value(26)>.5f;s.tube.driveDb=value(27);s.tube.amount=value(28);
     s.tube.sourceHz=value(29);s.tube.colour=value(30);s.tube.autoGain=value(31)>.5f;
@@ -266,7 +272,7 @@ void BassDeamonProcessor::timerCallback() {
     // Learn does not silently enable PHASE. User can compare with the active switch.
 }
 void BassDeamonProcessor::getStateInformation(juce::MemoryBlock& dest) {
-    auto state = parameters.copyState(); state.setProperty("schemaVersion", 6, nullptr);
+    auto state = parameters.copyState(); state.setProperty("schemaVersion", 7, nullptr);
     state.setProperty("visualSpectrumView",spectrumView(),nullptr);
     state.setProperty("visualAnalyzerRate",analyzerRate(),nullptr);
     for (size_t i = 0; i < runtimeSnapshot.size(); ++i)
@@ -275,7 +281,13 @@ void BassDeamonProcessor::getStateInformation(juce::MemoryBlock& dest) {
 }
 void BassDeamonProcessor::setStateInformation(const void* data, int bytes) {
     if (auto xml = getXmlFromBinary(data, bytes)) {
-        if (xml->hasTagName(parameters.state.getType()) && xml->getIntAttribute("schemaVersion", 1) <= 6) {
+        if (xml->hasTagName(parameters.state.getType()) && xml->getIntAttribute("schemaVersion", 1) <= 7) {
+            if (xml->getIntAttribute("schemaVersion", 1) < 7) {
+                for (size_t i = 49; i < ids.size(); ++i) {
+                    auto* parameter = parameters.getParameter(ids[i]);
+                    parameter->setValueNotifyingHost(parameter->getDefaultValue());
+                }
+            }
             if(xml->getIntAttribute("schemaVersion",1)<5)
                 for(size_t i=44;i<ids.size();++i){auto* param=parameters.getParameter(ids[i]);param->setValueNotifyingHost(param->getDefaultValue());}
             if(xml->getIntAttribute("schemaVersion",1)<4){

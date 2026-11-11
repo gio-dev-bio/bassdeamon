@@ -92,18 +92,21 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
     sumButton.setToggleState(true,juce::dontSendNotification);
     addSwitch("view.hold","HOLD",{904,336,88,26},"Freeze the last complete quarter-note capture; audio is unaffected.");
     spectrumPre.setBounds(72,136,66,26);spectrumPost.setBounds(145,136,72,26);
-    for(auto* button:{&spectrumPre,&spectrumPost}){
+    spectrumBoth.setBounds(224,136,66,26);
+    for(auto* button:{&spectrumPre,&spectrumPost,&spectrumBoth}){
         face.addAndMakeVisible(*button);
-        button->setTooltip("Select one bass spectrum: PRE before processing or POST actual output. Kick remains the reference. Display only.");
+        button->setTooltip("PRE before processing, POST actual output, or BOTH overlaid with POST collision markers.");
     }
     const auto selectSpectrum=[this](int mode){
         // Local display state only. No host gesture, APVTS/audio parameter or
         // DSP state change, and no synchronous FFT when switching pictures.
         processor.setSpectrumView(mode);
         spectrumPre.setToggleState(mode==0,juce::dontSendNotification);
-        spectrumPost.setToggleState(mode!=0,juce::dontSendNotification);face.repaint();
+        spectrumPost.setToggleState(mode==1,juce::dontSendNotification);
+        spectrumBoth.setToggleState(mode==2,juce::dontSendNotification);face.repaint();
     };
     spectrumPre.onClick=[selectSpectrum]{selectSpectrum(0);};spectrumPost.onClick=[selectSpectrum]{selectSpectrum(1);};
+    spectrumBoth.onClick=[selectSpectrum]{selectSpectrum(2);};
     analyzerRateBox.addItemList({"FAST / 30 fps","NORMAL / 15 fps","SLOW / 8 fps","VERY SLOW / 4 fps"},1);
     analyzerRateBox.setSelectedId(processor.analyzerRate()+1,juce::dontSendNotification);analyzerRateBox.setBounds(290,166,220,22);
     analyzerRateBox.setTooltip("Visual refresh only. Analysis keeps running and captures short events between frames. No audio or host automation changes.");
@@ -126,6 +129,22 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
         if(spectrumMax.getValue()<spectrumMin.getValue()+20)
             spectrumMin.setValue(spectrumMax.getValue()-20,juce::sendNotificationSync);
     };
+    for (auto* limit : {&focusMin, &focusMax}) {
+        limit->setSliderStyle(juce::Slider::LinearBar);
+        limit->setTextBoxStyle(juce::Slider::TextBoxLeft, false, 76, 22);
+        limit->setTextValueSuffix(" Hz");
+        limit->setNumDecimalPlacesToDisplay(0);
+        limit->setScrollWheelEnabled(false);
+        face.addAndMakeVisible(*limit);
+    }
+    focusMin.setBounds(892,613,70,22);
+    focusMax.setBounds(966,613,70,22);
+    focusMin.setTooltip("Lower frequency limit for Auto Focus.");
+    focusMax.setTooltip("Upper frequency limit for Auto Focus.");
+    focusMinAttachment=std::make_unique<State::SliderAttachment>(processor.parameters,"unmask.focusMinHz",focusMin);
+    focusMaxAttachment=std::make_unique<State::SliderAttachment>(processor.parameters,"unmask.focusMaxHz",focusMax);
+    addChoice("unmask.stereoMode",{"STEREO","MID","SIDE"},{1044,613,108,22});
+    choices.back()->box.setTooltip("UNMASK target. MID processes the common signal; SIDE processes the difference. SIDE has no effect on mono bass.");
     addChoice("glue.timing",{"AUTO","MS","SYNC"},{249,623,122,26});
     addChoice("unmask.timing",{"MS","SYNC"},{832,918,185,22});
     const juce::StringArray notes{"1/64","1/32","1/16","1/8","1/4","1/2","1/1","1/8 T","1/8 D"};
@@ -200,7 +219,8 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g){
     const char* descriptions[]{"ADAPTIVE BASS COMPRESSION","LEARN + LOCK / MANUAL PHASE","DYNAMIC SPECTRAL SPACE"};
     for(int i=0;i<3;++i){const float x=24+static_cast<float>(i)*392;
         console::panel(g,{x,340,368,442});console::text(g,titles[i],{x+22,351,255,35},28);
-        console::text(g,descriptions[i],{x+22,383,320,17},12,console::muted);
+        if (i < 2) console::text(g,descriptions[i],{x+22,383,320,17},12,console::muted);
+        else console::text(g,"FOCUS Hz",{x+22,383,60,17},11,console::muted);
         g.setColour(console::copper.withAlpha(0.45f));g.drawLine(x+20,438,x+348,438,1);
         g.setColour(console::ink);g.fillRoundedRectangle(x+250,403,95,28,4);
         console::text(g,juce::String(compensation[static_cast<size_t>(i)],1)+" dB",{x+253,405,89,24},15,console::amber,juce::Justification::centred);
@@ -245,7 +265,7 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g){
     console::text(g,"IN "+juce::String(std::max(inputDb,-99.0f),1)+"  /  OUT "+juce::String(std::max(outputDb,-99.0f),1)+" dBFS RMS",{221,808,315,26},13,console::muted);
     console::text(g,"PEAK "+juce::String(std::max(peak,-99.0f),1)+" dBFS",{548,808,180,26},14,clipFrames>0?console::orange:console::cream);
     console::text(g,"TRIM",{762,808,60,26},13,console::muted);
-    console::text(g,"v0.2.9",{1090,808,66,26},13,console::muted,juce::Justification::centredRight);
+    console::text(g,"v0.2.10",{1090,808,66,26},13,console::muted,juce::Justification::centredRight);
     }
     }
     g.drawImageAt(grain,0,0);
@@ -269,10 +289,11 @@ void BassDeamonEditor::paintSpectrum(juce::Graphics& g){
     for(int i=0;i<=10;++i){const double hz=minimum+(maximum-minimum)*i/10;const float x=fx(hz);g.setColour(console::cream.withAlpha(i%2==0?.12f:.05f));g.drawVerticalLine(juce::roundToInt(x),plot.getY(),plot.getBottom());
         if(i%2==0)console::text(g,juce::String(hz,hz<100?1:0),{x-27,353,54,17},13,console::cream,juce::Justification::centred);}
     const juce::Colour postColour(0xff56e6c0),red(0xffff5555);
+    const bool both=processor.spectrumView()==2;
     const bool post=spectrumIsPost();const auto& selected=post?visualPost:visualPre;
     const auto& collisions=post?visualMaskPost:visualMaskPre;
-    console::text(g,post?"BASS POST":"BASS PRE",{235,140,124,20},14,post?postColour:console::cream);
-    console::text(g,"KICK",{367,140,54,20},14,console::amber);
+    console::text(g,both?"PRE + POST":post?"BASS POST":"BASS PRE",{298,140,92,20},14,post?postColour:console::cream);
+    console::text(g,"KICK",{392,140,48,20},14,console::amber);
     console::text(g,"FROM",{526,166,130,15},11,console::muted);console::text(g,"TO",{682,166,132,15},11,console::muted);
     console::text(g,"RATE",{235,167,52,20},13,console::muted);
     const double binWidth=analyzer.sampleRate()/bassdeamon::RelationAnalyzer::fftSize;
@@ -287,16 +308,20 @@ void BassDeamonEditor::paintSpectrum(juce::Graphics& g){
         const double offset=std::abs(den)>1e-12?std::clamp(.5*(left-right)/den,-.5,.5):0;
         regions.push_back({first,last,peak,(double(peak)+offset)*binWidth,collisions[peak]});
     }
-    console::text(g,"CLASH "+juce::String(int(regions.size())),{426,140,94,20},14,regions.empty()?console::muted:red);
+    console::text(g,"CLASH "+juce::String(int(regions.size())),{445,140,75,20},14,regions.empty()?console::muted:red);
     {
         juce::Graphics::ScopedSaveState clip(g);g.reduceClipRegion(plot.toNearestInt());
         // Kick is thin and dashed; the selected bass is always drawn last so
         // identical curves cannot hide the bass under the amber reference.
-        for(int trace=0;trace<2;++trace){const auto& values=trace==0?visualKick:selected;juce::Path line;bool started=false;
+        for(int trace=0;trace<(both?3:2);++trace){
+            const bool preOverlay=both&&trace==1;
+            const auto& values=trace==0?visualKick:preOverlay?visualPre:selected;juce::Path line;bool started=false;
             for(size_t b=0;b<values.size();++b){const double hz=double(b)*binWidth;if(hz+binWidth<minimum)continue;
                 if(!started){line.startNewSubPath(fx(hz),fy(values[b]));started=true;}else line.lineTo(fx(hz),fy(values[b]));if(hz>maximum)break;}
             if(trace==0){juce::Path dashed;const float pattern[]{5,4};juce::PathStrokeType(1.5f).createDashedStroke(dashed,line,pattern,2);
                 g.setColour(console::amber.withAlpha(.8f));g.fillPath(dashed);
+            }else if(preOverlay){
+                g.setColour(console::cream.withAlpha(.8f));g.strokePath(line,juce::PathStrokeType(1.7f));
             }else{auto fill=line;fill.lineTo(plot.getRight(),plot.getBottom());fill.lineTo(plot.getX(),plot.getBottom());fill.closeSubPath();
                 g.setColour((post?postColour:console::cream).withAlpha(.07f));g.fillPath(fill);g.setColour(post?postColour:console::cream);g.strokePath(line,juce::PathStrokeType(2.5f));}
         }
@@ -332,7 +357,7 @@ void BassDeamonEditor::paintSpectrum(juce::Graphics& g){
             comparison=" / vs PRE "+juce::String(visualPost[shared]-visualPre[shared],1)+" dB @"+juce::String((double(shared)+offset)*binWidth,1)+" Hz";
         }
     }
-    console::text(g,(post?"POST":"PRE")+juce::String(" / ")+status+comparison+" / "+juce::String(bassdeamon::SpectrumDisplay::fps(processor.analyzerRate()))+" fps",{72,373,740,14},13,console::cream);
+    console::text(g,(both?"BOTH":post?"POST":"PRE")+juce::String(" / ")+status+comparison+" / "+juce::String(bassdeamon::SpectrumDisplay::fps(processor.analyzerRate()))+" fps",{72,373,740,14},13,console::cream);
 }
 void BassDeamonEditor::paintWave(juce::Graphics& g){
     console::text(g,showSum?"SCOPE / KICK + BASS PRE & POST":"SCOPE / SUM K+B OFF",{47,337,650,20},13,console::cream);
@@ -397,7 +422,10 @@ void BassDeamonEditor::refreshVisuals(double clockMilliseconds){
     const bool direct=processor.parameters.getRawParameterValue("unmask.controlDb")->load()>.5f;
     attenuationKnob->setVisible(direct);depthKnob->setVisible(!direct);
     spectrumPre.setToggleState(!spectrumIsPost(),juce::dontSendNotification);
-    spectrumPost.setToggleState(spectrumIsPost(),juce::dontSendNotification);
+    spectrumPost.setToggleState(processor.spectrumView()==1,juce::dontSendNotification);
+    spectrumBoth.setToggleState(processor.spectrumView()==2,juce::dontSendNotification);
+    const bool focusAuto=processor.parameters.getRawParameterValue("unmask.track")->load()>.5f;
+    focusMin.setEnabled(focusAuto);focusMax.setEnabled(focusAuto);
     glueAttackSlider.setVisible(timing!=0);glueReleaseSlider.setVisible(timing==1);
     unmaskAttackKnob->setVisible(true);unmaskReleaseKnob->setVisible(!sync);
     for(auto& c:choices){const auto id=c->box.getComponentID();

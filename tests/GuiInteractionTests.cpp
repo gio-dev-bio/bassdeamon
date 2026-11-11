@@ -97,7 +97,7 @@ int interactionTests(){
     ensure(editor->showSum&&editor->sumButton.getToggleState(),"SUM ON must restore the sum graph");
     ensure(p.parameters.copyState().toXmlString()==stateBeforeSum,"SUM changed audio parameters");
     ensure(editor->spectrumIsPost(),"Spectrum must default to POST");
-    for(auto* button:{&editor->spectrumPre,&editor->spectrumPost})
+    for(auto* button:{&editor->spectrumPre,&editor->spectrumPost,&editor->spectrumBoth})
         ensure(editor->face.getComponentAt(button->getBounds().getCentre())==button,"Spectrum selector hit target covered");
     // Arbitrary typed values, not the former fixed frequency presets.
     editor->spectrumMin.setValue(37.5,juce::sendNotificationSync);
@@ -216,10 +216,14 @@ int interactionTests(){
     }
     ensure(glueRelease&&unmaskRelease,"SYNC release note selectors missing");
     // View selection and exact limits survive save/recall.
-    p.setSpectrumView(0);juce::MemoryBlock viewState;p.getStateInformation(viewState);
-    p.setSpectrumView(1);set("view.maxHz",1000);
+    editor->spectrumBoth.onClick();
+    set("unmask.stereoMode",2);set("unmask.focusMinHz",40);set("unmask.focusMaxHz",100);
+    juce::MemoryBlock viewState;p.getStateInformation(viewState);
+    p.setSpectrumView(1);set("view.maxHz",1000);set("unmask.stereoMode",0);set("unmask.focusMinHz",30);set("unmask.focusMaxHz",250);
     p.setStateInformation(viewState.getData(),int(viewState.getSize()));
-    ensure(p.spectrumView()==0&&std::abs(get("view.maxHz")-437.25)<.01,"Spectrum view state recall failed");
+    ensure(p.spectrumView()==2&&std::abs(get("view.maxHz")-437.25)<.01,"Overlay state recall failed");
+    ensure(get("unmask.stereoMode")==2&&get("unmask.focusMinHz")==40&&get("unmask.focusMaxHz")==100,"UNMASK mode/range state recall failed");
+    set("unmask.stereoMode",0);set("unmask.focusMinHz",30);set("unmask.focusMaxHz",250);
     set("glue.timing",0);set("unmask.delta",0);
     ensure(editor->face.getComponentAt(editor->learn.getBounds().getCentre())==&editor->learn,"Learn hit target covered");
     const float delayBeforeLearn=get("phase.delay"),invertBeforeLearn=get("phase.invert");

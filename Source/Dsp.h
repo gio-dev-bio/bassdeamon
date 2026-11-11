@@ -24,6 +24,8 @@ inline double noteMilliseconds(int note,double bpm) noexcept {
     return 60000/tempo*noteBeats[size_t(std::clamp(note,0,8))];
 }
 struct AgcSettings { bool enabled = false, locked = false; };
+enum class UnmaskStereoMode { stereo, mid, side };
+
 struct Settings {
     bool active = true;
     TubeSettings tube;
@@ -38,6 +40,8 @@ struct Settings {
     double unmaskAmount = 0.4, outputDb = 0.0;
     bool unmaskDirect=false;double unmaskAttenuationDb=6;
     std::array<AgcSettings, 3> agc{};
+    UnmaskStereoMode unmaskStereoMode = UnmaskStereoMode::stereo;
+    double unmaskFocusMinHz = 30, unmaskFocusMaxHz = 250;
     bool unmaskTrack = true, unmaskHold = false;
     double unmaskFrequency = 75, unmaskWidth = 0.55;
     double unmaskAttackMs = 8, unmaskReleaseMs = 120, unmaskMaxCutDb = 9;
@@ -320,7 +324,13 @@ public:
             return;
         }
         globalPaused=false;
+        const double midTarget = s.unmaskStereoMode == UnmaskStereoMode::side ? 0 : 1;
+        const double sideTarget = s.unmaskStereoMode == UnmaskStereoMode::mid ? 0 : 1;
+        const double focusLow = std::clamp(std::min(s.unmaskFocusMinHz, s.unmaskFocusMaxHz), 30.0, 250.0);
+        const double focusHigh = std::clamp(std::max(s.unmaskFocusMinHz, s.unmaskFocusMaxHz), 30.0, 250.0);
         if (!smoothed) {
+            midMix.reset(midTarget);
+            sideMix.reset(sideTarget);
             glueMix = s.glue ? 1 : 0; phaseMix = s.phase ? 1 : 0;
             unmaskMix = s.unmask ? 1 : 0; delaySamples = s.delayMs * sampleRate / 1000;
             polarity = s.invert ? -1 : 1; rotationMix = s.rotate ? 1 : 0;
@@ -342,9 +352,14 @@ public:
         const double widthOctaves = 0.25 + 1.25 * std::clamp(s.unmaskWidth, 0.0, 1.0);
         const double filterQTarget = 3.5 - 2.6 * std::clamp(s.unmaskWidth, 0.0, 1.0);
         polarityRamp.set(s.invert?-1:1,rampSamples);
+        midMix.set(midTarget, rampSamples);
+        sideMix.set(sideTarget, rampSamples);
         for (int n = 0; n < samples; ++n) {
             const float dryLeft=bass[0][n],dryRight=channels==2?bass[1][n]:0;
             const double activeMix=globalRamp.next();
+            const double mid = midMix.next();
+            const double side = channels == 2 ? sideMix.next() : 0;
+            const bool linked = mid == 1 && (channels == 1 || side == 1);
             std::array<double, 2> x{}, k{};
             for (int c = 0; c < channels; ++c) x[c] = std::isfinite(bass[c][n]) ? bass[c][n] : 0;
             if (kick && kickChannels > 0) {
@@ -390,7 +405,7 @@ public:
                     size_t best = 0, current = 0;
                     double score = 0, nearest = 1e9;
                     for (size_t b = 0; b < frequencies.size(); ++b) {
-                        if (frequencies[b] > 250) continue;
+                        if (frequencies[b] < focusLow || frequencies[b] > focusHigh) continue;
                         const double overlap = std::min(bassE[b], kickE[b]);
                         if (overlap > score) { score = overlap; best = b; }
                         const double distance = std::abs(std::log(frequencies[b] / trackedFocusHz));
@@ -398,10 +413,14 @@ public:
                     }
                     if (score > 1e-8 && (score > std::min(bassE[current], kickE[current]) * 1.6
                         || std::min(bassE[current], kickE[current]) < 1e-9))
-                        trackedFocusHz = std::clamp(frequencies[best], 30.0, 250.0);
+                        trackedFocusHz = frequencies[best];
                 }
-                const double targetFocus = s.unmaskTrack ? trackedFocusHz : std::clamp(s.unmaskFrequency, 30.0, 250.0);
-                if (!s.unmaskHold || !s.unmaskTrack) focusHz = std::exp(follow(std::log(focusHz), std::log(targetFocus), focusA));
+                const double targetFocus = s.unmaskTrack ? std::clamp(trackedFocusHz, focusLow, focusHigh) : std::clamp(s.unmaskFrequency, 30.0, 250.0);
+                if (!s.unmaskHold || !s.unmaskTrack) {
+                    focusHz = std::exp(follow(std::log(focusHz), std::log(targetFocus), focusA));
+                    if (s.unmaskTrack && (focusLow > 30 || focusHigh < 250))
+                        focusHz = std::clamp(focusHz, focusLow, focusHigh);
+                }
                 double weightSum = 0;
                 for (size_t b = 0; b < frequencies.size(); ++b) {
                     const double octaves = std::log2(frequencies[b] / focusHz) / widthOctaves;
@@ -483,14 +502,35 @@ public:
             if(tubeGain!=1)for(auto& v:x)v*=tubeGain;
             meters.tubeAgcDb=db(tubeGain);budget-=std::max(0.0,meters.tubeAgcDb);
             const auto beforeUnmask = x;
+            const auto selectedPower = [&](const std::array<double, 2>& signal) {
+                if (linked) return power(signal, channels);
+                if (channels == 1) return mid * signal[0] * signal[0];
+                const double centre = (signal[0] + signal[1]) * .5;
+                const double difference = (signal[0] - signal[1]) * .5;
+                return mid * centre * centre + side * difference * difference;
+            };
+            const auto applySelectedChange = [&](std::array<double, 2>& signal, double left, double right) {
+                if (channels == 1) {
+                    signal[0] += mid * left;
+                    return;
+                }
+                const double centre = mid * (left + right) * .5;
+                const double difference = side * (left - right) * .5;
+                signal[0] += centre + difference;
+                signal[1] += centre - difference;
+            };
             double maxCut = 0,directActivity=0;
             const double maxWeight=*std::max_element(focusWeights.begin(),focusWeights.end());
             auto legacy=x;
             for (size_t b = 0; b < frequencies.size(); ++b) {
                 double be = 0, ke = 0;
+                std::array<double, 2> detectedBass{};
                 for (int c = 0; c < channels; ++c) {
-                    const double v = detectorsBass[b][c].tick(beforeUnmask[c]); be += v*v/channels;
+                    const double v = detectorsBass[b][c].tick(beforeUnmask[c]);
+                    detectedBass[c] = v;
+                    if (linked) be += v*v/channels;
                 }
+                if (!linked) be = selectedPower(detectedBass);
                 for (int c = 0; c < 2; ++c) {
                     const double v = detectorsKick[b][c].tick(k[c]); ke += v*v/2;
                 }
@@ -524,13 +564,22 @@ public:
                 const double processed=directMix==0?legacy[c]:directMix==1?direct:legacy[c]+directMix*(direct-legacy[c]);
                 x[c]=beforeUnmask[c]+unmaskMix*(processed-beforeUnmask[c]);
             }
+            // Identical L/R filters commute with the M/S matrix. Project their
+            // correction, keeping filter history continuous across mode changes.
+            if (!linked) {
+                const auto filtered = x;
+                x = beforeUnmask;
+                applySelectedChange(x, filtered[0] - x[0], filtered[1] - x[1]);
+            }
             const auto afterUnmask = x;
-            const double unmaskAgc = compensate(2, power(beforeUnmask, channels), power(x, channels), unmaskMix);
+            const double unmaskAgc = compensate(2, selectedPower(beforeUnmask), selectedPower(x), unmaskMix);
+            if (!linked)
+                applySelectedChange(x, x[0] * (unmaskAgc - 1), x[1] * (unmaskAgc - 1));
             outputGain = follow(outputGain, trimTarget, smoothA);
             deltaMix = follow(deltaMix, s.delta && s.unmask && !(s.tube.enabled&&s.tube.audition) ? 1 : 0, smoothA);
             for (int c = 0; c < channels; ++c) {
                 // Delta is removed bass BEFORE AGC/output trim; never includes kick.
-                const double normal = x[c]*unmaskAgc*outputGain;
+                const double normal = (linked ? x[c]*unmaskAgc : x[c])*outputGain;
                 const double out = normal + deltaMix*(beforeUnmask[c]-afterUnmask[c]-normal);
                 const float dry=c==0?dryLeft:dryRight;
                 bass[c][n] = activeMix==0?dry:static_cast<float>(activeMix==1?out:static_cast<double>(dry)+activeMix*(out-dry));
@@ -577,7 +626,7 @@ private:
     std::uint64_t onsetClock = 0, lastOnset = 0;
     int controlCounter = 0;
     bool smoothed = false;
-    Ramp globalRamp,delayFade,polarityRamp;
+    Ramp globalRamp,delayFade,polarityRamp,midMix,sideMix;
     bool globalInitialised=false,globalPaused=false;
     double previousDelaySamples=0;
 };
