@@ -10,7 +10,7 @@ public:
     std::array<Spectrum,5> shown{};
     std::array<Spectrum,3> paired{};
     bool ready=false;uint64_t revision=0;
-    static int fps(int setting) noexcept {return std::array<int,4>{30,15,8,4}[size_t(std::clamp(setting,0,3))];}
+    static int fps(int setting) noexcept {return std::array<int,6>{30,15,8,4,2,1}[size_t(std::clamp(setting,0,5))];}
     SpectrumDisplay(){reset();}
     void reset() noexcept {for(size_t t=0;t<5;++t)shown[t].fill(t<3?-120.f:0.f);clearPending();for(auto& values:paired)values.fill(-120.f);nextFrame=0;pendingData=false;ready=false;mode=-1;}
     void push(const RelationAnalyzer& a,uint64_t samples,double nowSeconds,int setting) noexcept {

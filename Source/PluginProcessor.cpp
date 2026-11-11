@@ -194,11 +194,16 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     if (wasBypassed) { engine.clearHistory(); wasLearning = false; learnStatus.store(0); wasBypassed = false; }
     const auto settings=readSettings();
     if(!settings.active){engine.cancelLearn();wasLearning=false;learnStatus.store(0);resultReady.store(false);}
-    if (learnRequested.exchange(false)&&settings.active) {
-        resultReady.store(false); engine.startLearn(); wasLearning = true; learnStatus.store(1);
-    }
     const float* kick[2]{nullptr, nullptr};
     const int sideChannels = side.getNumChannels();
+    if (learnRequested.exchange(false)&&settings.active) {
+        resultReady.store(false);
+        if (sideChannels > 0) {
+            engine.startLearn(); wasLearning = true; learnStatus.store(1);
+        } else {
+            learnStatus.store(6);
+        }
+    }
     for (int c = 0; c < sideChannels; ++c) kick[c] = side.getReadPointer(c);
     auto captureState = kickEqCaptureState.load(std::memory_order_acquire);
     const auto generation = kickEqGeneration.load(std::memory_order_relaxed);
@@ -217,7 +222,7 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
             kickEqCaptureState.store(captureState, std::memory_order_release);
             kickEqStatus.store(1);
         } else {
-            kickEqStatus.store(2);
+            kickEqStatus.store(4);
         }
     }
     if (captureState == CaptureState::recording &&
@@ -252,7 +257,7 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
             resultDelay.store(static_cast<float>(r.delayMs)); resultInvert.store(r.invert);
             learnCorrelation.store(static_cast<float>(r.correlation));
             resultReady.store(true); learnStatus.store(5);
-        } else learnStatus.store(r.rejection==bassdeamon::LearnRejection::ambiguous?3:r.rejection==bassdeamon::LearnRejection::unstable?4:2);
+        } else learnStatus.store(!r.hasReference?6:r.rejection==bassdeamon::LearnRejection::ambiguous?3:r.rejection==bassdeamon::LearnRejection::unstable?4:2);
     }
     learnProgress.store(float(engine.learnProgress()));
     wasLearning = engine.learning(); publishMeters();
@@ -315,7 +320,7 @@ void BassDeamonProcessor::timerCallback() {
             parameters.copyState();
             undoManager.beginNewTransaction();
         }
-        kickEqStatus.store(current ? (hz > 0 ? 3 : 2) : 0);
+        kickEqStatus.store(current ? (hz > 0 ? 3 : kickEqCapture.hasSignal() ? 2 : 4) : 0);
         kickEqCaptureState.store(CaptureState::idle, std::memory_order_release);
     }
     if (!resultReady.exchange(false)) return;
@@ -325,9 +330,10 @@ void BassDeamonProcessor::timerCallback() {
         auto* p = parameters.getParameter(id);
         p->beginChangeGesture(); p->setValueNotifyingHost(p->convertTo0to1(value)); p->endChangeGesture();
     };
-    set("phase.delay", resultDelay.load()); set("phase.invert", resultInvert.load() ? 1.0f : 0.0f);
+    set("phase.delay", resultDelay.load());
+    set("phase.invert", resultInvert.load() ? 1.0f : 0.0f);
+    set("phase.on", 1.0f);
     parameters.copyState();undoManager.beginNewTransaction();
-    // Learn does not silently enable PHASE. User can compare with the active switch.
 }
 void BassDeamonProcessor::getStateInformation(juce::MemoryBlock& dest) {
     auto state = parameters.copyState(); state.setProperty("schemaVersion", 8, nullptr);

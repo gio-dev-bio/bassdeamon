@@ -1,6 +1,8 @@
 #include "PluginEditor.h"
 #include <juce_graphics/juce_graphics.h>
 #include <iostream>
+#include <cstring>
+#include <stdexcept>
 
 int captureGui(const juce::File& output){
     BassDeamonProcessor p;
@@ -41,7 +43,11 @@ int captureGui(const juce::File& output){
         if(!stream||!stream->setPosition(0)||stream->truncate().failed())return false;
         return format.writeImageToStream(image,*stream);
     };
+    auto* eq=p.parameters.getParameter("kickEq.frequency");
+    eq->setValueNotifyingHost(eq->convertTo0to1(60));
+    p.parameters.getParameter("kickEq.on")->setValueNotifyingHost(1);
     if(!save(output))return 1;
+    p.parameters.getParameter("kickEq.on")->setValueNotifyingHost(0);
     auto* gui=static_cast<BassDeamonEditor*>(editor.get());
     // Freeze one real audio frame for paired pictures. Rendering a full PNG
     // may take >500 ms in Debug: do not run the no-audio expiry between shots.
@@ -51,12 +57,6 @@ int captureGui(const juce::File& output){
         gui->spectrumPre.setToggleState(!post,juce::dontSendNotification);
         gui->spectrumPost.setToggleState(post,juce::dontSendNotification);
     };
-    gui->spectrumSplit.onClick();
-    if(!save(output.getSiblingFile("GUI-Split.png")))return 1;
-    gui->spectrumSplit.setToggleState(false,juce::dontSendNotification);
-    gui->spectrumBoth.onClick();
-    if(!save(output.getSiblingFile("GUI-Both.png")))return 1;
-    gui->spectrumBoth.setToggleState(false,juce::dontSendNotification);
     selectViewForCapture(false);
     if(!save(output.getSiblingFile("GUI-Pre.png")))return 1;
     selectViewForCapture(true);
@@ -121,7 +121,81 @@ int captureGui(const juce::File& output){
     if(*std::max_element(gui->visualMaskPost.begin(),gui->visualMaskPost.end())>=.12f){std::cerr<<"POST retains red after 20 dB attenuation\n";return 1;}
     selectViewForCapture(true);if(!save(output.getSiblingFile("GUI-Post-20dB.png")))return 1;
     selectViewForCapture(false);if(!save(output.getSiblingFile("GUI-Pre-20dB.png")))return 1;
-    gui->spectrumSplit.onClick();
-    if(!save(output.getSiblingFile("GUI-Split-20dB.png")))return 1;
     std::cout<<output.getFullPathName()<<'\n';return 0;
+}
+
+// Local QA: two stereo 48 kHz interleaved float exports, never bundled with CI.
+int captureLoopGui(const juce::File& bassFile, const juce::File& kickFile, const juce::File& output) {
+    const auto load=[](const juce::File& file){
+        juce::MemoryBlock bytes;
+        if(!file.loadFileAsData(bytes) || bytes.getSize()<8 || bytes.getSize()%8!=0)
+            throw std::runtime_error("Expected a stereo interleaved float export");
+        std::vector<std::array<float,2>> samples(bytes.getSize()/8);
+        std::memcpy(samples.data(),bytes.getData(),bytes.getSize());
+        return samples;
+    };
+    const auto bass=load(bassFile),kick=load(kickFile);
+    BassDeamonProcessor processor;
+    auto layout=processor.getBusesLayout();
+    layout.inputBuses.set(1,juce::AudioChannelSet::stereo());
+    if(!processor.setBusesLayout(layout))return 1;
+    processor.prepareToPlay(48000,256);
+    std::unique_ptr<BassDeamonEditor> editor(static_cast<BassDeamonEditor*>(processor.createEditor()));
+    editor->setSize(1200,1376);
+    editor->stopTimer();
+    juce::AudioBuffer<float> buffer(4,256);
+    juce::MidiBuffer midi;
+    int pos=0;
+    const auto renderBlock=[&](bool knownOffset){
+        for(int n=0;n<256;++n){
+            const auto k=kick[size_t(pos+n)%kick.size()];
+            const auto b=knownOffset?kick[(size_t(pos+n+96))%kick.size()]:bass[size_t(pos+n)%bass.size()];
+            for(int c=0;c<2;++c){
+                buffer.setSample(c,n,knownOffset?-b[c]:b[c]);
+                buffer.setSample(c+2,n,k[c]);
+            }
+        }
+        processor.processBlock(buffer,midi);
+        pos+=256;
+    };
+    processor.analysisQueue.enabled.store(false);
+    editor->kickEqLearn.onClick();
+    editor->learn.onClick();
+    for(int block=0;block<750;++block)renderBlock(false);
+    processor.timerCallback();
+    const auto hz=processor.parameters.getRawParameterValue("kickEq.frequency")->load();
+    std::cout<<"Actual loop KICK EQ "<<hz<<" Hz / phase status "<<processor.learnStatus.load()
+             <<" / r "<<processor.learnCorrelation.load()<<'\n';
+    processor.parameters.getParameter("kickEq.on")->setValueNotifyingHost(0);
+    processor.parameters.getParameter("glue.on")->setValueNotifyingHost(0);
+    editor->learn.onClick();
+    for(int block=0;block<750;++block)renderBlock(true);
+    processor.timerCallback();
+    const auto delay=processor.parameters.getRawParameterValue("phase.delay")->load();
+    const auto inverted=processor.parameters.getRawParameterValue("phase.invert")->load();
+    std::cout<<"Actual kick with known offset: phase status "<<processor.learnStatus.load()
+             <<" / delay "<<delay<<" ms / inverted "<<inverted<<'\n';
+    processor.parameters.getParameter("phase.on")->setValueNotifyingHost(0);
+    processor.parameters.getParameter("kickEq.on")->setValueNotifyingHost(1);
+    processor.parameters.getParameter("glue.on")->setValueNotifyingHost(1);
+    processor.analysisQueue.enabled.store(true);
+    auto* maxParam=processor.parameters.getParameter("view.maxHz");
+    maxParam->setValueNotifyingHost(maxParam->convertTo0to1(250));
+    processor.setAnalyzerRate(5);
+    double clock=0;
+    const auto initialRevision=editor->spectrumDisplay.revision;
+    for(int block=0;block<1100;++block){
+        renderBlock(false);
+        if(block%6==0){
+            clock+=32;
+            editor->refreshVisuals(clock);
+        }
+    }
+    const auto slowFrames=editor->spectrumDisplay.revision-initialRevision;
+    std::cout<<"1 fps: "<<slowFrames<<" spectrum frames in "<<clock/1000<<" s\n";
+    if(hz<=0||std::abs(delay-2)>.26||inverted<.5f||slowFrames<4||slowFrames>7)return 1;
+    const auto snapshot=editor->createComponentSnapshot(editor->getLocalBounds(),true,1.f);
+    auto stream=output.createOutputStream();
+    juce::PNGImageFormat png;
+    return stream&&stream->setPosition(0)&&stream->truncate().wasOk()&&png.writeImageToStream(snapshot,*stream)?0:1;
 }

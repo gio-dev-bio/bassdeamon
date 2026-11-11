@@ -11,6 +11,7 @@ public:
     void resized() override;
 private:
     friend int interactionTests();
+    friend int captureLoopGui(const juce::File&, const juce::File&, const juce::File&);
     friend int captureGui(const juce::File&);
     using State=juce::AudioProcessorValueTreeState;
     struct Face final : juce::Component {
@@ -40,7 +41,7 @@ private:
     void addChoice(const char*,const juce::StringArray&,juce::Rectangle<int>);
     void paintConsole(juce::Graphics&);
     void paintSpectrum(juce::Graphics&);
-    int paintSpectrumPlot(juce::Graphics&, juce::Rectangle<float>, bool post, bool overlay);
+    int paintSpectrumPlot(juce::Graphics&, juce::Rectangle<float>, bool post);
     void paintWave(juce::Graphics&);
     void paintVU(juce::Graphics&);
     bool spectrumIsPost() const;
@@ -57,8 +58,11 @@ private:
     bassdeamon::RelationAnalyzer analyzer;
     bassdeamon::SpectrumDisplay spectrumDisplay;
     juce::ComboBox analyzerRateBox;
+    int rateSyncedToBox = -1;
+    float visualUnmaskGr = 0;
+    bassdeamon::BeatScope visibleScope;
     juce::TextButton sumButton{"SUM K+B"};
-    juce::TextButton spectrumPre{"PRE"},spectrumPost{"POST"},spectrumBoth{"BOTH"},spectrumSplit{"SPLIT"};
+    juce::TextButton spectrumPre{"PRE"},spectrumPost{"POST"};
     juce::TextButton kickEqLearn{"LEARN"}, dryCompare{"DRY"}, matchCompare{"LEVEL MATCH"};
     juce::Slider kickEqFrequency,kickEqCut;
     std::unique_ptr<State::SliderAttachment> kickEqFrequencyAttachment,kickEqCutAttachment;
@@ -74,7 +78,7 @@ private:
     std::unique_ptr<State::SliderAttachment> glueAttackAttachment,glueReleaseAttachment;
     Knob *unmaskAttackKnob=nullptr,*unmaskReleaseKnob=nullptr;
     float scopeScale=1;
-    juce::TextButton learn{"LEARN / LOCK"},aButton{"A"},bButton{"B"};
+    juce::TextButton learn{"LEARN + APPLY"},aButton{"A"},bButton{"B"};
     juce::TextButton undoButton{"UNDO"},redoButton{"REDO"};
     juce::Label cpuLabel;
     double analyzerMilliseconds=0;

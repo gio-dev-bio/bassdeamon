@@ -37,21 +37,21 @@ int main(){try{
             for(int n=0;n<128;++n){AnalysisFrame f;f.pre={k[size_t(n)],k[size_t(n)]};f.post={x[size_t(n)],x[size_t(n)]};f.kick=f.pre;q->push(f);}if(b%12==0)a->consume(*q);}
         a->consume(*q);require(near(a->maskPost,75,48000)>.8,"Detector trusts knob instead of actual output");
     }
-    for(int mode=0;mode<4;++mode){auto a=std::make_unique<RelationAnalyzer>();auto q=std::make_unique<AnalysisQueue>();auto d=std::make_unique<SpectrumDisplay>();a->prepare(48000);
+    for(int mode=0;mode<6;++mode){auto a=std::make_unique<RelationAnalyzer>();auto q=std::make_unique<AnalysisQueue>();auto d=std::make_unique<SpectrumDisplay>();a->prepare(48000);
         uint64_t last=0;int lastTick=0;bool pulseSeen=false;size_t revisionsAfterReady=0;
-        for(int n=0;n<3*48000;++n){double t=n/48000.;const double since=t-.6;
+        for(int n=0;n<4*48000;++n){double t=n/48000.;const double since=t-.6;
             const float bass=float(.4*std::sin(2*pi*75*t));const float kick=since>=0&&since<.02?float(.4*std::sin(pi*since/.02)*std::sin(2*pi*75*t)):0;
-            AnalysisFrame f;f.pre={bass,bass};f.post=f.pre;f.kick={kick,kick};if(t>1.2){f.kick=f.pre;f.post={bass*.1f,bass*.1f};}
+            AnalysisFrame f;f.pre={bass,bass};f.post=f.pre;f.kick={kick,kick};if(t>1.6){f.kick=f.pre;f.post={bass*.1f,bass*.1f};}
             require(q->push(f),"Rate fixture queue overflow");
             if(n/1600>lastTick){lastTick=n/1600;a->consume(*q);const auto oldRevision=d->revision;const auto old=d->shown[0];d->push(*a,a->consumedFrames-last,t,mode);last=a->consumedFrames;
                 if(d->revision==oldRevision)require(old==d->shown[0],"Visible frame changed between selected refreshes");
-                if(t>.6&&t<1.2&&near(d->shown[3],75,48000)>=.12)pulseSeen=true;
-                if(t>2.2)require(near(d->shown[4],75,48000)<.12,"Slow display retains old POST collision after actual attenuation");
+                if(t>.6&&t<1.6&&near(d->shown[3],75,48000)>=.12)pulseSeen=true;
+                if(t>3.45)require(near(d->shown[4],75,48000)<.12,"Slow display retains old POST collision after actual attenuation");
                 revisionsAfterReady=d->revision;
             }
         }
         require(pulseSeen,"Slow rate lost 20 ms collision event");
-        const double expected=(3.-double(RelationAnalyzer::fftSize)/48000)*SpectrumDisplay::fps(mode);
+        const double expected=(4.-double(RelationAnalyzer::fftSize)/48000)*SpectrumDisplay::fps(mode);
         if(std::abs(double(revisionsAfterReady)-expected)>=3){std::cerr<<"Rate "<<SpectrumDisplay::fps(mode)<<" actual frames "<<revisionsAfterReady<<" expected "<<expected<<"\n";return 1;}
     }
     // Musical use case: repeated short kicks, a sustained bass plus harmonic,

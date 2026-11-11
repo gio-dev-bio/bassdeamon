@@ -55,7 +55,7 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
     addSwitch("phase.invert","POLARITY -",{438,654,150,32},"Invert both bass channels together.");
     addSwitch("phase.rotate","ALL-PASS",{610,654,150,32},"Enable the manual all-pass stage.");
     learn.setBounds(438,704,150,38);face.addAndMakeVisible(learn);learn.onClick=[this]{processor.requestLearn();};
-    learn.setTooltip("Analyse four seconds. Apply only a strong, distinct match stable across both halves. Weak, ambiguous or moving matches keep your settings. Does not enable PHASE. Correlation is not a sound-quality score.");
+    learn.setTooltip("Analyse four seconds. A reliable result sets delay and polarity and enables PHASE. Uncertain results keep the current settings.");
     depthKnob=&addKnob("unmask.amount","DEPTH","",true,{830,448,170,184},"Maximum spectral unmasking amount. The kick is never summed into the bass.");
     attenuationKnob=&addKnob("unmask.attenuation","ATTENUATION"," dB",false,{830,448,170,184},"Maximum dynamic attenuation at the focus, 0-24 dB. Actual reduction follows shared signal activity. Before Auto Gain: turn Auto Gain off to measure the requested cut.");
     attenuationKnob->slider.textFromValueFunction=[](double value){return (value>0?juce::String("-"):juce::String{})+juce::String(value,1)+" dB";};
@@ -92,10 +92,9 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
     sumButton.setToggleState(true,juce::dontSendNotification);
     addSwitch("view.hold","HOLD",{904,336,88,26},"Freeze the last complete quarter-note capture; audio is unaffected.");
     spectrumPre.setBounds(72,136,66,26);spectrumPost.setBounds(145,136,72,26);
-    spectrumBoth.setBounds(224,136,66,26);spectrumSplit.setBounds(297,136,66,26);
-    for(auto* button:{&spectrumPre,&spectrumPost,&spectrumBoth,&spectrumSplit}){
+    for(auto* button:{&spectrumPre,&spectrumPost}){
         face.addAndMakeVisible(*button);
-        button->setTooltip("PRE input, POST output, BOTH overlaid, or SPLIT side by side.");
+        button->setTooltip("Show bass before or after processing. The kick stays visible as the reference.");
     }
     const auto selectSpectrum=[this](int mode){
         // Local display state only. No host gesture, APVTS/audio parameter or
@@ -103,16 +102,22 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
         processor.setSpectrumView(mode);
         spectrumPre.setToggleState(mode==0,juce::dontSendNotification);
         spectrumPost.setToggleState(mode==1,juce::dontSendNotification);
-        spectrumBoth.setToggleState(mode==2,juce::dontSendNotification);
-        spectrumSplit.setToggleState(mode==3,juce::dontSendNotification);face.repaint();
+        face.repaint();
     };
-    spectrumPre.onClick=[selectSpectrum]{selectSpectrum(0);};spectrumPost.onClick=[selectSpectrum]{selectSpectrum(1);};
-    spectrumBoth.onClick=[selectSpectrum]{selectSpectrum(2);};
-    spectrumSplit.onClick=[selectSpectrum]{selectSpectrum(3);};
-    analyzerRateBox.addItemList({"FAST / 30 fps","NORMAL / 15 fps","SLOW / 8 fps","VERY SLOW / 4 fps"},1);
-    analyzerRateBox.setSelectedId(processor.analyzerRate()+1,juce::dontSendNotification);analyzerRateBox.setBounds(290,166,220,22);
-    analyzerRateBox.setTooltip("Visual refresh only. Analysis keeps running and captures short events between frames. No audio or host automation changes.");
-    analyzerRateBox.onChange=[this]{processor.setAnalyzerRate(analyzerRateBox.getSelectedId()-1);};face.addAndMakeVisible(analyzerRateBox);
+    spectrumPre.onClick=[selectSpectrum]{selectSpectrum(0);};
+    spectrumPost.onClick=[selectSpectrum]{selectSpectrum(1);};
+    analyzerRateBox.addItemList({"30 fps","15 fps","8 fps","4 fps","2 fps","1 fps"},1);
+    rateSyncedToBox = processor.analyzerRate();
+    analyzerRateBox.setSelectedId(rateSyncedToBox+1,juce::dontSendNotification);
+    analyzerRateBox.setBounds(290,166,125,22);
+    analyzerRateBox.setTooltip("Refresh speed for the spectrum, its measurements and the scope.");
+    analyzerRateBox.onChange=[this]{
+        if (const int selected = analyzerRateBox.getSelectedId(); selected > 0) {
+            rateSyncedToBox = selected-1;
+            processor.setAnalyzerRate(rateSyncedToBox);
+        }
+    };
+    face.addAndMakeVisible(analyzerRateBox);
     for(auto* slider:{&spectrumMin,&spectrumMax}){
         slider->setSliderStyle(juce::Slider::LinearBar);
         slider->setTextBoxStyle(juce::Slider::TextBoxLeft,false,130,26);
@@ -257,8 +262,8 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g){
     console::text(g,"CUT",{615,570,32,24},12,console::muted);
     const int kickState = processor.kickEqStatus.load();
     const bool hasFrequency = processor.parameters.getRawParameterValue("kickEq.frequency")->load() >= 30;
-    const juce::String eqStatus = kickState == 1 ? "LEARNING" : kickState == 2 ? "NO RELIABLE PEAK" : hasFrequency ? "FREQUENCY SET" : "READY TO LEARN";
-    console::text(g,eqStatus,{756,570,176,24},12,kickState==2?console::orange:console::cream);
+    const juce::String eqStatus = kickState == 1 ? "LEARNING" : kickState == 4 ? "NO KICK SIDECHAIN" : kickState == 2 ? "NO RELIABLE PEAK" : hasFrequency ? "FREQUENCY SET" : "READY TO LEARN";
+    console::text(g,eqStatus,{756,570,176,24},12,(kickState==2||kickState==4)?console::orange:console::cream);
     if (processor.compareMatch.load())
         console::text(g,"MATCH "+juce::String(processor.comparisonGainDb.load(),1)+" dB",{1011,597,140,14},10,console::muted,juce::Justification::centred);
     }
@@ -288,9 +293,9 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g){
     const int state=processor.learnStatus.load();
     const auto match=processor.learnCorrelation.load();
     const bool phaseOn=processor.parameters.getRawParameterValue("phase.on")->load()>.5f;
-    const juce::String status=state==1?"LEARNING "+juce::String(int(processor.learnProgress.load()*100))+"%":state==2?"NO RELIABLE MATCH":state==3?"AMBIGUOUS MATCH":state==4?"UNSTABLE MATCH":state==5?(phaseOn?"APPLIED / r ":"READY / PHASE OFF / r ")+juce::String(match,2):"READY";
-    console::text(g,status,{604,707,170,28},12,state>=2&&state<=4?console::orange:console::amber);
-    const juce::String hint=state==1?"Keep bass + kick playing for 4 seconds":state==5&&!phaseOn?"Enable PHASE to hear the learned settings":state>=2&&state<=4?"Settings kept: use manual delay / polarity":"Learn sets delay + polarity; all-pass stays manual";
+    const juce::String status=state==1?"LEARNING "+juce::String(int(processor.learnProgress.load()*100))+"%":state==2?"NO RELIABLE MATCH":state==3?"AMBIGUOUS MATCH":state==4?"UNSTABLE MATCH":state==6?"NO KICK SIDECHAIN":state==5?(phaseOn?"APPLIED / r ":"READY / PHASE OFF / r ")+juce::String(match,2):"READY";
+    console::text(g,status,{604,707,170,28},12,(state==6||(state>=2&&state<=4))?console::orange:console::amber);
+    const juce::String hint=state==1?"Keep bass + kick playing for 4 seconds":state==5&&!phaseOn?"Enable PHASE to hear the learned settings":state==6?"Check the kick send to the plugin sidechain":state>=2&&state<=4?"Settings kept: use manual delay / polarity":"Learn sets delay + polarity; all-pass stays manual";
     console::text(g,hint,{438,746,325,22},12,console::cream);
     console::text(g,"GR -"+juce::String(processor.unmaskReduction.load(),2)+" dB",{832,439,185,18},12,console::cream);
     console::text(g,"FOCUS  "+juce::String(focus,1)+" Hz",{1026,439,118,18},13,console::amber);
@@ -316,7 +321,7 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g){
     console::text(g,"IN "+juce::String(std::max(inputDb,-99.0f),1)+"  /  OUT "+juce::String(std::max(outputDb,-99.0f),1)+" dBFS RMS",{221,808,315,26},13,console::muted);
     console::text(g,"PEAK "+juce::String(std::max(peak,-99.0f),1)+" dBFS",{548,808,180,26},14,clipFrames>0?console::orange:console::cream);
     console::text(g,"TRIM",{762,808,60,26},13,console::muted);
-    console::text(g,"v0.2.11",{1090,808,66,26},13,console::muted,juce::Justification::centredRight);
+    console::text(g,"v0.2.12",{1090,808,66,26},13,console::muted,juce::Justification::centredRight);
     }
     }
     g.drawImageAt(grain,0,0);
@@ -331,44 +336,48 @@ std::array<double,2> BassDeamonEditor::spectrumLimits() const {
     return {minimum,maximum};
 }
 void BassDeamonEditor::paintSpectrum(juce::Graphics& g) {
-    const int view = processor.spectrumView();
-    const bool split = view == 3;
-    const bool post = view != 0;
-    console::text(g,split?"PRE / POST":view==2?"OVERLAY":post?"BASS POST":"BASS PRE",
-                  {374,140,112,20},13,console::cream);
-    console::text(g,"KICK",{73,167,70,20},13,console::amber);
+    const bool post = spectrumIsPost();
+    const juce::Colour bassBlue(0xff8faef1);
+    console::text(g,post?"BASS POST":"BASS PRE",{235,140,113,20},14,bassBlue);
+    console::text(g,"KICK",{360,140,60,20},14,console::amber);
     console::text(g,"FROM",{526,166,130,15},11,console::muted);
     console::text(g,"TO",{682,166,132,15},11,console::muted);
     console::text(g,"RATE",{235,167,52,20},13,console::muted);
-    int clashes = 0;
-    if (split) {
-        console::text(g,"PRE",{73,185,341,16},13,console::cream);
-        console::text(g,"POST",{473,185,341,16},13,juce::Colour(0xff56e6c0));
-        paintSpectrumPlot(g,{72,205,342,145},false,false);
-        clashes = paintSpectrumPlot(g,{472,205,342,145},true,false);
-    } else {
-        clashes = paintSpectrumPlot(g,{72,190,742,160},post,view==2);
-    }
-    const juce::String status = !analyzer.ready() ? "COLLECTING AUDIO"
-        : clashes > 0 ? juce::String(clashes) + " SHARED REGIONS"
-        : post ? "NO SIGNIFICANT RESIDUAL" : "NO SHARED PEAKS IN VIEW";
-    const auto gr = juce::String(processor.unmaskReduction.load(),1);
-    const auto fps = juce::String(bassdeamon::SpectrumDisplay::fps(processor.analyzerRate()));
+    const int clashes = paintSpectrumPlot(g,{72,190,742,160},post);
+    const juce::String status = !spectrumDisplay.ready ? "COLLECTING AUDIO"
+        : clashes > 0 ? juce::String(clashes) + (clashes==1?" COLLISION":" COLLISIONS")
+        : post ? "NO SIGNIFICANT RESIDUAL" : "NO COLLISION IN VIEW";
+    const auto gr = juce::String(visualUnmaskGr,1);
     const juce::String comparison = processor.compareDry.load() ? "  /  DRY AUDITION" : "";
-    console::text(g,status+"  /  UNMASK GR "+gr+" dB  /  "+fps+" fps"+comparison,
-                  {72,433,740,14},13,console::cream);
+    console::text(g,status+"   •   UNMASK GR "+gr+" dB"+comparison,{72,433,740,14},13,console::muted);
 }
 
-int BassDeamonEditor::paintSpectrumPlot(juce::Graphics& g,juce::Rectangle<float> plot,bool post,bool overlay) {
+int BassDeamonEditor::paintSpectrumPlot(juce::Graphics& g,juce::Rectangle<float> plot,bool post) {
     const auto limits=spectrumLimits();const double minimum=limits[0],maximum=limits[1];
-    const auto fx=[&](double hz){return plot.getX()+float((hz-minimum)/(maximum-minimum))*plot.getWidth();};
+    // Log-like bass zoom preserves a usable zero-Hz endpoint.
+    const double start = std::log1p(minimum/20);
+    const double span = std::log1p(maximum/20)-start;
+    const auto fx=[&](double hz){return plot.getX()+float((std::log1p(hz/20)-start)/span)*plot.getWidth();};
     const auto fy=[&](float level){return plot.getBottom()-juce::jlimit(0.f,1.f,(level+96)/96)*plot.getHeight();};
-    for(int level:{-96,-72,-48,-24,0}){const float y=fy(float(level));g.setColour(console::cream.withAlpha(.12f));g.drawHorizontalLine(juce::roundToInt(y),plot.getX(),plot.getRight());
-        console::text(g,juce::String(level),{plot.getX()-38,y-7,33,14},12,console::cream,juce::Justification::centredRight);}
-    const int divisions = plot.getWidth()<400 ? 6 : 10;
-    for(int i=0;i<=divisions;++i){const double hz=minimum+(maximum-minimum)*i/divisions;const float x=fx(hz);g.setColour(console::cream.withAlpha(i%2==0?.12f:.05f));g.drawVerticalLine(juce::roundToInt(x),plot.getY(),plot.getBottom());
-        if(i%2==0)console::text(g,juce::String(double(hz),hz<100?1:0),{x-27,353,54,17},13,console::cream,juce::Justification::centred);}
-    const juce::Colour postColour(0xff56e6c0),red(0xffff5555);
+    g.setColour(juce::Colour(0xff11151a));
+    g.fillRect(plot);
+    for(int level:{-96,-72,-48,-24,0}){
+        const float y=fy(float(level));
+        g.setColour(console::cream.withAlpha(.11f));
+        g.drawHorizontalLine(juce::roundToInt(y),plot.getX(),plot.getRight());
+        console::text(g,juce::String(level),{plot.getX()-38,y-7,33,14},12,console::muted,juce::Justification::centredRight);
+    }
+    float lastTick=plot.getX()-64;
+    for(double hz:{0.,20.,30.,40.,50.,60.,80.,100.,150.,200.,300.,500.,750.,1000.,1500.,2000.,3000.,5000.,7500.,10000.,15000.,20000.}){
+        if(hz<minimum||hz>maximum)continue;
+        const float x=fx(hz);
+        if(x-lastTick<59)continue;
+        lastTick=x;
+        g.setColour(console::cream.withAlpha(.10f));
+        g.drawVerticalLine(juce::roundToInt(x),plot.getY(),plot.getBottom());
+        console::text(g,juce::String(int(hz))+" Hz",{x-29,353,58,17},12,console::muted,juce::Justification::centred);
+    }
+    const juce::Colour bassBlue(0xff8faef1),red(0xffff655a);
     const auto& selected=post?visualPost:visualPre;
     const auto& collisions=post?visualMaskPost:visualMaskPre;
     const double binWidth=analyzer.sampleRate()/bassdeamon::RelationAnalyzer::fftSize;
@@ -392,48 +401,97 @@ int BassDeamonEditor::paintSpectrumPlot(juce::Graphics& g,juce::Rectangle<float>
     collect(selected,collisions,false);
     const int activeRegions = int(regions.size());
     if (post) collect(visualPre,visualMaskPre,true);
-    std::sort(regions.begin(),regions.end(),[](const Region& a,const Region& b){return a.hz<b.hz;});
+    // Give priority to the most significant peaks and leave room between markers.
+    std::sort(regions.begin(),regions.end(),[&](const Region& a,const Region& b){
+        const auto rank=[&](const Region& r){return (r.strength>0?200.f:0.f)+
+            std::min(visualPre[r.peak],visualKick[r.peak])+10*r.strength;};
+        return rank(a)>rank(b);
+    });
+    std::array<const Region*,3> visibleRegions{};
+    size_t count=0;
+    for(const auto& region:regions){
+        const float x=fx(region.hz);
+        if(x<plot.getX()||x>plot.getRight())continue;
+        const auto end=visibleRegions.begin()+count;
+        if(std::any_of(visibleRegions.begin(),end,[&](const Region* r){return std::abs(x-fx(r->hz))<27;}))continue;
+        visibleRegions[count++]=&region;
+        if(count==visibleRegions.size())break;
+    }
     {
-        juce::Graphics::ScopedSaveState clip(g);g.reduceClipRegion(plot.toNearestInt());
-        // Kick is thin and dashed; the selected bass is always drawn last so
-        // identical curves cannot hide the bass under the amber reference.
-        for(int trace=0;trace<(overlay?3:2);++trace){
-            const bool preOverlay=overlay&&trace==1;
-            const auto& values=trace==0?visualKick:preOverlay?visualPre:selected;juce::Path line;bool started=false;
-            for(size_t b=0;b<values.size();++b){const double hz=double(b)*binWidth;if(hz+binWidth<minimum)continue;
-                if(!started){line.startNewSubPath(fx(hz),fy(values[b]));started=true;}else line.lineTo(fx(hz),fy(values[b]));if(hz>maximum)break;}
-            if(trace==0){juce::Path dashed;const float pattern[]{5,4};juce::PathStrokeType(1.5f).createDashedStroke(dashed,line,pattern,2);
-                g.setColour(console::amber.withAlpha(.8f));g.fillPath(dashed);
-            }else if(preOverlay){
-                g.setColour(console::cream.withAlpha(.8f));g.strokePath(line,juce::PathStrokeType(1.7f));
-            }else{auto fill=line;fill.lineTo(plot.getRight(),plot.getBottom());fill.lineTo(plot.getX(),plot.getBottom());fill.closeSubPath();
-                g.setColour((post?postColour:console::cream).withAlpha(.07f));g.fillPath(fill);g.setColour(post?postColour:console::cream);g.strokePath(line,juce::PathStrokeType(2.5f));}
+        juce::Graphics::ScopedSaveState clip(g);
+        g.reduceClipRegion(plot.toNearestInt());
+        for(int trace=0;trace<2;++trace){
+            const auto& values=trace==0?visualKick:selected;
+            const auto colour=trace==0?juce::Colour(0xffd59666):bassBlue;
+            juce::Path curve;
+            const size_t first=size_t(std::max(0.,std::floor(minimum/binWidth)));
+            const size_t last=std::min(values.size()-1,size_t(std::ceil(maximum/binWidth)));
+            curve.startNewSubPath(fx(first*binWidth),fy(values[first]));
+            for(size_t b=first+1;b<=last;++b)curve.lineTo(fx(b*binWidth),fy(values[b]));
+            auto fill=curve;
+            fill.lineTo(fx(last*binWidth),plot.getBottom());
+            fill.lineTo(fx(first*binWidth),plot.getBottom());
+            fill.closeSubPath();
+            g.setGradientFill(juce::ColourGradient(colour.withAlpha(.40f),0,plot.getY(),
+                                                  colour.withAlpha(.09f),0,plot.getBottom(),false));
+            g.fillPath(fill);
+            g.setColour(colour.withAlpha(.92f));
+            g.strokePath(curve,juce::PathStrokeType(1.45f));
         }
-        // Exact spectral interval, curve highlight and a one-pixel centre
-        // leader. Labels have their own boxes: label width is NOT band width.
-        for(const auto& region:regions){const float x=juce::jlimit(plot.getX(),plot.getRight(),fx(region.hz));
-            if (region.strength==0) {
-                g.setColour(console::muted.withAlpha(.45f));
-                g.drawVerticalLine(juce::roundToInt(x),plot.getY(),plot.getBottom());
-                continue;
-            }
-            const float lo=std::max(plot.getX(),fx((double(region.first)-.5)*binWidth)),hi=std::min(plot.getRight(),fx((double(region.last)+.5)*binWidth));
-            g.setColour(red.withAlpha(.15f+.65f*region.strength));g.drawVerticalLine(juce::roundToInt(x),plot.getY()+24,plot.getBottom()-8);
-            g.setColour(red.withAlpha(.2f+.8f*region.strength));g.fillRect(lo,plot.getBottom()-7,std::max(1.5f,hi-lo),5.f);
-            juce::Path highlight;bool first=true;for(size_t b=region.first;b<=region.last;++b){const auto point=juce::Point<float>(fx(double(b)*binWidth),fy(selected[b]));
-                if(first){highlight.startNewSubPath(point);first=false;}else highlight.lineTo(point);}
-            g.strokePath(highlight,juce::PathStrokeType(4.f));
+        for(size_t i=0;i<count;++i){
+            const auto& region=*visibleRegions[i];
+            const float x=fx(region.hz);
+            const float y=fy(selected[region.peak]);
+            const bool active=region.strength>0;
+            const auto accent=active?red:console::muted;
+            g.setColour(accent.withAlpha(.30f));
+            g.drawVerticalLine(juce::roundToInt(x),y,plot.getBottom());
+            g.setColour(accent);
+            if(active)g.fillEllipse(x-3,y-3,6,6);
+            else g.drawEllipse(x-3,y-3,6,6,1);
         }
+    }
+    const double eqHz=processor.parameters.getRawParameterValue("kickEq.frequency")->load();
+    const double eqCut=processor.parameters.getRawParameterValue("kickEq.cut")->load();
+    if(processor.parameters.getRawParameterValue("kickEq.on")->load()>.5f && eqHz>=30 && eqCut>0){
+        // RBJ bell response of the locked static filter. The right axis is gain,
+        // independent of the dBFS scale used by the spectra.
+        juce::Graphics::ScopedSaveState clip(g);
+        g.reduceClipRegion(plot.toNearestInt());
+        const double amplitude=std::pow(10.,-eqCut/40);
+        const double halfRateAngle=bassdeamon::pi/analyzer.sampleRate();
+        const double centre=std::tan(eqHz*halfRateAngle);
+        const double axisDepth=plot.getHeight()*.54;
+        const double top=plot.getY()+5;
+        juce::Path response;
+        for(int i=0;i<=240;++i){
+            const double fraction=i/240.;
+            const double hz=20*std::expm1(start+span*fraction);
+            const double ratio=std::tan(hz*halfRateAngle)/centre;
+            const double real=1-ratio*ratio;
+            const double quadrature=ratio/3.;
+            const double power=real*real;
+            const double damping=quadrature*quadrature;
+            const double change=10*std::log10((power+damping*amplitude*amplitude)/(power+damping/(amplitude*amplitude)));
+            const float x=plot.getX()+float(fraction)*plot.getWidth();
+            const float y=float(top-change*axisDepth/4);
+            if(i==0)response.startNewSubPath(x,y);else response.lineTo(x,y);
+        }
+        g.setColour(console::ink);
+        g.strokePath(response,juce::PathStrokeType(3.8f));
+        g.setColour(console::cream);
+        g.strokePath(response,juce::PathStrokeType(1.6f));
+        console::text(g,"KICK EQ  0 dB",{plot.getRight()-110,float(top+4),104,16},11,console::cream,juce::Justification::centredRight);
+        console::text(g,"−4 dB",{plot.getRight()-60,float(top+axisDepth-9),54,16},11,console::cream,juce::Justification::centredRight);
     }
     {
         const auto formatDb=[](float value){
             return (value>=0?juce::String("+"):juce::String{})+juce::String(value,1)+" dB";
         };
         // Keep readouts below the plot, leaving the actual peaks visible.
-        const float width=post?162.f:144.f;
-        const auto visible=std::min<size_t>(regions.size(),size_t((plot.getWidth()+4)/(width+4)));
-        for (size_t i=0;i<visible;++i) {
-            const auto& region=regions[i];
+        const float width=232.f;
+        for (size_t i=0;i<count;++i) {
+            const auto& region=*visibleRegions[i];
             const auto bin=region.peak;
             const auto& pairs=spectrumDisplay.paired;
             const float pre=pairs[0][bin], after=pairs[1][bin], kickDb=pairs[2][bin];
@@ -444,11 +502,10 @@ int BassDeamonEditor::paintSpectrumPlot(juce::Graphics& g,juce::Rectangle<float>
             const bool resolved=region.strength==0;
             const auto accent=resolved?juce::Colour(0xffa8bdb0):red.withAlpha(.45f+.55f*region.strength);
             juce::Rectangle<float> label(boxX,374,width,50);
-            g.setColour(console::ink);g.fillRoundedRectangle(label,4);
-            g.setColour(console::muted.withAlpha(.45f));g.drawRoundedRectangle(label,4,1);
-            console::text(g,juce::String(region.hz,1)+" Hz",label.withHeight(18).reduced(6,0),14,accent);
-            console::text(g,"BASS - KICK  "+relation,label.withTrimmedTop(18).withHeight(15).reduced(6,0),12,console::cream);
-            if(post)console::text(g,"POST - PRE  "+delta,label.withTrimmedTop(33).withHeight(15).reduced(6,0),12,console::cream);
+            g.setColour(console::muted.withAlpha(.25f));g.drawHorizontalLine(374,label.getX(),label.getRight());
+            console::text(g,juce::String(region.hz,1)+" Hz",label.withHeight(22).reduced(6,0),17,accent);
+            console::text(g,"BASS - KICK  "+relation,label.withTrimmedTop(22).withHeight(15).reduced(6,0),13,console::cream);
+            if(post)console::text(g,"POST - PRE  "+delta,label.withTrimmedTop(37).withHeight(15).reduced(6,0),13,console::cream);
 
         }
     }
@@ -461,17 +518,16 @@ void BassDeamonEditor::paintWave(juce::Graphics& g){
         return;
     }
     const juce::Rectangle<float> plot(48,374,1104,75);
-    float maximum=.05f;for(const auto& w:analyzer.scope.high)for(float v:w)maximum=std::max(maximum,std::abs(v));
-    for(const auto& w:analyzer.scope.low)for(float v:w)maximum=std::max(maximum,std::abs(v));
-    if(processor.parameters.getRawParameterValue("view.hold")->load()<.5f)
-        scopeScale=std::max(maximum,scopeScale*.98f);
+    float maximum=.05f;for(const auto& w:visibleScope.high)for(float v:w)maximum=std::max(maximum,std::abs(v));
+    for(const auto& w:visibleScope.low)for(float v:w)maximum=std::max(maximum,std::abs(v));
+    scopeScale=maximum;
     for(int i=0;i<=4;++i){const float x=plot.getX()+i*plot.getWidth()/4;g.setColour(console::cream.withAlpha(.15f));g.drawVerticalLine(int(x),plot.getY(),plot.getBottom());}
     g.setColour(console::cream.withAlpha(.2f));g.drawHorizontalLine(int(plot.getCentreY()),plot.getX(),plot.getRight());
     for(int trace=0;trace<2;++trace){const size_t stream=size_t(trace+3);
         g.setColour(trace==0?console::cream.withAlpha(.65f):trace==1?juce::Colour(0xff56e6c0):console::amber);
         for(size_t i=0;i<bassdeamon::BeatScope::size;++i){const float x=plot.getX()+float(i)*plot.getWidth()/float(bassdeamon::BeatScope::size-1);
-            const float y1=plot.getCentreY()-analyzer.scope.low[stream][i]/scopeScale*plot.getHeight()*.48f;
-            const float y2=plot.getCentreY()-analyzer.scope.high[stream][i]/scopeScale*plot.getHeight()*.48f;
+            const float y1=plot.getCentreY()-visibleScope.low[stream][i]/scopeScale*plot.getHeight()*.48f;
+            const float y2=plot.getCentreY()-visibleScope.high[stream][i]/scopeScale*plot.getHeight()*.48f;
             g.drawLine(x,y1,x,y2,1.4f);}
     }
     const bool host=processor.tempoFromHost.load();
@@ -508,18 +564,28 @@ void BassDeamonEditor::refreshVisuals(double clockMilliseconds){
     processor.refreshHistory();undoButton.setEnabled(processor.canUndo());redoButton.setEnabled(processor.canRedo());
     cpuLabel.setText("DSP CPU "+juce::String(processor.cpuLoad.getLoadAsPercentage(),1)+"%  |  ANALYZER "+juce::String(analyzerMilliseconds,1)+" ms  |  OVR "+juce::String(processor.cpuLoad.getXRunCount()),juce::dontSendNotification);
     const uint64_t received=analyzer.consumedFrames>=beforeConsumed?analyzer.consumedFrames-beforeConsumed:0;
-    spectrumDisplay.push(analyzer,received,clockMilliseconds*.001,processor.analyzerRate());
-    visualPre=spectrumDisplay.shown[0];visualPost=spectrumDisplay.shown[1];visualKick=spectrumDisplay.shown[2];
-    visualMaskPre=spectrumDisplay.shown[3];visualMaskPost=spectrumDisplay.shown[4];
-    analyzerRateBox.setSelectedId(processor.analyzerRate()+1,juce::dontSendNotification);
+    const int currentRate = processor.analyzerRate();
+    // Only mirror external recall. Polling the box each timer tick can overwrite
+    // a popup selection before JUCE delivers its asynchronous notification.
+    if(currentRate!=rateSyncedToBox){
+        rateSyncedToBox=currentRate;
+        analyzerRateBox.setSelectedId(currentRate+1,juce::dontSendNotification);
+    }
+    const auto revision=spectrumDisplay.revision;
+    const bool wasReady=spectrumDisplay.ready;
+    spectrumDisplay.push(analyzer,received,clockMilliseconds*.001,currentRate);
+    if(revision!=spectrumDisplay.revision || (wasReady&&!spectrumDisplay.ready) || staleAnalysis){
+        visualPre=spectrumDisplay.shown[0];visualPost=spectrumDisplay.shown[1];visualKick=spectrumDisplay.shown[2];
+        visualMaskPre=spectrumDisplay.shown[3];visualMaskPost=spectrumDisplay.shown[4];
+        visualUnmaskGr=processor.unmaskReduction.load(std::memory_order_relaxed);
+        visibleScope=analyzer.scope;
+    }
     const int timing=int(processor.parameters.getRawParameterValue("glue.timing")->load());
     const bool sync=processor.parameters.getRawParameterValue("unmask.timing")->load()>.5f;
     const bool direct=processor.parameters.getRawParameterValue("unmask.controlDb")->load()>.5f;
     attenuationKnob->setVisible(direct);depthKnob->setVisible(!direct);
     spectrumPre.setToggleState(!spectrumIsPost(),juce::dontSendNotification);
     spectrumPost.setToggleState(processor.spectrumView()==1,juce::dontSendNotification);
-    spectrumBoth.setToggleState(processor.spectrumView()==2,juce::dontSendNotification);
-    spectrumSplit.setToggleState(processor.spectrumView()==3,juce::dontSendNotification);
     const bool powered=processor.parameters.getRawParameterValue("global.on")->load()>.5f;
     const bool canCompare=powered && processor.parameters.getRawParameterValue("unmask.delta")->load()<.5f &&
         !(processor.parameters.getRawParameterValue("tube.on")->load()>.5f &&

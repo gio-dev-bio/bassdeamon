@@ -158,18 +158,19 @@ enum class LearnRejection { none, insufficient, weak, ambiguous, unstable };
 struct LearnResult {
     double delayMs = 0, correlation = 0; bool invert = false, valid = false;
     double separation = 0;
+    bool hasReference = false;
     LearnRejection rejection = LearnRejection::insufficient;
 };
 class PhaseLearner {
 public:
     void prepare(double sr) {
         sampleRate = sr; decimation = std::max(1, static_cast<int>(sr / 2000));
-        lowPole = std::exp(-2 * pi * 250 / sr); history.prepare(sr); start(); active = false;
+        lowPole = std::exp(-2 * pi * 250 / sr); peakDecay = pole(120, sr); history.prepare(sr); start(); active = false;
     }
     void start() noexcept {
         for(auto* a:{&cross,&bassPower,&bassSum,&firstCross,&firstBassPower,&firstBassSum})a->fill(0);
         kickPower=kickSum=firstKickPower=firstKickSum=0;count=firstCount=0;
-        elapsed = 0; lowBass = lowKick = 0; active = true; result = {};
+        elapsed = 0; lowBass = lowKick = kickEnvelope = 0; active = true; result = {};
     }
     void cancel() noexcept { active = false; }
     void tick(double bass, double kick) noexcept {
@@ -178,9 +179,12 @@ public:
         if (!active) return;
         lowBass = follow(lowBass, bass, lowPole); lowKick = follow(lowKick, kick, lowPole);
         history.push(lowBass);
+        const double kickMagnitude = std::abs(lowKick);
+        kickEnvelope = std::max(kickMagnitude, kickEnvelope * peakDecay);
+        result.hasReference |= kickMagnitude > .001;
         ++elapsed;
         if (elapsed > static_cast<int>(sampleRate * 0.02) && elapsed % decimation == 0
-            && lowKick * lowKick > 1e-8) {
+            && kickMagnitude > std::max(.0001, kickEnvelope*.14)) {
             for (size_t i = 0; i < cross.size(); ++i) {
                 const double b = history.read(static_cast<double>(i) * 0.00025 * sampleRate);
                 cross[i] += b * lowKick; bassPower[i] += b * b;
@@ -211,8 +215,13 @@ public:
                 }
             }
             double competitor=0;
-            for(size_t i=0;i<cross.size();++i)if(std::abs(static_cast<int>(i)-static_cast<int>(bestIndex))>=4)
-                competitor=std::max(competitor,std::abs(correlations[i]));
+            for(size_t i=0;i<correlations.size();++i){
+                if(i==bestIndex)continue;
+                const double peak=std::abs(correlations[i]);
+                const bool rising=i==0||peak>std::abs(correlations[i-1]);
+                const bool falling=i+1==correlations.size()||peak>=std::abs(correlations[i+1]);
+                if(rising&&falling)competitor=std::max(competitor,peak);
+            }
             result.separation=best-competitor;
             const auto halfBest=[&](bool first){
                 double peak=0;int index=0;bool invert=false;
@@ -224,9 +233,9 @@ public:
                 return std::array<double,3>{static_cast<double>(index),invert?1.0:0.0,peak};
             };
             const auto first=halfBest(true),second=halfBest(false);
-            const bool stable=first[2]>=.55&&second[2]>=.55&&first[1]==second[1]&&std::abs(first[0]-second[0])<=2;
-            result.rejection=count<600||firstCount<200||count-firstCount<200||kickPower<=1e-5?LearnRejection::insufficient
-                :best<.55?LearnRejection::weak:result.separation<.08?LearnRejection::ambiguous:!stable?LearnRejection::unstable:LearnRejection::none;
+            const bool stable=first[2]>=.45&&second[2]>=.45&&first[1]==second[1]&&std::abs(first[0]-second[0])<=2;
+            result.rejection=count<180||firstCount<60||count-firstCount<60||kickPower<=1e-5?LearnRejection::insufficient
+                :best<.5?LearnRejection::weak:result.separation<.08?LearnRejection::ambiguous:!stable?LearnRejection::unstable:LearnRejection::none;
             result.valid=result.rejection==LearnRejection::none;
         }
     }
@@ -236,6 +245,7 @@ public:
 private:
     std::array<double,21> cross{},bassPower{},bassSum{},firstCross{},firstBassPower{},firstBassSum{};
     double sampleRate = 48000, lowPole = 0, lowBass = 0, lowKick = 0, kickPower = 0;
+    double kickEnvelope = 0, peakDecay = 0;
     double kickSum=0,firstKickPower=0,firstKickSum=0;
     int decimation = 24, elapsed = 0, count = 0,firstCount=0;
     bool active = false;
@@ -530,8 +540,10 @@ public:
             const double glueAgc = compensate(0, inputPower, power(x, channels), glueMix);
             for (auto& v : x) v *= glueAgc;
 
-            const double monoBass = channels == 2 ? (x[0]+x[1])*0.5 : x[0];
-            learner.tick(monoBass, (k[0]+k[1])*0.5);
+            if (learner.learning()) {
+                const double monoBass = channels == 2 ? (x[0]+x[1])*0.5 : x[0];
+                learner.tick(monoBass, (k[0]+k[1])*0.5);
+            }
             // Crossfade two fixed delay taps instead of sweeping delay/pitch.
             // Rapid changes are coalesced until the current finite fade completes.
             if(delayFade.finished()&&delaySamples!=delayTarget){previousDelaySamples=delaySamples;delaySamples=delayTarget;delayFade.reset(0);delayFade.set(1,rampSamples);}

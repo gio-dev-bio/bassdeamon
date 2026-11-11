@@ -28,10 +28,9 @@ int interactionTests(){
         const auto before=a.parameters.copyState().toXmlString();
         juce::AudioBuffer<float> x(3,256),y(3,256);juce::MidiBuffer midi;
         for(int block=0;block<360;++block){
-            if(block%3==0)gui->spectrumSplit.onClick();
-            else if(block%3==1)gui->spectrumPre.onClick();
+            if(block%2==0)gui->spectrumPre.onClick();
             else gui->spectrumPost.onClick();
-            if(block%30==0)gui->analyzerRateBox.setSelectedId(1+(block/30)%4,juce::sendNotificationSync);
+            if(block%30==0)gui->analyzerRateBox.setSelectedId(1+(block/30)%6,juce::sendNotificationSync);
             for(int n=0;n<256;++n){const double t=(block*256+n)/48000.;const float bass=float(.3*std::sin(2*bassdeamon::pi*55*t)+.08*std::sin(2*bassdeamon::pi*110*t));
                 x.setSample(0,n,bass);x.setSample(1,n,bass*.85f);x.setSample(2,n,float(.5*std::exp(-std::fmod(t,.5)*25)*std::sin(2*bassdeamon::pi*57*t)));}
             y.makeCopyOf(x);a.processBlock(x,midi);b.processBlock(y,midi);
@@ -99,7 +98,14 @@ int interactionTests(){
     ensure(editor->showSum&&editor->sumButton.getToggleState(),"SUM ON must restore the sum graph");
     ensure(p.parameters.copyState().toXmlString()==stateBeforeSum,"SUM changed audio parameters");
     ensure(editor->spectrumIsPost(),"Spectrum must default to POST");
-    for(auto* button:{&editor->spectrumPre,&editor->spectrumPost,&editor->spectrumBoth})
+    editor->analyzerRateBox.setSelectedId(6,juce::sendNotificationAsync);
+    visualTick();
+    ensure(editor->analyzerRateBox.getSelectedId()==6,"Timer overwrote a pending RATE selection");
+    editor->analyzerRateBox.setSelectedId(5,juce::sendNotificationSync);
+    ensure(p.analyzerRate()==4,"RATE selection did not reach processor");
+    p.setAnalyzerRate(2);visualTick();
+    ensure(editor->analyzerRateBox.getSelectedId()==3,"RATE state recall did not update menu");
+    for(auto* button:{&editor->spectrumPre,&editor->spectrumPost})
         ensure(editor->face.getComponentAt(button->getBounds().getCentre())==button,"Spectrum selector hit target covered");
     for(auto* limit:{&editor->focusMin,&editor->focusMax})
         ensure(limit->getY()==737 && limit->getBottom()<editor->attenuationKnob->getY(),
@@ -221,12 +227,14 @@ int interactionTests(){
     }
     ensure(glueRelease&&unmaskRelease,"SYNC release note selectors missing");
     // View selection and exact limits survive save/recall.
-    editor->spectrumBoth.onClick();
+    p.setSpectrumView(2);
+    ensure(p.spectrumView()==1,"Legacy overlay view did not migrate to POST");
+    editor->spectrumPre.onClick();
     set("unmask.stereoMode",2);set("unmask.focusMinHz",40);set("unmask.focusMaxHz",100);
     juce::MemoryBlock viewState;p.getStateInformation(viewState);
     p.setSpectrumView(1);set("view.maxHz",1000);set("unmask.stereoMode",0);set("unmask.focusMinHz",30);set("unmask.focusMaxHz",250);
     p.setStateInformation(viewState.getData(),int(viewState.getSize()));
-    ensure(p.spectrumView()==2&&std::abs(get("view.maxHz")-437.25)<.01,"Overlay state recall failed");
+    ensure(p.spectrumView()==0&&std::abs(get("view.maxHz")-437.25)<.01,"PRE state recall failed");
     ensure(get("unmask.stereoMode")==2&&get("unmask.focusMinHz")==40&&get("unmask.focusMaxHz")==100,"UNMASK mode/range state recall failed");
     set("unmask.stereoMode",0);set("unmask.focusMinHz",30);set("unmask.focusMaxHz",250);
     set("glue.timing",0);set("unmask.delta",0);
@@ -241,8 +249,8 @@ int interactionTests(){
     ensure(p.learnStatus.load()==5,"Learn GUI never completed across short host cycles");
     p.timerCallback();
     ensure(std::abs(get("phase.delay")-2)<.26&&get("phase.invert")==1,"Learn did not apply delay and polarity to host parameters");
-    ensure(get("phase.on")==0,"Learn silently enabled PHASE");
-    ensure(p.undoEdit()&&std::abs(get("phase.delay")-delayBeforeLearn)<.001&&get("phase.invert")==invertBeforeLearn,"Learn undo incomplete");
+    ensure(get("phase.on")==1,"Learn + Apply left PHASE disabled");
+    ensure(p.undoEdit()&&std::abs(get("phase.delay")-delayBeforeLearn)<.001&&get("phase.invert")==invertBeforeLearn&&get("phase.on")==0,"Learn undo incomplete");
     ensure(p.redoEdit()&&std::abs(get("phase.delay")-2)<.26&&get("phase.invert")==1,"Learn redo incomplete");
     ensure(editor->face.getComponentAt(editor->kickEqLearn.getBounds().getCentre())==&editor->kickEqLearn,
            "Kick EQ Learn hit target covered");
@@ -263,7 +271,7 @@ int interactionTests(){
     const float lockedHz=get("kickEq.frequency");
     ensure(std::abs(lockedHz-60)<1 && get("kickEq.on")>.5f,"Kick EQ did not apply learned centre");
     captureKick(false);
-    ensure(p.kickEqStatus.load()==2 && get("kickEq.frequency")==lockedHz,"Failed learn replaced locked centre");
+    ensure(p.kickEqStatus.load()==4 && get("kickEq.frequency")==lockedHz,"Failed learn replaced locked centre");
     juce::MemoryBlock eqState;
     p.getStateInformation(eqState);
     set("kickEq.frequency",80);

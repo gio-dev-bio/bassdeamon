@@ -31,9 +31,9 @@ public:
     void selectAB(int slot);
     void loadStartingPoint(int preset);
     int analyzerRate() const noexcept { return visualAnalyzerRate.load(std::memory_order_relaxed); }
-    void setAnalyzerRate(int value) noexcept { visualAnalyzerRate.store(std::clamp(value,0,3),std::memory_order_relaxed); }
+    void setAnalyzerRate(int value) noexcept { visualAnalyzerRate.store(std::clamp(value,0,5),std::memory_order_relaxed); }
     int spectrumView() const noexcept { return visualSpectrumView.load(std::memory_order_relaxed); }
-    void setSpectrumView(int view) noexcept { visualSpectrumView.store(juce::jlimit(0,3,view),std::memory_order_relaxed); }
+    void setSpectrumView(int view) noexcept { visualSpectrumView.store(view == 0 ? 0 : 1,std::memory_order_relaxed); }
     int selectedAB() const noexcept { return abSlot; }
     void requestKickEqLearn() noexcept { kickEqLearnRequested.store(true); }
     std::atomic<bool> compareDry{false}, compareMatch{false};
@@ -61,6 +61,7 @@ public:
     std::atomic<float> learnCorrelation{0};
 private:
     friend int interactionTests();
+    friend int captureLoopGui(const juce::File&, const juce::File&, const juce::File&);
     static juce::AudioProcessorValueTreeState::ParameterLayout layout();
     bassdeamon::Settings readSettings() const noexcept;
     void timerCallback() override;
