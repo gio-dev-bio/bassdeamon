@@ -24,7 +24,7 @@ int interactionTests(){
             for(const char* id:{"glue.on","phase.on","unmask.on","tube.on","glue.agc","phase.agc","unmask.agc"})processor.parameters.getParameter(id)->setValueNotifyingHost(1);
             auto* delay=processor.parameters.getParameter("phase.delay");delay->setValueNotifyingHost(delay->convertTo0to1(1.375f));processor.prepareToPlay(48000,256);
         };configure(a);configure(b);
-        std::unique_ptr<BassDeamonEditor> gui(static_cast<BassDeamonEditor*>(a.createEditor()));
+        std::unique_ptr<BassDeamonEditor> gui(static_cast<BassDeamonEditor*>(a.createEditor()));gui->stopTimer();
         const auto before=a.parameters.copyState().toXmlString();
         juce::AudioBuffer<float> x(3,256),y(3,256);juce::MidiBuffer midi;
         for(int block=0;block<360;++block){
@@ -47,7 +47,7 @@ int interactionTests(){
     TestPlayHead host;p.setPlayHead(&host);
     const auto set=[&](const char* id,float value){auto* param=p.parameters.getParameter(id);param->setValueNotifyingHost(param->convertTo0to1(value));};
     const auto get=[&](const char* id){return p.parameters.getRawParameterValue(id)->load();};
-    std::unique_ptr<BassDeamonEditor> editor(static_cast<BassDeamonEditor*>(p.createEditor()));
+    std::unique_ptr<BassDeamonEditor> editor(static_cast<BassDeamonEditor*>(p.createEditor()));editor->stopTimer();
     double visualClock=0;const auto visualTick=[&]{visualClock+=1000./30;editor->refreshVisuals(visualClock);};
     // Real JUCE gestures and APVTS undo, including intermediate drag values.
     p.refreshHistory();p.undoManager.clearUndoHistory();
@@ -173,6 +173,8 @@ int interactionTests(){
     editor->analyzer.prepare(48000);editor->spectrumDisplay.reset();while(p.analysisQueue.pop(discarded)){}
     for(int b=0;b<360;++b){for(int n=0;n<256;++n){const float value=float(.4*std::sin(2*bassdeamon::pi*75*(b*256+n)/48000.));buffer.setSample(0,n,value);buffer.setSample(1,n,value);}
         host.time=b*256/48000.;p.processBlock(buffer,midi);if(b%6==0)visualTick();}
+    std::cout<<"20 dB / 4 fps renderer: raw PRE="<<editor->analyzer.maskPre[overlapBin]<<" POST="<<editor->analyzer.maskPost[overlapBin]
+        <<"; shown PRE="<<editor->visualMaskPre[overlapBin]<<" POST="<<editor->visualMaskPost[overlapBin]<<"; revision="<<editor->spectrumDisplay.revision<<" clock="<<visualClock<<'\n';
     ensure(editor->visualMaskPre[overlapBin]>.8f&&editor->visualMaskPost[overlapBin]<.12f,"Slow POST display ignores actual 20 dB reduction");
     editor->spectrumPost.onClick();ensure(redInSpectrum()==0,"POST still paints red after real 20 dB cut");
     editor->spectrumPre.onClick();ensure(redInSpectrum()>20,"PRE collision disappeared with POST attenuation");
