@@ -64,11 +64,11 @@ void benchmark() {
     constexpr double sr=48000;
     volatile double sink=0;
     std::cout<<"mode,median_us,p95_us,median_pct_audio_budget\n";
-    for(int mode=0;mode<4;++mode) {
+    for(int mode=0;mode<5;++mode) {
         Engine engine;engine.prepare(sr);
         KickEqCapture capture;capture.start(sr);
-        Settings settings;settings.kickEqEnabled=mode==2;settings.kickEqFrequency=60;
-        settings.matchEnabled=mode==3;
+        Settings settings;settings.kickEqEnabled=mode==2||mode==4;settings.kickEqFrequency=60;
+        settings.matchEnabled=mode==3||mode==4;
         std::array<float,size> left{},right{},kick{};
         std::array<double,blocks> times{};
         float* output[]{left.data(),right.data()};const float* reference[]{kick.data()};
@@ -86,7 +86,7 @@ void benchmark() {
             sink+=left.back();
         }
         std::sort(times.begin(),times.end());
-        const char* names[]{"features_off","kick_learn_capture","kick_eq_locked","level_match"};
+        const char* names[]{"features_off","kick_learn_capture","kick_eq_locked","level_match","locked_and_matched"};
         std::cout<<names[mode]<<','<<times[blocks/2]<<','<<times[blocks*95/100]<<','<<times[blocks/2]*sr/(size*1e4)<<'\n';
     }
 }

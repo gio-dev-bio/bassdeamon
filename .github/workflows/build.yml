@@ -86,6 +86,7 @@ jobs:
             GUI-Preview.png
             GUI-Both.png
             GUI-Split.png
+            GUI-Split-20dB.png
             kick-eq-performance.csv
             GUI-Pre.png
             GUI-Overlap.png

@@ -2,7 +2,7 @@ name: Extended signals and bypass
 on:
   push:
     branches: ['codex/**']
-    paths: ['Source/**', 'tests/Signal*', 'tests/PluginSignalTests.cpp', '.github/workflows/signal-tests.yml']
+    paths: ['Source/**', 'tests/Signal*', 'tests/PluginSignalTests.cpp', 'tests/GuiInteractionTests.cpp', '.github/workflows/signal-tests.yml']
   workflow_dispatch:
 permissions:
   contents: read

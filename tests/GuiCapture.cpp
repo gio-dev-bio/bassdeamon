@@ -121,5 +121,7 @@ int captureGui(const juce::File& output){
     if(*std::max_element(gui->visualMaskPost.begin(),gui->visualMaskPost.end())>=.12f){std::cerr<<"POST retains red after 20 dB attenuation\n";return 1;}
     selectViewForCapture(true);if(!save(output.getSiblingFile("GUI-Post-20dB.png")))return 1;
     selectViewForCapture(false);if(!save(output.getSiblingFile("GUI-Pre-20dB.png")))return 1;
+    gui->spectrumSplit.onClick();
+    if(!save(output.getSiblingFile("GUI-Split-20dB.png")))return 1;
     std::cout<<output.getFullPathName()<<'\n';return 0;
 }
