@@ -166,6 +166,8 @@ int captureLoopGui(const juce::File& bassFile, const juce::File& kickFile, const
     const auto hz=processor.parameters.getRawParameterValue("kickEq.frequency")->load();
     std::cout<<"Actual loop KICK EQ "<<hz<<" Hz / phase status "<<processor.learnStatus.load()
              <<" / r "<<processor.learnCorrelation.load()<<'\n';
+    juce::MemoryBlock originalSettings;
+    processor.getStateInformation(originalSettings);
     processor.parameters.getParameter("kickEq.on")->setValueNotifyingHost(0);
     processor.parameters.getParameter("glue.on")->setValueNotifyingHost(0);
     editor->learn.onClick();
@@ -175,10 +177,9 @@ int captureLoopGui(const juce::File& bassFile, const juce::File& kickFile, const
     const auto inverted=processor.parameters.getRawParameterValue("phase.invert")->load();
     std::cout<<"Actual kick with known offset: phase status "<<processor.learnStatus.load()
              <<" / delay "<<delay<<" ms / inverted "<<inverted<<'\n';
-    processor.parameters.getParameter("phase.on")->setValueNotifyingHost(0);
-    processor.parameters.getParameter("kickEq.on")->setValueNotifyingHost(1);
-    processor.parameters.getParameter("glue.on")->setValueNotifyingHost(1);
+    processor.setStateInformation(originalSettings.getData(),int(originalSettings.getSize()));
     processor.analysisQueue.enabled.store(true);
+    editor->learn.onClick();
     auto* maxParam=processor.parameters.getParameter("view.maxHz");
     maxParam->setValueNotifyingHost(maxParam->convertTo0to1(250));
     processor.setAnalyzerRate(5);
@@ -191,6 +192,7 @@ int captureLoopGui(const juce::File& bassFile, const juce::File& kickFile, const
             editor->refreshVisuals(clock);
         }
     }
+    processor.timerCallback();
     const auto slowFrames=editor->spectrumDisplay.revision-initialRevision;
     std::cout<<"1 fps: "<<slowFrames<<" spectrum frames in "<<clock/1000<<" s\n";
     if(hz<=0||std::abs(delay-2)>.26||inverted<.5f||slowFrames<4||slowFrames>7)return 1;

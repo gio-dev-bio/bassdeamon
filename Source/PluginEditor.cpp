@@ -349,7 +349,7 @@ void BassDeamonEditor::paintSpectrum(juce::Graphics& g) {
         : post ? "NO SIGNIFICANT RESIDUAL" : "NO COLLISION IN VIEW";
     const auto gr = juce::String(visualUnmaskGr,1);
     const juce::String comparison = processor.compareDry.load() ? "  /  DRY AUDITION" : "";
-    console::text(g,status+"   •   UNMASK GR "+gr+" dB"+comparison,{72,433,740,14},13,console::muted);
+    console::text(g,status+"   |   UNMASK GR "+gr+" dB"+comparison,{72,433,740,14},13,console::muted);
 }
 
 int BassDeamonEditor::paintSpectrumPlot(juce::Graphics& g,juce::Rectangle<float> plot,bool post) {
@@ -482,7 +482,7 @@ int BassDeamonEditor::paintSpectrumPlot(juce::Graphics& g,juce::Rectangle<float>
         g.setColour(console::cream);
         g.strokePath(response,juce::PathStrokeType(1.6f));
         console::text(g,"KICK EQ  0 dB",{plot.getRight()-110,float(top+4),104,16},11,console::cream,juce::Justification::centredRight);
-        console::text(g,"−4 dB",{plot.getRight()-60,float(top+axisDepth-9),54,16},11,console::cream,juce::Justification::centredRight);
+        console::text(g,"-4 dB",{plot.getRight()-60,float(top+axisDepth-9),54,16},11,console::cream,juce::Justification::centredRight);
     }
     {
         const auto formatDb=[](float value){
