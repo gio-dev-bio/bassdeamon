@@ -44,6 +44,7 @@ int interactionTests(){
     BassDeamonProcessor p;auto layout=p.getBusesLayout();
     layout.inputBuses.set(0,juce::AudioChannelSet::mono());layout.outputBuses.set(0,juce::AudioChannelSet::mono());layout.inputBuses.set(1,juce::AudioChannelSet::mono());
     ensure(p.setBusesLayout(layout),"GUI test layout");p.prepareToPlay(48000,256);
+    ensure(p.getSampleRate()==48000,"Prepared processor has an invalid transport sample rate");
     TestPlayHead host;p.setPlayHead(&host);
     const auto set=[&](const char* id,float value){auto* param=p.parameters.getParameter(id);param->setValueNotifyingHost(param->convertTo0to1(value));};
     const auto get=[&](const char* id){return p.parameters.getRawParameterValue(id)->load();};

@@ -95,6 +95,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout BassDeamonProcessor::layout(
 }
 
 void BassDeamonProcessor::prepareToPlay(double sr, int maximumBlock) {
+    // Keep the processor's transport clock consistent even when a test or
+    // standalone host calls prepare directly (JUCE's initial rate is zero).
+    setRateAndBufferSizeDetails(sr,maximumBlock);
     cpuLoad.reset(sr,std::max(1,maximumBlock));
     engine.prepare(sr); setLatencySamples(0);
     bassdeamon::Engine::RuntimeState r{};
