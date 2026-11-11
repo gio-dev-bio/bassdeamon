@@ -8,6 +8,8 @@ int captureGui(const juce::File& output){
     if(!p.setBusesLayout(layout))return 1;
     p.prepareToPlay(48000,256);juce::AudioBuffer<float> buffer(3,256);juce::MidiBuffer midi;
     std::unique_ptr<juce::AudioProcessorEditor> editor(p.createEditor());editor->setSize(1200,1252);
+    auto* timedGui=static_cast<BassDeamonEditor*>(editor.get());timedGui->stopTimer();double visualClock=0;
+    const auto visualTick=[&]{visualClock+=1000./30;timedGui->refreshVisuals(visualClock);};
     auto* tube=p.parameters.getParameter("tube.on");tube->setValueNotifyingHost(1);
     // Known synthetic test signals exercise the REAL graph and metering, not decorative traces.
     for(int block=0;block<800;++block){
@@ -19,7 +21,7 @@ int captureGui(const juce::File& output){
         p.processBlock(buffer,midi);
         // Deterministic capture also works when nested JUCE message loops are
         // disabled. Run the REAL editor analysis, not decorative test traces.
-        if(block%16==0)static_cast<BassDeamonEditor*>(editor.get())->timerCallback();
+        if(block%16==0)visualTick();
         #if JUCE_MODAL_LOOPS_PERMITTED
         if(block%16==0)juce::MessageManager::getInstance()->runDispatchLoopUntil(35);
         #endif
@@ -27,7 +29,7 @@ int captureGui(const juce::File& output){
     #if JUCE_MODAL_LOOPS_PERMITTED
     juce::MessageManager::getInstance()->runDispatchLoopUntil(40);
     #endif
-    static_cast<BassDeamonEditor*>(editor.get())->timerCallback();
+    visualTick();
     const auto& spectrum=static_cast<BassDeamonEditor*>(editor.get())->analyzer.pre;
     if(*std::max_element(spectrum.begin(),spectrum.end()) < -80){
         std::cerr<<"GUI capture has no real analyzer data\n";return 1;
@@ -70,7 +72,7 @@ int captureGui(const juce::File& output){
         buffer.setSample(2,n,float(.7*std::exp(-std::fmod(t,.5)*22)*std::sin(2*bassdeamon::pi*60*t)));
     }
     p.processBlock(buffer,midi);
-    gui->timerCallback();
+    visualTick();
     if(!save(output.getSiblingFile("GUI-Sync.png")))return 1;
     // A single shared 75 Hz partial; the bass-only 150 Hz partial must not
     // acquire a red area. Capture both actual PRE and actual POST displays.
@@ -78,8 +80,8 @@ int captureGui(const juce::File& output){
         const float bass=float(.3*std::sin(2*bassdeamon::pi*75*t)+.12*std::sin(2*bassdeamon::pi*150*t));
         buffer.setSample(0,n,bass);buffer.setSample(1,n,bass);
         buffer.setSample(2,n,float(.4*std::sin(2*bassdeamon::pi*75*t)));}
-        p.processBlock(buffer,midi);if(block%8==0)gui->timerCallback();}
-    gui->timerCallback();
+        p.processBlock(buffer,midi);if(block%8==0)visualTick();}
+    visualTick();
     if(!save(output.getSiblingFile("GUI-Overlap.png")))return 1;
     selectViewForCapture(false);
     if(!save(output.getSiblingFile("GUI-Overlap-Pre.png")))return 1;
@@ -97,7 +99,7 @@ int captureGui(const juce::File& output){
         const double envelope=since<.020?std::pow(std::sin(bassdeamon::pi*since/.020),2):0;
         buffer.setSample(2,n,float(.012*envelope*std::sin(2*bassdeamon::pi*75*t)));}
         p.processBlock(buffer,midi);
-        if(block%6==0){gui->timerCallback();if(*std::max_element(gui->visualMaskPre.begin(),gui->visualMaskPre.end())>=.12f&&*std::max_element(gui->visualMaskPost.begin(),gui->visualMaskPost.end())>=.12f){
+        if(block%6==0){visualTick();if(*std::max_element(gui->visualMaskPre.begin(),gui->visualMaskPre.end())>=.12f&&*std::max_element(gui->visualMaskPost.begin(),gui->visualMaskPost.end())>=.12f){
             selectViewForCapture(true);if(!save(output.getSiblingFile("GUI-ShortKick-Post.png")))return 1;
             selectViewForCapture(false);if(!save(output.getSiblingFile("GUI-ShortKick-Pre.png")))return 1;captured=true;
         }}
@@ -109,7 +111,7 @@ int captureGui(const juce::File& output){
     setValue("unmask.track",0);setValue("unmask.frequency",75);setValue("unmask.agc",0);setValue("output.trim",0);
     for(int block=0;block<360;++block){for(int n=0;n<256;++n){const float v=float(.4*std::sin(2*bassdeamon::pi*75*(block*256+n)/48000.));
         buffer.setSample(0,n,v);buffer.setSample(1,n,v);buffer.setSample(2,n,v);}
-        p.processBlock(buffer,midi);if(block%6==0)gui->timerCallback();}
+        p.processBlock(buffer,midi);if(block%6==0)visualTick();}
     if(*std::max_element(gui->visualMaskPost.begin(),gui->visualMaskPost.end())>=.12f){std::cerr<<"POST retains red after 20 dB attenuation\n";return 1;}
     selectViewForCapture(true);if(!save(output.getSiblingFile("GUI-Post-20dB.png")))return 1;
     selectViewForCapture(false);if(!save(output.getSiblingFile("GUI-Pre-20dB.png")))return 1;

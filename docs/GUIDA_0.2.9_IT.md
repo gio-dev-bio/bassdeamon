@@ -3,7 +3,7 @@
 
 ## RATE dell'analizzatore
 
-Il selettore RATE offre FAST 30 fps, NORMAL 15 fps, SLOW 8 fps e VERY SLOW 4 fps. Il default è SLOW: una nuova immagine circa ogni 125 ms; VERY SLOW la mantiene per circa 250 ms. Il limite è il numero di aggiornamenti visibili per secondo di audio ricevuto: il trasporto e il ritmo dei callback effettivi possono ridurlo ulteriormente.
+Il selettore RATE offre FAST 30 fps, NORMAL 15 fps, SLOW 8 fps e VERY SLOW 4 fps. Il default è SLOW: una nuova immagine circa ogni 125 ms; VERY SLOW la mantiene per circa 250 ms. Il limite è il numero di aggiornamenti visibili per secondo di tempo reale; non aumenta durante un render offline accelerato. Ritardi dell'interfaccia o assenza di nuovi campioni possono ridurlo ulteriormente.
 
 L'analisi continua alla cadenza normale: tra due immagini vengono raccolti i picchi delle curve e gli eventi di collisione, per non perdere un kick di 20 ms. Ogni nuova immagine sostituisce il gruppo precedente, senza una media infinita che trattenga vecchie note. Il controllo è esclusivamente grafico, non invia automazioni e non cambia il DSP. Viene salvato nella sessione. Non è un controllo di sample rate né una promessa di riduzione del carico del detector.
 

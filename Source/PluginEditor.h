@@ -45,6 +45,7 @@ private:
     bool spectrumIsPost() const;
     std::array<double,2> spectrumLimits() const;
     void timerCallback() override;
+    void refreshVisuals(double clockMilliseconds);
     void createTexture();
     BassDeamonProcessor& processor;
     console::Skin skin;

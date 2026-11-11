@@ -15,9 +15,9 @@ int main(){try{
         for(int pos=0;pos<int(sr*1.7);pos+=128){for(int n=0;n<128;++n)dry[size_t(n)]=wet[size_t(n)]=kick[size_t(n)]=float(.4*std::sin(2*pi*75*(pos+n)/sr));
             engine.process(out,1,side,1,128,s);
             for(int n=0;n<128;++n){AnalysisFrame f;f.pre={dry[size_t(n)],dry[size_t(n)]};f.post={wet[size_t(n)],wet[size_t(n)]};f.kick={kick[size_t(n)],kick[size_t(n)]};require(q->push(f),"Response queue overflow");}
-            if(pos+128>=next){a->consume(*q);display->push(*a,a->consumedFrames-last,mode);last=a->consumedFrames;next+=sr/30;}
+            if(pos+128>=next){a->consume(*q);display->push(*a,a->consumedFrames-last,(pos+128)/sr,mode);last=a->consumedFrames;next+=sr/30;}
         }
-        a->consume(*q);display->push(*a,a->consumedFrames-last,mode);
+        a->consume(*q);display->push(*a,a->consumedFrames-last,1.7,mode);
         const float pre=near(display->shown[3],75,sr),post=near(display->shown[4],75,sr);
         require(pre>.8f,"PRE collision missing in response test");
         const float expected=float(std::pow(10.,-reduction/20));
@@ -39,7 +39,7 @@ int main(){try{
             const float bass=float(.4*std::sin(2*pi*75*t));const float kick=since>=0&&since<.02?float(.4*std::sin(pi*since/.02)*std::sin(2*pi*75*t)):0;
             AnalysisFrame f;f.pre={bass,bass};f.post=f.pre;f.kick={kick,kick};if(t>1.2){f.kick=f.pre;f.post={bass*.1f,bass*.1f};}
             require(q->push(f),"Rate fixture queue overflow");
-            if(n/1600>lastTick){lastTick=n/1600;a->consume(*q);const auto oldRevision=d->revision;const auto old=d->shown[0];d->push(*a,a->consumedFrames-last,mode);last=a->consumedFrames;
+            if(n/1600>lastTick){lastTick=n/1600;a->consume(*q);const auto oldRevision=d->revision;const auto old=d->shown[0];d->push(*a,a->consumedFrames-last,t,mode);last=a->consumedFrames;
                 if(d->revision==oldRevision)require(old==d->shown[0],"Visible frame changed between selected refreshes");
                 if(t>.6&&t<1.2&&near(d->shown[3],75,48000)>=.12)pulseSeen=true;
                 if(t>2.2)require(near(d->shown[4],75,48000)<.12,"Slow display retains old POST collision after actual attenuation");
@@ -61,7 +61,7 @@ int main(){try{
             dry[size_t(n)]=wet[size_t(n)]=float(.4*std::sin(2*pi*75*t)+.08*std::sin(2*pi*150*t));
             kick[size_t(n)]=phase<.02?float(.4*std::sin(pi*phase/.02)*std::sin(2*pi*75*t)):0;}
             e.process(out,1,side,1,128,s);for(int n=0;n<128;++n){AnalysisFrame f;f.pre={dry[size_t(n)],dry[size_t(n)]};f.post={wet[size_t(n)],wet[size_t(n)]};f.kick={kick[size_t(n)],kick[size_t(n)]};q->push(f);}
-            if(b%12==0){a->consume(*q);d->push(*a,a->consumedFrames-last,3);last=a->consumedFrames;
+            if(b%12==0){a->consume(*q);d->push(*a,a->consumedFrames-last,(b+1)*128/48000.,3);last=a->consumedFrames;
                 if(b>750){strongestPre=std::max(strongestPre,near(d->shown[3],75,48000));worstPost=std::max(worstPost,near(d->shown[4],75,48000));}}
         }
         require(strongestPre>.8f&&worstPost<.95f,"Real repeated kick ducking still looks identical in PRE and POST");

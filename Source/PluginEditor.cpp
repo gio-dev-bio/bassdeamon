@@ -374,20 +374,21 @@ void BassDeamonEditor::paintVU(juce::Graphics& g){
     console::text(g,"GAIN REDUCTION",{891,252,257,25},19,console::ink,juce::Justification::centred);
     console::text(g,"GLUE  /  dB",{891,276,257,18},13,console::ink.withAlpha(0.75f),juce::Justification::centred);
 }
-void BassDeamonEditor::timerCallback(){
+void BassDeamonEditor::timerCallback(){refreshVisuals(juce::Time::getMillisecondCounterHiRes());}
+void BassDeamonEditor::refreshVisuals(double clockMilliseconds){
     const double rate=processor.getSampleRate()>0?processor.getSampleRate():48000;
     if(rate!=analyzer.sampleRate()){analyzer.prepare(rate);spectrumDisplay.reset();}
     const double analysisStart=juce::Time::getMillisecondCounterHiRes();
     const auto beforeSequence=analyzer.streamSequence();
     const auto beforeConsumed=analyzer.consumedFrames;
     analyzer.consume(processor.analysisQueue,processor.tempo.load(),processor.parameters.getRawParameterValue("view.hold")->load()>.5f);
-    if(analyzer.streamSequence()!=beforeSequence){lastAnalysisTime=analysisStart;staleAnalysis=false;}
-    else if(!staleAnalysis&&analysisStart-lastAnalysisTime>500){analyzer.prepare(rate);spectrumDisplay.reset();staleAnalysis=true;}
+    if(analyzer.streamSequence()!=beforeSequence){lastAnalysisTime=clockMilliseconds;staleAnalysis=false;}
+    else if(!staleAnalysis&&clockMilliseconds-lastAnalysisTime>500){analyzer.prepare(rate);spectrumDisplay.reset();staleAnalysis=true;}
     analyzerMilliseconds=.85*analyzerMilliseconds+.15*(juce::Time::getMillisecondCounterHiRes()-analysisStart);
     processor.refreshHistory();undoButton.setEnabled(processor.canUndo());redoButton.setEnabled(processor.canRedo());
     cpuLabel.setText("DSP CPU "+juce::String(processor.cpuLoad.getLoadAsPercentage(),1)+"%  |  ANALYZER "+juce::String(analyzerMilliseconds,1)+" ms  |  OVR "+juce::String(processor.cpuLoad.getXRunCount()),juce::dontSendNotification);
     const uint64_t received=analyzer.consumedFrames>=beforeConsumed?analyzer.consumedFrames-beforeConsumed:0;
-    spectrumDisplay.push(analyzer,received,processor.analyzerRate());
+    spectrumDisplay.push(analyzer,received,clockMilliseconds*.001,processor.analyzerRate());
     visualPre=spectrumDisplay.shown[0];visualPost=spectrumDisplay.shown[1];visualKick=spectrumDisplay.shown[2];
     visualMaskPre=spectrumDisplay.shown[3];visualMaskPost=spectrumDisplay.shown[4];
     analyzerRateBox.setSelectedId(processor.analyzerRate()+1,juce::dontSendNotification);

@@ -34,7 +34,7 @@ int interactionTests(){
                 x.setSample(0,n,bass);x.setSample(1,n,bass*.85f);x.setSample(2,n,float(.5*std::exp(-std::fmod(t,.5)*25)*std::sin(2*bassdeamon::pi*57*t)));}
             y.makeCopyOf(x);a.processBlock(x,midi);b.processBlock(y,midi);
             for(int c=0;c<2;++c)ensure(std::memcmp(x.getReadPointer(c),y.getReadPointer(c),256*sizeof(float))==0,"PRE/POST click changes actual audio");
-            if(block%6==0)gui->timerCallback();
+            if(block%6==0)gui->refreshVisuals(block*256/48.);
         }
         ensure(a.parameters.copyState().toXmlString()==before,"PRE/POST modified host parameters");
         a.setAnalyzerRate(3);a.setSpectrumView(0);juce::MemoryBlock state;a.getStateInformation(state);b.setStateInformation(state.getData(),int(state.getSize()));
@@ -48,13 +48,14 @@ int interactionTests(){
     const auto set=[&](const char* id,float value){auto* param=p.parameters.getParameter(id);param->setValueNotifyingHost(param->convertTo0to1(value));};
     const auto get=[&](const char* id){return p.parameters.getRawParameterValue(id)->load();};
     std::unique_ptr<BassDeamonEditor> editor(static_cast<BassDeamonEditor*>(p.createEditor()));
+    double visualClock=0;const auto visualTick=[&]{visualClock+=1000./30;editor->refreshVisuals(visualClock);};
     // Real JUCE gestures and APVTS undo, including intermediate drag values.
     p.refreshHistory();p.undoManager.clearUndoHistory();
     const float originalDrive=get("tube.drive");
     juce::ParameterAttachment drive(*p.parameters.getParameter("tube.drive"),[](float){},&p.undoManager);
     drive.beginGesture();
     for(float value:{3.f,8.f,13.f}){drive.setValueAsPartOfGesture(value);p.refreshHistory();}
-    drive.endGesture();p.refreshHistory();editor->timerCallback();
+    drive.endGesture();p.refreshHistory();visualTick();
     ensure(editor->undoButton.isEnabled(),"Undo button disabled after gesture");
     editor->undoButton.onClick();ensure(std::abs(get("tube.drive")-originalDrive)<.001,"Undo did not group entire knob gesture");
     ensure(editor->redoButton.isEnabled(),"Redo unavailable after undo");
@@ -157,7 +158,7 @@ int interactionTests(){
         const double envelope=since<.020?std::pow(std::sin(bassdeamon::pi*since/.020),2):0;
         buffer.setSample(1,n,float(.012*envelope*std::sin(2*bassdeamon::pi*75*t)));}
         host.time=b*256/48000.;p.processBlock(buffer,midi);
-        if(b%6==0){editor->timerCallback();
+        if(b%6==0){visualTick();
             if(editor->analyzer.summary(false).regions){++preHits;editor->spectrumPre.onClick();prePainted|=redInSpectrum()>10;}
             if(editor->analyzer.summary(true).regions){++postHits;editor->spectrumPost.onClick();postPainted|=redInSpectrum()>10;}
             const auto unrelated=size_t(std::round(150.*bassdeamon::RelationAnalyzer::fftSize/48000.));
@@ -171,13 +172,13 @@ int interactionTests(){
     set("unmask.track",0);set("unmask.frequency",75);set("unmask.agc",0);set("output.trim",0);
     editor->analyzer.prepare(48000);editor->spectrumDisplay.reset();while(p.analysisQueue.pop(discarded)){}
     for(int b=0;b<360;++b){for(int n=0;n<256;++n){const float value=float(.4*std::sin(2*bassdeamon::pi*75*(b*256+n)/48000.));buffer.setSample(0,n,value);buffer.setSample(1,n,value);}
-        host.time=b*256/48000.;p.processBlock(buffer,midi);if(b%6==0)editor->timerCallback();}
+        host.time=b*256/48000.;p.processBlock(buffer,midi);if(b%6==0)visualTick();}
     ensure(editor->visualMaskPre[overlapBin]>.8f&&editor->visualMaskPost[overlapBin]<.12f,"Slow POST display ignores actual 20 dB reduction");
     editor->spectrumPost.onClick();ensure(redInSpectrum()==0,"POST still paints red after real 20 dB cut");
     editor->spectrumPre.onClick();ensure(redInSpectrum()>20,"PRE collision disappeared with POST attenuation");
-    p.setStateInformation(audioState.getData(),int(audioState.getSize()));editor->timerCallback();
+    p.setStateInformation(audioState.getData(),int(audioState.getSize()));visualTick();
     for(int b=0;b<200;++b){host.time=b*256/48000.;for(int n=0;n<256;++n){buffer.setSample(0,n,float(.6*std::sin(2*bassdeamon::pi*75*(b*256+n)/48000.)));buffer.setSample(1,n,0);}
-        p.processBlock(buffer,midi);if(b>100)output+=buffer.getRMSLevel(0,0,256);editor->timerCallback();}
+        p.processBlock(buffer,midi);if(b>100)output+=buffer.getRMSLevel(0,0,256);visualTick();}
     ensure(std::isfinite(p.cpuLoad.getLoadAsPercentage())&&p.cpuLoad.getLoadAsPercentage()>0,"Real callback CPU not measured");
     ensure(editor->cpuLabel.getText().contains("DSP CPU")&&editor->cpuLabel.getText().contains("ANALYZER"),"CPU display missing");
     ensure(output>1,"GUI audition path has no added audio");ensure(p.tubeAddedDb.load()>-50,"GUI added signal meter missing");
@@ -199,7 +200,7 @@ int interactionTests(){
     for(auto& choice:editor->choices)if(choice->box.getComponentID()=="glue.timing")choice->box.setSelectedId(3,juce::sendNotificationSync);
     ensure(get("glue.timing")==2,"GLUE SYNC selector attachment");
     set("glue.attackMs",17);set("unmask.timing",1);set("unmask.attack",7);
-    set("glue.releaseNote",4);host.bpm=90;buffer.clear();p.processBlock(buffer,midi);editor->timerCallback();
+    set("glue.releaseNote",4);host.bpm=90;buffer.clear();p.processBlock(buffer,midi);visualTick();
     ensure(std::abs(p.glueRelease.load()-60000.f/90)<.01,"GLUE timing ignores host tempo");
     ensure(std::abs(p.glueAttack.load()-17)<.01&&std::abs(p.unmaskAttack.load()-7)<.01,"SYNC changed manual attack");
     ensure(editor->glueAttackSlider.isVisible()&&editor->unmaskAttackKnob->isVisible(),"SYNC hid millisecond attack controls");
@@ -224,7 +225,7 @@ int interactionTests(){
     std::vector<float> noise(4*48000+256);for(auto& v:noise)v=random(rng);
     for(int pos=0;pos<4*48000;pos+=256){host.time=std::fmod(pos/48000.,.25); // short Cubase-style cycle
         for(int n=0;n<256;++n){buffer.setSample(0,n,noise[size_t(pos+n)]);buffer.setSample(1,n,pos+n>=96?-noise[size_t(pos+n-96)]:0);}
-        p.processBlock(buffer,midi);editor->timerCallback();}
+        p.processBlock(buffer,midi);visualTick();}
     ensure(p.learnStatus.load()==5,"Learn GUI never completed across short host cycles");
     p.timerCallback();
     ensure(std::abs(get("phase.delay")-2)<.26&&get("phase.invert")==1,"Learn did not apply delay and polarity to host parameters");
