@@ -29,6 +29,8 @@ public:
     void setStateInformation(const void*, int) override;
     void selectAB(int slot);
     void loadStartingPoint(int preset);
+    int analyzerRate() const noexcept { return visualAnalyzerRate.load(std::memory_order_relaxed); }
+    void setAnalyzerRate(int value) noexcept { visualAnalyzerRate.store(std::clamp(value,0,3),std::memory_order_relaxed); }
     int spectrumView() const noexcept { return visualSpectrumView.load(std::memory_order_relaxed); }
     void setSpectrumView(int view) noexcept { visualSpectrumView.store(view?1:0,std::memory_order_relaxed); }
     int selectedAB() const noexcept { return abSlot; }
@@ -67,7 +69,7 @@ private:
     std::atomic<bool> resultInvert{false};
     std::array<std::atomic<float>, 9> runtimeSnapshot{}, restoredRuntime{};
     std::array<juce::MemoryBlock, 2> abStates;
-    std::atomic<int> visualSpectrumView{1};
+    std::atomic<int> visualSpectrumView{1},visualAnalyzerRate{2};
     int abSlot = 0; // message-thread only; A/B survives editor close/reopen.
     std::atomic<bool> restoreRequested{false};
     std::atomic<bool> historyResetRequested{false};

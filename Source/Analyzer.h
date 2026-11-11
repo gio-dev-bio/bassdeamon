@@ -77,10 +77,10 @@ public:
     using FastSpectrum=std::array<float,fastBins>;
     BeatScope scope;
     Spectrum pre{},post{},kick{},maskPre{},maskPost{};
-    uint64_t discontinuities=0;
+    uint64_t discontinuities=0,consumedFrames=0;
     std::array<float,waveSize> wavePre{},wavePost{},waveKick{},sumPre{},sumPost{};
     void prepare(double sr) noexcept {
-        rate=sr;scope.prepare(sr);haveSequence=false;discontinuities=0;resetAnalysis();
+        rate=sr;scope.prepare(sr);haveSequence=false;discontinuities=0;consumedFrames=0;resetAnalysis();
         wavePre.fill(0);wavePost.fill(0);waveKick.fill(0);sumPre.fill(0);sumPost.fill(0);
         hop=std::max(size_t(256),size_t(sr*.010));
         windowSum=fastWindowSum=0;
@@ -90,6 +90,7 @@ public:
     void consume(AnalysisQueue& queue,double bpm=120,bool hold=false) noexcept {
         const auto budget=queue.pending();
         AnalysisFrame f;for(uint32_t consumed=0;consumed<budget&&queue.pop(f);++consumed){
+            ++consumedFrames;
             if(haveSequence&&f.sequence!=nextSequence){resetAnalysis();scope.prepare(rate);++discontinuities;}
             haveSequence=true;nextSequence=f.sequence+1;
             for(auto* stream:{&f.pre,&f.post,&f.kick})for(auto& v:*stream)if(!std::isfinite(v))v=0;
@@ -198,7 +199,21 @@ private:
                 for(size_t c=0;c<2;++c)fine=std::max(fine,std::sqrt(fineSupport[t][c][b]*fineSupport[2][c][b]));
                 const auto& recent=t==0?recentPre:recentPost;
                 const float event=recent[lo]+fraction*(recent[hi]-recent[lo]);
-                (t==0?maskPre[b]:maskPost[b])=std::min(fine,event);
+                float residual=1;
+                if(t==1){
+                    // One common PRE reference: independently normalising POST
+                    // made 20 dB of actual attenuation look unchanged. Newly
+                    // generated partials without a PRE counterpart remain visible.
+                    float weighted=0,weight=0;
+                    for(size_t c=0;c<2;++c){
+                        const float postSupport=std::sqrt(fineSupport[1][c][b]*fineSupport[2][c][b]);
+                        const float preSupport=std::sqrt(fineSupport[0][c][b]*fineSupport[2][c][b]);
+                        const float ratio=preSupport>=.12f?float(std::min(1.0,std::pow(10.0,(channelLevels[1][c][b]-channelLevels[0][c][b])/20.0))):1.f;
+                        weighted=std::max(weighted,postSupport*ratio);weight=std::max(weight,postSupport);
+                    }
+                    residual=weight>0?weighted/weight:0;
+                }
+                (t==0?maskPre[b]:maskPost[b])=std::min(fine,event)*residual;
             }
         }
     }

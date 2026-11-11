@@ -97,11 +97,21 @@ int captureGui(const juce::File& output){
         const double envelope=since<.020?std::pow(std::sin(bassdeamon::pi*since/.020),2):0;
         buffer.setSample(2,n,float(.012*envelope*std::sin(2*bassdeamon::pi*75*t)));}
         p.processBlock(buffer,midi);
-        if(block%6==0){gui->timerCallback();if(gui->analyzer.summary(false).regions&&gui->analyzer.summary(true).regions){
+        if(block%6==0){gui->timerCallback();if(*std::max_element(gui->visualMaskPre.begin(),gui->visualMaskPre.end())>=.12f&&*std::max_element(gui->visualMaskPost.begin(),gui->visualMaskPost.end())>=.12f){
             selectViewForCapture(true);if(!save(output.getSiblingFile("GUI-ShortKick-Post.png")))return 1;
             selectViewForCapture(false);if(!save(output.getSiblingFile("GUI-ShortKick-Pre.png")))return 1;captured=true;
         }}
     }
     if(!captured){std::cerr<<"No real short-kick collision for capture\n";return 1;}
+    // Actual processed PRE/POST comparison at the slowest selected rate.
+    const auto setValue=[&](const char* id,float value){auto* parameter=p.parameters.getParameter(id);parameter->setValueNotifyingHost(parameter->convertTo0to1(value));};
+    p.setAnalyzerRate(3);setValue("unmask.controlDb",1);setValue("unmask.attenuation",20);setValue("unmask.on",1);
+    setValue("unmask.track",0);setValue("unmask.frequency",75);setValue("unmask.agc",0);setValue("output.trim",0);
+    for(int block=0;block<360;++block){for(int n=0;n<256;++n){const float v=float(.4*std::sin(2*bassdeamon::pi*75*(block*256+n)/48000.));
+        buffer.setSample(0,n,v);buffer.setSample(1,n,v);buffer.setSample(2,n,v);}
+        p.processBlock(buffer,midi);if(block%6==0)gui->timerCallback();}
+    if(*std::max_element(gui->visualMaskPost.begin(),gui->visualMaskPost.end())>=.12f){std::cerr<<"POST retains red after 20 dB attenuation\n";return 1;}
+    selectViewForCapture(true);if(!save(output.getSiblingFile("GUI-Post-20dB.png")))return 1;
+    selectViewForCapture(false);if(!save(output.getSiblingFile("GUI-Pre-20dB.png")))return 1;
     std::cout<<output.getFullPathName()<<'\n';return 0;
 }

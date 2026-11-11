@@ -265,6 +265,7 @@ void BassDeamonProcessor::timerCallback() {
 void BassDeamonProcessor::getStateInformation(juce::MemoryBlock& dest) {
     auto state = parameters.copyState(); state.setProperty("schemaVersion", 6, nullptr);
     state.setProperty("visualSpectrumView",spectrumView(),nullptr);
+    state.setProperty("visualAnalyzerRate",analyzerRate(),nullptr);
     for (size_t i = 0; i < runtimeSnapshot.size(); ++i)
         state.setProperty("runtime" + juce::String(static_cast<int>(i)), runtimeSnapshot[i].load(), nullptr);
     if (auto xml = state.createXml()) copyXmlToBinary(*xml, dest);
@@ -304,6 +305,7 @@ void BassDeamonProcessor::setStateInformation(const void* data, int bytes) {
                 auto* mode=parameters.getParameter("unmask.controlDb");mode->setValueNotifyingHost(0);
                 auto* amount=parameters.getParameter("unmask.attenuation");amount->setValueNotifyingHost(amount->convertTo0to1(6));
             }
+            setAnalyzerRate(xml->getIntAttribute("visualAnalyzerRate",2));
             setSpectrumView(xml->getIntAttribute("visualSpectrumView",int(parameters.getRawParameterValue("view.spectrum")->load())));
             const bassdeamon::Engine::RuntimeState defaults{-24, 2, 20, 180, 0, 0, 0, 75,0};
             for (size_t i = 0; i < defaults.size(); ++i) {

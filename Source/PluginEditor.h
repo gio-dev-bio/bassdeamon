@@ -1,6 +1,7 @@
 #pragma once
 #include "PluginProcessor.h"
 #include "ConsoleSkin.h"
+#include "SpectrumDisplay.h"
 
 class BassDeamonEditor final : public juce::AudioProcessorEditor, private juce::Timer {
 public:
@@ -52,6 +53,8 @@ private:
     std::vector<std::unique_ptr<Knob>> knobs;
     std::vector<std::unique_ptr<Switch>> switches;
     bassdeamon::RelationAnalyzer analyzer;
+    bassdeamon::SpectrumDisplay spectrumDisplay;
+    juce::ComboBox analyzerRateBox;
     juce::TextButton sumButton{"SUM K+B"};
     juce::TextButton spectrumPre{"PRE"},spectrumPost{"POST"};
     juce::Slider spectrumMin,spectrumMax;
@@ -59,7 +62,7 @@ private:
     bool showSum=true;
     struct Choice {juce::ComboBox box;std::unique_ptr<State::ComboBoxAttachment> attachment;};
     std::vector<std::unique_ptr<Choice>> choices;
-    std::array<float,bassdeamon::RelationAnalyzer::bins> visualPre{},visualPost{},visualKick{};
+    std::array<float,bassdeamon::RelationAnalyzer::bins> visualPre{},visualPost{},visualKick{},visualMaskPre{},visualMaskPost{};
     juce::Slider glueAttackSlider,glueReleaseSlider;
     std::unique_ptr<State::SliderAttachment> glueAttackAttachment,glueReleaseAttachment;
     Knob *unmaskAttackKnob=nullptr,*unmaskReleaseKnob=nullptr;
