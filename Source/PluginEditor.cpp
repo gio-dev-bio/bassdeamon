@@ -133,17 +133,18 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
         limit->setSliderStyle(juce::Slider::LinearBar);
         limit->setTextBoxStyle(juce::Slider::TextBoxLeft, false, 76, 22);
         limit->setTextValueSuffix(" Hz");
-        limit->setNumDecimalPlacesToDisplay(0);
         limit->setScrollWheelEnabled(false);
         face.addAndMakeVisible(*limit);
     }
-    focusMin.setBounds(892,613,70,22);
-    focusMax.setBounds(966,613,70,22);
+    focusMin.setBounds(892,541,70,22);
+    focusMax.setBounds(966,541,70,22);
     focusMin.setTooltip("Lower frequency limit for Auto Focus.");
     focusMax.setTooltip("Upper frequency limit for Auto Focus.");
     focusMinAttachment=std::make_unique<State::SliderAttachment>(processor.parameters,"unmask.focusMinHz",focusMin);
     focusMaxAttachment=std::make_unique<State::SliderAttachment>(processor.parameters,"unmask.focusMaxHz",focusMax);
-    addChoice("unmask.stereoMode",{"STEREO","MID","SIDE"},{1044,613,108,22});
+    focusMin.setNumDecimalPlacesToDisplay(1);
+    focusMax.setNumDecimalPlacesToDisplay(1);
+    addChoice("unmask.stereoMode",{"STEREO","MID","SIDE"},{1044,541,108,22});
     choices.back()->box.setTooltip("UNMASK target. MID processes the common signal; SIDE processes the difference. SIDE has no effect on mono bass.");
     addChoice("glue.timing",{"AUTO","MS","SYNC"},{249,623,122,26});
     addChoice("unmask.timing",{"MS","SYNC"},{832,918,185,22});

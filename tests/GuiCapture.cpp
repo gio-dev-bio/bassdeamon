@@ -51,6 +51,9 @@ int captureGui(const juce::File& output){
         gui->spectrumPre.setToggleState(!post,juce::dontSendNotification);
         gui->spectrumPost.setToggleState(post,juce::dontSendNotification);
     };
+    gui->spectrumBoth.onClick();
+    if(!save(output.getSiblingFile("GUI-Both.png")))return 1;
+    gui->spectrumBoth.setToggleState(false,juce::dontSendNotification);
     selectViewForCapture(false);
     if(!save(output.getSiblingFile("GUI-Pre.png")))return 1;
     selectViewForCapture(true);
