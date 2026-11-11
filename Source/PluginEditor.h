@@ -62,7 +62,7 @@ private:
     float visualUnmaskGr = 0;
     bassdeamon::BeatScope visibleScope;
     juce::TextButton sumButton{"SUM K+B"};
-    juce::TextButton spectrumPre{"PRE"},spectrumPost{"POST"};
+    juce::TextButton spectrumPre{"PRE"},spectrumPost{"POST"},spectrumHold{"HOLD"};
     juce::TextButton kickEqLearn{"LEARN"}, dryCompare{"DRY"}, matchCompare{"LEVEL MATCH"};
     juce::Slider kickEqFrequency,kickEqCut;
     std::unique_ptr<State::SliderAttachment> kickEqFrequencyAttachment,kickEqCutAttachment;

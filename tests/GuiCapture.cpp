@@ -140,6 +140,20 @@ int captureLoopGui(const juce::File& bassFile, const juce::File& kickFile, const
     layout.inputBuses.set(1,juce::AudioChannelSet::stereo());
     if(!processor.setBusesLayout(layout))return 1;
     processor.prepareToPlay(48000,256);
+    class LoopTransport final : public juce::AudioPlayHead {
+    public:
+        bool playing=false;
+        double seconds=0;
+        juce::Optional<PositionInfo> getPosition() const override {
+            PositionInfo position;
+            position.setIsPlaying(playing);
+            position.setBpm(120);
+            position.setTimeInSeconds(seconds);
+            position.setPpqPosition(seconds*2);
+            return position;
+        }
+    } transport;
+    processor.setPlayHead(&transport);
     std::unique_ptr<BassDeamonEditor> editor(static_cast<BassDeamonEditor*>(processor.createEditor()));
     editor->setSize(1200,1376);
     editor->stopTimer();
@@ -148,20 +162,30 @@ int captureLoopGui(const juce::File& bassFile, const juce::File& kickFile, const
     int pos=0;
     const auto renderBlock=[&](bool knownOffset){
         for(int n=0;n<256;++n){
-            const auto k=kick[size_t(pos+n)%kick.size()];
-            const auto b=knownOffset?kick[(size_t(pos+n+96))%kick.size()]:bass[size_t(pos+n)%bass.size()];
+            const auto k=transport.playing?kick[size_t(pos+n)%kick.size()]:std::array<float,2>{};
+            const auto b=!transport.playing?std::array<float,2>{}
+                :knownOffset?kick[(size_t(pos+n+96))%kick.size()]:bass[size_t(pos+n)%bass.size()];
             for(int c=0;c<2;++c){
                 buffer.setSample(c,n,knownOffset?-b[c]:b[c]);
                 buffer.setSample(c+2,n,k[c]);
             }
         }
+        transport.seconds=std::fmod(pos/48000.,.5);
         processor.processBlock(buffer,midi);
-        pos+=256;
+        if(transport.playing)pos+=256;
     };
     processor.analysisQueue.enabled.store(false);
     editor->kickEqLearn.onClick();
     editor->learn.onClick();
-    for(int block=0;block<750;++block)renderBlock(false);
+    for(int block=0;block<900;++block)renderBlock(false);
+    if(processor.learnStatus.load()!=7||processor.kickEqStatus.load()!=5)return 1;
+    transport.playing=true;
+    for(int block=0;block<375;++block)renderBlock(false);
+    transport.playing=false;
+    for(int block=0;block<900;++block)renderBlock(false);
+    if(processor.learnStatus.load()!=7||processor.kickEqStatus.load()!=5)return 1;
+    transport.playing=true;
+    for(int block=0;block<375;++block)renderBlock(false);
     processor.timerCallback();
     const auto hz=processor.parameters.getRawParameterValue("kickEq.frequency")->load();
     std::cout<<"Actual loop KICK EQ "<<hz<<" Hz / phase status "<<processor.learnStatus.load()

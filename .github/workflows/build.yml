@@ -65,22 +65,22 @@ jobs:
           arch -x86_64 validator/pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --repeat 2 --randomise --random-seed 2702 --timeout-ms 60000 --validate "$PWD/build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3" 2>&1 | tee pluginval-results.txt
       - name: Package ad-hoc signed development plugin
         run: |
-          package="$PWD/BassDeamon-0.2.12-macOS-intel.zip"
+          package="$PWD/BassDeamon-0.2.13-macOS-intel.zip"
           (cd build/BassDeamon_artefacts/Release/VST3 && zip -Xqr "$package" BassDeamon.vst3)
           mkdir -p package-verification
           unzip -q "$package" -d package-verification
           codesign --verify --strict --verbose=2 package-verification/BassDeamon.vst3
           mkdir -p intel-package
-          sed '1s|.*|BASSDEAMON 0.2.12 — VST3 macOS Intel (x86_64)|' INSTALL.txt > intel-package/INSTALL.txt
-          zip -Xj BassDeamon-0.2.12-macOS-intel.zip intel-package/INSTALL.txt docs/GUIDA_0.2.12_IT.md analyzer-matrix.csv analyzer-matrix-results.txt analyzer-results.txt validation-results.txt pluginval-results.txt attenuation-results.txt kick-eq-performance.csv
+          sed '1s|.*|BASSDEAMON 0.2.13 — VST3 macOS Intel (x86_64)|' INSTALL.txt > intel-package/INSTALL.txt
+          zip -Xj BassDeamon-0.2.13-macOS-intel.zip intel-package/INSTALL.txt docs/GUIDA_0.2.13_IT.md analyzer-matrix.csv analyzer-matrix-results.txt analyzer-results.txt validation-results.txt pluginval-results.txt attenuation-results.txt kick-eq-performance.csv
           lipo build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3/Contents/MacOS/BassDeamon -verify_arch x86_64
-          unzip -t BassDeamon-0.2.12-macOS-intel.zip
+          unzip -t BassDeamon-0.2.13-macOS-intel.zip
       - uses: actions/upload-artifact@v4
         with:
-          name: BassDeamon-0.2.12-macOS-intel
+          name: BassDeamon-0.2.13-macOS-intel
           retention-days: 14
           path: |
-            BassDeamon-0.2.12-macOS-intel.zip
+            BassDeamon-0.2.13-macOS-intel.zip
             GUI-Post-20dB.png
             GUI-Pre-20dB.png
             GUI-Preview.png

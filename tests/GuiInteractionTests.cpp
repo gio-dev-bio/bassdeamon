@@ -209,6 +209,12 @@ int interactionTests(){
     ensure(greenInScope()==0,"SUM OFF left waveform visible");
     editor->sumButton.onClick();
     ensure(greenInScope()>10,"SUM ON did not restore waveform");
+    const auto frozen=editor->spectrumDisplay.revision;
+    editor->spectrumHold.setToggleState(true,juce::dontSendNotification);
+    for(int b=0;b<70;++b){buffer.clear();p.processBlock(buffer,midi);visualTick();}
+    ensure(editor->spectrumDisplay.revision==frozen,"Spectrum HOLD did not freeze the display");
+    editor->spectrumHold.setToggleState(false,juce::dontSendNotification);
+    editor->spectrumHold.onClick();
     clickAdded();set("tube.on",0);
     // Test real parameter attachments, not a decorative timing display.
     for(auto& choice:editor->choices)if(choice->box.getComponentID()=="glue.timing")choice->box.setSelectedId(3,juce::sendNotificationSync);
@@ -240,7 +246,11 @@ int interactionTests(){
     set("glue.timing",0);set("unmask.delta",0);
     ensure(editor->face.getComponentAt(editor->learn.getBounds().getCentre())==&editor->learn,"Learn hit target covered");
     const float delayBeforeLearn=get("phase.delay"),invertBeforeLearn=get("phase.invert");
+    host.playing=false;
     editor->learn.onClick();
+    for(int b=0;b<800;++b){buffer.clear();p.processBlock(buffer,midi);}
+    ensure(p.learnStatus.load()==7,"PHASE consumed stopped transport");
+    host.playing=true;
     std::mt19937 rng(79);std::uniform_real_distribution<float> random(-.4f,.4f);
     std::vector<float> noise(4*48000+256);for(auto& v:noise)v=random(rng);
     for(int pos=0;pos<4*48000;pos+=256){host.time=std::fmod(pos/48000.,.25); // short Cubase-style cycle
@@ -255,7 +265,11 @@ int interactionTests(){
     ensure(editor->face.getComponentAt(editor->kickEqLearn.getBounds().getCentre())==&editor->kickEqLearn,
            "Kick EQ Learn hit target covered");
     const auto captureKick = [&](bool hasKick) {
+        host.playing=false;
         editor->kickEqLearn.onClick();
+        for(int b=0;b<800;++b){buffer.clear();p.processBlock(buffer,midi);}
+        ensure(p.kickEqStatus.load()==5,"KICK EQ consumed stopped transport");
+        host.playing=true;
         for (int pos=0;pos<4*48000;pos+=256) {
             host.time=std::fmod(pos/48000.,.5);
             for(int n=0;n<256;++n) {

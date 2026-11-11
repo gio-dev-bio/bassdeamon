@@ -169,10 +169,12 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
         resultReady.store(false); learnStatus.store(0);
     }
     double bpm = 0,ppq=-1;
+    bool transportAllowsLearn = true;
     if (auto* playhead = getPlayHead()) {
         if (const auto position = playhead->getPosition()) {
             if (const auto hostTempo = position->getBpm()) bpm = *hostTempo;
             const bool playing = position->getIsPlaying();
+            transportAllowsLearn = playing;
             if(playing)if(const auto q=position->getPpqPosition())ppq=*q;
             bool seek = false;
             if (const auto t = position->getTimeInSeconds()) {
@@ -181,9 +183,9 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
                 lastTimeSeconds = *t;
             }
             if (seek || (wasPlaying && !playing)) {
-                const bool keepLearn=seek&&playing&&engine.learning();
+                const bool keepLearn=engine.learning();
                 engine.clearHistory(keepLearn);
-                if(!keepLearn){wasLearning=false;learnStatus.store(0);}
+                if(!keepLearn)wasLearning=false;
             }
             wasPlaying = playing;
         }
@@ -192,11 +194,12 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     tempoFromHost.store(std::isfinite(bpm)&&bpm>=20&&bpm<=400);
     lastBlockSamples = buffer.getNumSamples();
     if (wasBypassed) { engine.clearHistory(); wasLearning = false; learnStatus.store(0); wasBypassed = false; }
-    const auto settings=readSettings();
+    auto settings=readSettings();
+    settings.pausePhaseLearn = !transportAllowsLearn;
     if(!settings.active){engine.cancelLearn();wasLearning=false;learnStatus.store(0);resultReady.store(false);}
     const float* kick[2]{nullptr, nullptr};
     const int sideChannels = side.getNumChannels();
-    if (learnRequested.exchange(false)&&settings.active) {
+    if (transportAllowsLearn && learnRequested.exchange(false)&&settings.active) {
         resultReady.store(false);
         if (sideChannels > 0) {
             engine.startLearn(); wasLearning = true; learnStatus.store(1);
@@ -213,7 +216,7 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
         kickEqCaptureState.store(captureState, std::memory_order_release);
         kickEqStatus.store(0);
     }
-    if (captureState != CaptureState::ready && kickEqLearnRequested.exchange(false)) {
+    if (transportAllowsLearn && captureState != CaptureState::ready && kickEqLearnRequested.exchange(false)) {
         if (settings.active && sideChannels > 0) {
             kickEqCapture.start(getSampleRate());
             captureStartFrequency = float(settings.kickEqFrequency);
@@ -225,9 +228,11 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
             kickEqStatus.store(4);
         }
     }
-    if (captureState == CaptureState::recording &&
-        kickEqCapture.push(kick, sideChannels, bass.getNumSamples()))
-        kickEqCaptureState.store(CaptureState::ready, std::memory_order_release);
+    if (transportAllowsLearn && captureState == CaptureState::recording) {
+        const bool ready = kickEqCapture.push(kick, sideChannels, bass.getNumSamples());
+        kickEqProgress.store(kickEqCapture.progress(), std::memory_order_relaxed);
+        if (ready) kickEqCaptureState.store(CaptureState::ready, std::memory_order_release);
+    }
     if(!analysisQueue.enabled.load(std::memory_order_relaxed)){
         engine.process(bass.getArrayOfWritePointers(),bass.getNumChannels(),
                        sideChannels>0?kick:nullptr,sideChannels,bass.getNumSamples(),settings,bpm);
@@ -258,6 +263,15 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
             learnCorrelation.store(static_cast<float>(r.correlation));
             resultReady.store(true); learnStatus.store(5);
         } else learnStatus.store(!r.hasReference?6:r.rejection==bassdeamon::LearnRejection::ambiguous?3:r.rejection==bassdeamon::LearnRejection::unstable?4:2);
+    }
+    if (settings.active && !transportAllowsLearn) {
+        if (learnRequested.load() || engine.learning()) learnStatus.store(7);
+        if (kickEqLearnRequested.load() || captureState==CaptureState::recording) kickEqStatus.store(5);
+    } else if (transportAllowsLearn) {
+        if (engine.learning()) learnStatus.store(1);
+        if (captureState==CaptureState::recording &&
+            kickEqCaptureState.load(std::memory_order_relaxed)==CaptureState::recording)
+            kickEqStatus.store(1);
     }
     learnProgress.store(float(engine.learnProgress()));
     wasLearning = engine.learning(); publishMeters();

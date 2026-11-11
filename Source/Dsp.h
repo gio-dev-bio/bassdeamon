@@ -28,6 +28,7 @@ enum class UnmaskStereoMode { stereo, mid, side };
 
 struct Settings {
     bool active = true;
+    bool pausePhaseLearn = false;
     bool kickEqEnabled = false, matchEnabled = false, auditionDry = false;
     double kickEqFrequency = 0, kickEqCut = 1.5;
     TubeSettings tube;
@@ -540,7 +541,7 @@ public:
             const double glueAgc = compensate(0, inputPower, power(x, channels), glueMix);
             for (auto& v : x) v *= glueAgc;
 
-            if (learner.learning()) {
+            if (learner.learning() && !s.pausePhaseLearn) {
                 const double monoBass = channels == 2 ? (x[0]+x[1])*0.5 : x[0];
                 learner.tick(monoBass, (k[0]+k[1])*0.5);
             }

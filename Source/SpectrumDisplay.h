@@ -12,7 +12,7 @@ public:
     bool ready=false;uint64_t revision=0;
     static int fps(int setting) noexcept {return std::array<int,6>{30,15,8,4,2,1}[size_t(std::clamp(setting,0,5))];}
     SpectrumDisplay(){reset();}
-    void reset() noexcept {for(size_t t=0;t<5;++t)shown[t].fill(t<3?-120.f:0.f);clearPending();for(auto& values:paired)values.fill(-120.f);nextFrame=0;pendingData=false;ready=false;mode=-1;}
+    void reset() noexcept {for(size_t t=0;t<5;++t)shown[t].fill(t<3?-120.f:0.f);clearPending();for(auto& values:paired)values.fill(-120.f);nextFrame=lastFrame=0;pendingData=false;ready=false;mode=-1;}
     void push(const RelationAnalyzer& a,uint64_t samples,double nowSeconds,int setting) noexcept {
         if(!a.ready()){reset();return;}
         if(setting!=mode){mode=setting;ready=false;pendingData=false;clearPending();}
@@ -38,7 +38,22 @@ public:
         }
         const double period=1.0/fps(setting);
         if(pendingData&&(!ready||nowSeconds+1e-8>=nextFrame)){
-            const bool first=!ready;shown=pending;paired=pendingPaired;clearPending();pendingData=false;
+            const bool first=!ready;
+            if(first)shown=pending;
+            else {
+                const double dt=std::clamp(nowSeconds-lastFrame,0.0,1.0);
+                const float attack=float(1-std::exp(-dt/.095));
+                const float release=float(1-std::exp(-dt/.32));
+                for(size_t stream=0;stream<3;++stream)
+                    for(size_t bin=0;bin<RelationAnalyzer::bins;++bin){
+                        auto& level=shown[stream][bin];
+                        const float delta=pending[stream][bin]-level;
+                        level+=(delta>=0?attack:release)*delta;
+                    }
+                shown[3]=pending[3];shown[4]=pending[4];
+            }
+            lastFrame=nowSeconds;
+            paired=pendingPaired;clearPending();pendingData=false;
             nextFrame=first?nowSeconds+period:nextFrame+period*(std::floor((nowSeconds-nextFrame+1e-8)/period)+1);
             ready=true;++revision;
         }
@@ -47,6 +62,6 @@ public:
 private:
     void clearPending() noexcept {for(size_t t=0;t<5;++t)pending[t].fill(t<3?-120.f:0.f);}
     std::array<Spectrum,3> pendingPaired{};
-    std::array<Spectrum,5> pending{};double nextFrame=0;bool pendingData=false;int mode=-1;
+    std::array<Spectrum,5> pending{};double nextFrame=0,lastFrame=0;bool pendingData=false;int mode=-1;
 };
 }

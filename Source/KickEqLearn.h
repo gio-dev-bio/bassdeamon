@@ -35,6 +35,7 @@ public:
         return count == capacity;
     }
 
+    float progress() const noexcept { return float(count)/capacity; }
     bool hasSignal() const noexcept { return peakLevel >= .0015f; }
 
     // Called only after capture, on the message thread. Compare multiple

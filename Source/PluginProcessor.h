@@ -35,11 +35,12 @@ public:
     int spectrumView() const noexcept { return visualSpectrumView.load(std::memory_order_relaxed); }
     void setSpectrumView(int view) noexcept { visualSpectrumView.store(view == 0 ? 0 : 1,std::memory_order_relaxed); }
     int selectedAB() const noexcept { return abSlot; }
-    void requestKickEqLearn() noexcept { kickEqLearnRequested.store(true); }
+    void requestKickEqLearn() noexcept { kickEqProgress.store(0); kickEqStatus.store(5); kickEqLearnRequested.store(true); }
     std::atomic<bool> compareDry{false}, compareMatch{false};
     std::atomic<float> comparisonGainDb{0};
-    std::atomic<int> kickEqStatus{0}; // idle, recording, failed, locked
-    void requestLearn() noexcept { learnRequested.store(true); }
+    std::atomic<int> kickEqStatus{0}; // idle, recording, failed, locked, no sidechain, waiting
+    std::atomic<float> kickEqProgress{0};
+    void requestLearn() noexcept { learnStatus.store(7); learnRequested.store(true); }
     bool undoEdit();
     bool redoEdit();
     void refreshHistory();
