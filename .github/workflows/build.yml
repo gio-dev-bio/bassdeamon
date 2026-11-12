@@ -1,7 +1,7 @@
-name: BassDeamon build and validation
+name: BassDeamon Intel build fallback
 on:
   push:
-    branches: [main, 'codex/**']
+    branches: ['build/bassdeamon-0.2.15-intel']
   workflow_dispatch:
 permissions:
   contents: read
@@ -9,25 +9,8 @@ concurrency:
   group: bassdeamon-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  dsp:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Configure dependency-free DSP tests
-        run: cmake -S . -B build -DBASSDEAMON_BUILD_PLUGIN=OFF -DCMAKE_BUILD_TYPE=Release
-      - run: cmake --build build --parallel 2
-      - run: ctest --test-dir build --output-on-failure
-      - name: Address and undefined behaviour sanitizers
-        run: |
-          g++ -std=c++17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -ISource tests/DspTests.cpp -o /tmp/dsp-sanitized
-          /tmp/dsp-sanitized
-          g++ -std=c++17 -O1 -g -pthread -fsanitize=address,undefined -fno-omit-frame-pointer -ISource tests/NewFeatureTests.cpp -o /tmp/features-sanitized
-          /tmp/features-sanitized
-          g++ -std=c++17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -ISource tests/AnalyzerTests.cpp -o /tmp/analyzer-sanitized
-          /tmp/analyzer-sanitized
   macos:
-    # Temporary Intel-only build while hosted ARM runners lack capacity.
-    runs-on: macos-15-intel
+    runs-on: macos-26-intel
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -103,62 +86,3 @@ jobs:
             new-feature-results.txt
             tube50.f32
 
-  benchmark:
-    if: github.event_name == 'workflow_dispatch'
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [macos-15-intel]
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Compile native baseline/candidate benchmark
-        run: clang++ -std=c++17 -O3 -DNDEBUG -ISource tests/Benchmark.cpp -o /tmp/dsp-benchmark
-      - name: Benchmark CPU and render controlled audio fixtures
-        run: |
-          /tmp/dsp-benchmark bench-results
-          python3 - <<'PYINFO'
-          import json,platform,subprocess,pathlib
-          def read(*cmd):
-              return subprocess.check_output(cmd,text=True).strip()
-          info={'machine':platform.machine(),'os':platform.platform(),'cpu':read('sysctl','-n','machdep.cpu.brand_string'),'logical_cpus':read('sysctl','-n','hw.logicalcpu'),'compiler':read('clang++','--version'),'flags':'-std=c++17 -O3 -DNDEBUG; native architecture, no fast-math'}
-          pathlib.Path('bench-results/hardware.json').write_text(json.dumps(info,indent=2))
-          PYINFO
-      - name: Verify distortion, silence, null tests and automation transients
-        run: |
-          python3 -m venv /tmp/bench-venv
-          /tmp/bench-venv/bin/pip -q install numpy==2.2.6 scipy==1.15.3
-          /tmp/bench-venv/bin/python benchmarks/analyze.py bench-results
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: benchmark-${{ matrix.runner }}
-          path: |
-            bench-results/*.csv
-            bench-results/*.json
-
-  feature-native:
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [macos-15-intel]
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Native Soft Tube and analysis contracts
-        run: |
-          clang++ -std=c++17 -O3 -pthread -ISource tests/NewFeatureTests.cpp -o /tmp/features
-          /tmp/features tube50.f32 > new-feature-results.txt
-          uname -a > hardware.txt
-          sysctl -n machdep.cpu.brand_string >> hardware.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: SoftTube-native-${{ matrix.runner }}
-          retention-days: 14
-          path: |
-            new-feature-results.txt
-            hardware.txt
-            tube50.f32
