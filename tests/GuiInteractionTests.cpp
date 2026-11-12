@@ -30,7 +30,7 @@ int interactionTests(){
         for(int block=0;block<360;++block){
             if(block%2==0)gui->spectrumPre.onClick();
             else gui->spectrumPost.onClick();
-            if(block%30==0)gui->analyzerRateBox.setSelectedId(1+(block/30)%6,juce::sendNotificationSync);
+            if(block%30==0)gui->analyzerRefresh.setValue(3.5+(block/30)*2,juce::sendNotificationSync);
             for(int n=0;n<256;++n){const double t=(block*256+n)/48000.;const float bass=float(.3*std::sin(2*bassdeamon::pi*55*t)+.08*std::sin(2*bassdeamon::pi*110*t));
                 x.setSample(0,n,bass);x.setSample(1,n,bass*.85f);x.setSample(2,n,float(.5*std::exp(-std::fmod(t,.5)*25)*std::sin(2*bassdeamon::pi*57*t)));}
             y.makeCopyOf(x);a.processBlock(x,midi);b.processBlock(y,midi);
@@ -38,8 +38,15 @@ int interactionTests(){
             if(block%6==0)gui->refreshVisuals(block*256/48.);
         }
         ensure(a.parameters.copyState().toXmlString()==before,"PRE/POST modified host parameters");
-        a.setAnalyzerRate(3);a.setSpectrumView(0);juce::MemoryBlock state;a.getStateInformation(state);b.setStateInformation(state.getData(),int(state.getSize()));
-        ensure(b.spectrumView()==0&&b.analyzerRate()==3,"Local visual view/rate not recalled");
+        a.setAnalyzerRefreshHz(7.5);a.setSpectrumView(0);juce::MemoryBlock state;a.getStateInformation(state);b.setStateInformation(state.getData(),int(state.getSize()));
+        ensure(b.spectrumView()==0&&b.analyzerRefreshHz()==7.5,"Local visual view/rate not recalled");
+        auto oldXml=juce::AudioProcessor::getXmlFromBinary(state.getData(),int(state.getSize()));
+        ensure(oldXml!=nullptr,"Saved state was invalid");
+        oldXml->removeAttribute("visualAnalyzerHz");
+        oldXml->setAttribute("visualAnalyzerRate",3);
+        juce::AudioProcessor::copyXmlToBinary(*oldXml,state);
+        b.setStateInformation(state.getData(),int(state.getSize()));
+        ensure(b.analyzerRefreshHz()==4,"Legacy 4 fps analyzer rate did not migrate");
         std::cout<<"PASS PRE/POST null test: 184320 identical audio samples across 360 real button clicks, with active processors and AGC; host parameters unchanged\n";
     }
     BassDeamonProcessor p;auto layout=p.getBusesLayout();
@@ -98,13 +105,13 @@ int interactionTests(){
     ensure(editor->showSum&&editor->sumButton.getToggleState(),"SUM ON must restore the sum graph");
     ensure(p.parameters.copyState().toXmlString()==stateBeforeSum,"SUM changed audio parameters");
     ensure(editor->spectrumIsPost(),"Spectrum must default to POST");
-    editor->analyzerRateBox.setSelectedId(6,juce::sendNotificationAsync);
+    editor->analyzerRefresh.setValue(6.5,juce::sendNotificationAsync);
     visualTick();
-    ensure(editor->analyzerRateBox.getSelectedId()==6,"Timer overwrote a pending RATE selection");
-    editor->analyzerRateBox.setSelectedId(5,juce::sendNotificationSync);
-    ensure(p.analyzerRate()==4,"RATE selection did not reach processor");
-    p.setAnalyzerRate(2);visualTick();
-    ensure(editor->analyzerRateBox.getSelectedId()==3,"RATE state recall did not update menu");
+    ensure(editor->analyzerRefresh.getValue()==6.5,"Timer overwrote a pending RATE edit");
+    editor->analyzerRefresh.setValue(12.5,juce::sendNotificationSync);
+    ensure(p.analyzerRefreshHz()==12.5,"RATE edit did not reach processor");
+    p.setAnalyzerRefreshHz(8);visualTick();
+    ensure(editor->analyzerRefresh.getValue()==8,"RATE recall did not update slider");
     for(auto* button:{&editor->spectrumPre,&editor->spectrumPost})
         ensure(editor->face.getComponentAt(button->getBounds().getCentre())==button,"Spectrum selector hit target covered");
     for(auto* limit:{&editor->focusMin,&editor->focusMax})
@@ -180,7 +187,7 @@ int interactionTests(){
     ensure(preHits>0&&postHits>0&&prePainted&&postPainted,"Real short/quiet kick has no visible PRE/POST collisions");
     // Real 20 dB reduction with the slowest display: PRE remains red, POST
     // must clear after the actual output settles, without consulting the knob.
-    p.setAnalyzerRate(3);set("unmask.controlDb",1);set("unmask.attenuation",20);set("unmask.on",1);
+    p.setAnalyzerRefreshHz(4);set("unmask.controlDb",1);set("unmask.attenuation",20);set("unmask.on",1);
     set("unmask.track",0);set("unmask.frequency",75);set("unmask.agc",0);set("output.trim",0);
     editor->analyzer.prepare(48000);editor->spectrumDisplay.reset();while(p.analysisQueue.pop(discarded)){}
     for(int b=0;b<360;++b){for(int n=0;n<256;++n){const float value=float(.4*std::sin(2*bassdeamon::pi*75*(b*256+n)/48000.));buffer.setSample(0,n,value);buffer.setSample(1,n,value);}
@@ -189,7 +196,20 @@ int interactionTests(){
         <<"; shown PRE="<<editor->visualMaskPre[overlapBin]<<" POST="<<editor->visualMaskPost[overlapBin]<<"; revision="<<editor->spectrumDisplay.revision<<" clock="<<visualClock<<'\n';
     ensure(editor->visualMaskPre[overlapBin]>.8f&&editor->visualMaskPost[overlapBin]<.12f,"Slow POST display ignores actual 20 dB reduction");
     editor->spectrumPost.onClick();ensure(redInSpectrum()==0,"POST still paints red after real 20 dB cut");
+    ensure(std::abs(editor->visualUnmaskResponse.gainDb(75,48000)+20)<.2,
+           "POST response snapshot did not receive the applied 20 dB filter");
+    ensure(!editor->visualUnmaskPath.isEmpty(),"POST does not paint the live UNMASK curve");
     editor->spectrumPre.onClick();ensure(redInSpectrum()>20,"PRE collision disappeared with POST attenuation");
+    editor->spectrumHold.setToggleState(true,juce::dontSendNotification);
+    set("unmask.on",0);
+    for(int b=0;b<40;++b){buffer.clear();p.processBlock(buffer,midi);visualTick();}
+    ensure(std::abs(editor->visualUnmaskResponse.gainDb(75,48000)+20)<.2,
+           "HOLD did not freeze the UNMASK response");
+    editor->spectrumHold.setToggleState(false,juce::dontSendNotification);
+    editor->spectrumHold.onClick();
+    for(int b=0;b<30;++b){buffer.clear();p.processBlock(buffer,midi);visualTick();}
+    ensure(std::abs(editor->visualUnmaskResponse.gainDb(75,48000))<.05,
+           "Live response did not clear after disabling UNMASK");
     p.setStateInformation(audioState.getData(),int(audioState.getSize()));visualTick();
     for(int b=0;b<200;++b){host.time=b*256/48000.;for(int n=0;n<256;++n){buffer.setSample(0,n,float(.6*std::sin(2*bassdeamon::pi*75*(b*256+n)/48000.)));buffer.setSample(1,n,0);}
         p.processBlock(buffer,midi);if(b>100)output+=buffer.getRMSLevel(0,0,256);visualTick();}

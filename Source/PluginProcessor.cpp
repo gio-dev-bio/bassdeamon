@@ -275,11 +275,14 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     }
     learnProgress.store(float(engine.learnProgress()));
     wasLearning = engine.learning(); publishMeters();
+    if (analysisQueue.enabled.load(std::memory_order_relaxed))
+        pushUnmaskResponse(engine.unmaskResponse(settings, bass.getNumChannels()));
 }
 void BassDeamonProcessor::processBlockBypassed(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) {
     std::optional<juce::AudioProcessLoadMeasurer::ScopedTimer> cpuTimer;
     if(buffer.getNumSamples()>0)cpuTimer.emplace(cpuLoad,buffer.getNumSamples());
     if(analysisQueue.enabled.load(std::memory_order_relaxed)){
+        pushUnmaskResponse({});
         auto bass=getBusBuffer(buffer,false,0);auto side=getBusBuffer(buffer,true,1);
         for(int n=0;n<buffer.getNumSamples();++n){bassdeamon::AnalysisFrame frame;
             for(int c=0;c<2;++c){const int source=std::min(c,bass.getNumChannels()-1);
@@ -294,6 +297,19 @@ void BassDeamonProcessor::processBlockBypassed(juce::AudioBuffer<float>& buffer,
     }
     midi.clear(); wasBypassed = true;
     // Matching main input/output layouts and zero algorithmic latency: leave bass untouched.
+}
+void BassDeamonProcessor::pushUnmaskResponse(const bassdeamon::UnmaskResponse& response) noexcept {
+    auto write = responseFifo.write(1);
+    write.forEach([&](int index) { responseFrames[size_t(index)] = response; });
+}
+bassdeamon::UnmaskResponse BassDeamonProcessor::consumeUnmaskResponse() noexcept {
+    auto read = responseFifo.read(responseFifo.getNumReady());
+    bassdeamon::UnmaskResponse strongest;
+    read.forEach([&](int index) {
+        const auto& candidate = responseFrames[size_t(index)];
+        if (candidate.activity >= strongest.activity) strongest = candidate;
+    });
+    return strongest;
 }
 void BassDeamonProcessor::publishMeters() noexcept {
     const auto& m = engine.getMeters();
@@ -352,7 +368,7 @@ void BassDeamonProcessor::timerCallback() {
 void BassDeamonProcessor::getStateInformation(juce::MemoryBlock& dest) {
     auto state = parameters.copyState(); state.setProperty("schemaVersion", 8, nullptr);
     state.setProperty("visualSpectrumView",spectrumView(),nullptr);
-    state.setProperty("visualAnalyzerRate",analyzerRate(),nullptr);
+    state.setProperty("visualAnalyzerHz",analyzerRefreshHz(),nullptr);
     for (size_t i = 0; i < runtimeSnapshot.size(); ++i)
         state.setProperty("runtime" + juce::String(static_cast<int>(i)), runtimeSnapshot[i].load(), nullptr);
     if (auto xml = state.createXml()) copyXmlToBinary(*xml, dest);
@@ -407,7 +423,9 @@ void BassDeamonProcessor::setStateInformation(const void* data, int bytes) {
                 auto* mode=parameters.getParameter("unmask.controlDb");mode->setValueNotifyingHost(0);
                 auto* amount=parameters.getParameter("unmask.attenuation");amount->setValueNotifyingHost(amount->convertTo0to1(6));
             }
-            setAnalyzerRate(xml->getIntAttribute("visualAnalyzerRate",2));
+            constexpr std::array<double,6> previousRates{30,15,8,4,2,1};
+            const auto oldRate = size_t(std::clamp(xml->getIntAttribute("visualAnalyzerRate",2),0,5));
+            setAnalyzerRefreshHz(xml->getDoubleAttribute("visualAnalyzerHz",previousRates[oldRate]));
             setSpectrumView(xml->getIntAttribute("visualSpectrumView",int(parameters.getRawParameterValue("view.spectrum")->load())));
             const bassdeamon::Engine::RuntimeState defaults{-24, 2, 20, 180, 0, 0, 0, 75,0};
             for (size_t i = 0; i < defaults.size(); ++i) {

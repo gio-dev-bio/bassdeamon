@@ -29,6 +29,52 @@ int main(){try{
         require(std::abs(paired[1][peakBin]-paired[0][peakBin]+reduction)<.3,"POST - PRE readout not calibrated");
         ++cases;
     }
+    // The plotted curve must match the audio transfer at and away from focus.
+    for (double sampleRate : {44100.,48000.}) for (bool direct : {false,true}) {
+        Engine engine;
+        engine.prepare(sampleRate);
+        Settings s;
+        s.glue=s.phase=false;
+        s.unmask=true;
+        s.unmaskDirect=direct;
+        s.unmaskAttenuationDb=20;
+        s.unmaskAmount=1;
+        s.unmaskTrack=false;
+        s.unmaskFrequency=75;
+        s.unmaskAttackMs=1;
+        std::array<float,128> bass{},kick{};
+        float* out[]{bass.data()};
+        const float* reference[]{kick.data()};
+        int position=0;
+        const auto render=[&](double tone, double kickLevel, int blocks) {
+            double inputPower=0,outputPower=0;
+            for(int b=0;b<blocks;++b) {
+                for(size_t n=0;n<bass.size();++n,++position) {
+                    bass[n]=float(.35*std::sin(2*pi*tone*position/sampleRate));
+                    kick[n]=float(kickLevel*std::sin(2*pi*75*position/sampleRate));
+                    if (b>=blocks-100) inputPower+=bass[n]*bass[n];
+                }
+                engine.process(out,1,reference,1,int(bass.size()),s);
+                if (b>=blocks-100) for (float value:bass) outputPower+=value*value;
+            }
+            return 10*std::log10(outputPower/inputPower);
+        };
+        for (double frequency : {75.,155.}) {
+            const double measured=render(frequency,.4,600);
+            const auto curve=engine.unmaskResponse(s,1);
+            require(std::abs(curve.gainDb(frequency,sampleRate)-measured)<.2,
+                    "Plotted UNMASK transfer differs from rendered audio");
+            require(curve.gainDb(75,sampleRate)<curve.gainDb(300,sampleRate)-.1,
+                    "UNMASK curve is missing its localized cut");
+        }
+        render(75,0,950);
+        require(std::abs(engine.unmaskResponse(s,1).gainDb(75,sampleRate))<.05,
+                "UNMASK graph failed to return to unity after kick release");
+        s.active=false;
+        render(75,.4,100);
+        require(engine.unmaskResponse(s,1).gainDb(75,sampleRate)==0,
+                "Bypassed DSP still plots UNMASK");
+    }
     // Knob says 12 dB, final trim restores all 12 dB: POST must still flag.
     {
         Engine e;e.prepare(48000);Settings s;s.glue=s.phase=false;s.unmaskDirect=true;s.unmaskAttenuationDb=12;s.outputDb=12;s.unmaskTrack=false;s.unmaskFrequency=75;s.unmaskAttackMs=1;
@@ -37,13 +83,13 @@ int main(){try{
             for(int n=0;n<128;++n){AnalysisFrame f;f.pre={k[size_t(n)],k[size_t(n)]};f.post={x[size_t(n)],x[size_t(n)]};f.kick=f.pre;q->push(f);}if(b%12==0)a->consume(*q);}
         a->consume(*q);require(near(a->maskPost,75,48000)>.8,"Detector trusts knob instead of actual output");
     }
-    for(int mode=0;mode<6;++mode){auto a=std::make_unique<RelationAnalyzer>();auto q=std::make_unique<AnalysisQueue>();auto d=std::make_unique<SpectrumDisplay>();a->prepare(48000);
+    for(double refreshHz : {1.,2.,4.,7.5,8.,12.5,15.,24.3,30.}){auto a=std::make_unique<RelationAnalyzer>();auto q=std::make_unique<AnalysisQueue>();auto d=std::make_unique<SpectrumDisplay>();a->prepare(48000);
         uint64_t last=0;int lastTick=0;bool pulseSeen=false;size_t revisionsAfterReady=0;
         for(int n=0;n<4*48000;++n){double t=n/48000.;const double since=t-.6;
             const float bass=float(.4*std::sin(2*pi*75*t));const float kick=since>=0&&since<.02?float(.4*std::sin(pi*since/.02)*std::sin(2*pi*75*t)):0;
             AnalysisFrame f;f.pre={bass,bass};f.post=f.pre;f.kick={kick,kick};if(t>1.6){f.kick=f.pre;f.post={bass*.1f,bass*.1f};}
             require(q->push(f),"Rate fixture queue overflow");
-            if(n/1600>lastTick){lastTick=n/1600;a->consume(*q);const auto oldRevision=d->revision;const auto old=d->shown[0];d->push(*a,a->consumedFrames-last,t,mode);last=a->consumedFrames;
+            if(n/800>lastTick){lastTick=n/800;a->consume(*q);const auto oldRevision=d->revision;const auto old=d->shown[0];d->pushAtRate(*a,a->consumedFrames-last,t,refreshHz);last=a->consumedFrames;
                 if(d->revision==oldRevision)require(old==d->shown[0],"Visible frame changed between selected refreshes");
                 if(t>.6&&t<1.6&&near(d->shown[3],75,48000)>=.12)pulseSeen=true;
                 if(t>3.45)require(near(d->shown[4],75,48000)<.12,"Slow display retains old POST collision after actual attenuation");
@@ -51,8 +97,8 @@ int main(){try{
             }
         }
         require(pulseSeen,"Slow rate lost 20 ms collision event");
-        const double expected=(4.-double(RelationAnalyzer::fftSize)/48000)*SpectrumDisplay::fps(mode);
-        if(std::abs(double(revisionsAfterReady)-expected)>=3){std::cerr<<"Rate "<<SpectrumDisplay::fps(mode)<<" actual frames "<<revisionsAfterReady<<" expected "<<expected<<"\n";return 1;}
+        const double expected=(4.-double(RelationAnalyzer::fftSize)/48000)*refreshHz;
+        if(std::abs(double(revisionsAfterReady)-expected)>=3){std::cerr<<"Rate "<<refreshHz<<" actual frames "<<revisionsAfterReady<<" expected "<<expected<<"\n";return 1;}
     }
     // Musical use case: repeated short kicks, a sustained bass plus harmonic,
     // real attack/release and slow display. The 20 dB target is not assumed to

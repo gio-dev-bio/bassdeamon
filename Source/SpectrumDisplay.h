@@ -14,7 +14,11 @@ public:
     SpectrumDisplay(){reset();}
     void reset() noexcept {for(size_t t=0;t<5;++t)shown[t].fill(t<3?-120.f:0.f);clearPending();for(auto& values:paired)values.fill(-120.f);nextFrame=lastFrame=0;pendingData=false;ready=false;mode=-1;}
     void push(const RelationAnalyzer& a,uint64_t samples,double nowSeconds,int setting) noexcept {
+        pushAtRate(a,samples,nowSeconds,fps(setting));
+    }
+    void pushAtRate(const RelationAnalyzer& a,uint64_t samples,double nowSeconds,double refreshHz) noexcept {
         if(!a.ready()){reset();return;}
+        const double setting=std::isfinite(refreshHz)?std::clamp(refreshHz,1.,30.):8.;
         if(setting!=mode){mode=setting;ready=false;pendingData=false;clearPending();}
         if(samples>0){
             // For each bin, prefer a shared frame with the strongest kick.
@@ -36,7 +40,7 @@ public:
             }
             pendingData=true;
         }
-        const double period=1.0/fps(setting);
+        const double period=1.0/setting;
         if(pendingData&&(!ready||nowSeconds+1e-8>=nextFrame)){
             const bool first=!ready;
             if(first)shown=pending;
@@ -62,6 +66,6 @@ public:
 private:
     void clearPending() noexcept {for(size_t t=0;t<5;++t)pending[t].fill(t<3?-120.f:0.f);}
     std::array<Spectrum,3> pendingPaired{};
-    std::array<Spectrum,5> pending{};double nextFrame=0,lastFrame=0;bool pendingData=false;int mode=-1;
+    std::array<Spectrum,5> pending{};double nextFrame=0,lastFrame=0;bool pendingData=false;double mode=-1;
 };
 }

@@ -1,4 +1,5 @@
 #pragma once
+#include <complex>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -88,6 +89,28 @@ struct Biquad {
         const double alpha = std::sin(w) / (2 * q), a0 = 1 + alpha / A;
         b0 = (1 + alpha * A) / a0; b1 = -2 * std::cos(w) / a0;
         b2 = (1 - alpha * A) / a0; a1 = b1; a2 = (1 - alpha / A) / a0;
+    }
+};
+
+// Instantaneous small-signal response of the UNMASK filters, before Auto Gain.
+struct UnmaskResponse {
+    std::array<Biquad, bandCount> distributed{};
+    Biquad bell;
+    double wet = 0, direct = 0, activity = 0;
+    UnmaskStereoMode mode = UnmaskStereoMode::stereo;
+
+    double gainDb(double frequency, double sampleRate) const noexcept {
+        if (wet <= 1e-5) return 0;
+        const double angle = 2 * pi * frequency / sampleRate;
+        const std::complex<double> z{std::cos(angle), -std::sin(angle)};
+        const auto z2 = z * z;
+        const auto transfer = [&](const Biquad& f) {
+            return (f.b0 + f.b1 * z + f.b2 * z2) / (1.0 + f.a1 * z + f.a2 * z2);
+        };
+        std::complex<double> legacy{1}, single{1};
+        if (direct < 1) for (const auto& band : distributed) legacy *= transfer(band);
+        if (direct > 0) single = transfer(bell);
+        return db(std::abs(1.0 + wet * ((1.0 - direct) * legacy + direct * single - 1.0)));
     }
 };
 
@@ -690,6 +713,23 @@ public:
             meters.bassDb[b] = db(std::sqrt(bassE[b])); meters.kickDb[b] = db(std::sqrt(kickE[b]));
             meters.cutsDb[b] = cutDb[b] * unmaskMix;
         }
+    }
+    UnmaskResponse unmaskResponse(const Settings& settings, int channels) const noexcept {
+        UnmaskResponse response;
+        if (settings.auditionDry || settings.delta || (settings.tube.enabled && settings.tube.audition))
+            return response;
+        response.mode = settings.unmaskStereoMode;
+        const double projection = response.mode == UnmaskStereoMode::side
+            ? (channels == 2 ? sideMix.value() : 0.) : midMix.value();
+        response.wet = unmaskMix * globalRamp.value() * projection;
+        response.direct = directMix < 1e-6 ? 0 : directMix > 1 - 1e-6 ? 1 : directMix;
+        if (response.wet > 1e-5) {
+            response.activity = meters.unmaskReductionDb * globalRamp.value() * projection;
+            if (response.direct < 1)
+                for (size_t band = 0; band < bandCount; ++band) response.distributed[band] = filters[band][0];
+            if (response.direct > 0) response.bell = directFilters[0];
+        }
+        return response;
     }
 private:
     std::array<Biquad, 2> kickEqFilters{}, nextKickEqFilters{};

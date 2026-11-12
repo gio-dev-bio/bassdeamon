@@ -113,7 +113,7 @@ int captureGui(const juce::File& output){
     if(!captured){std::cerr<<"No real short-kick collision for capture\n";return 1;}
     // Actual processed PRE/POST comparison at the slowest selected rate.
     const auto setValue=[&](const char* id,float value){auto* parameter=p.parameters.getParameter(id);parameter->setValueNotifyingHost(parameter->convertTo0to1(value));};
-    p.setAnalyzerRate(3);setValue("unmask.controlDb",1);setValue("unmask.attenuation",20);setValue("unmask.on",1);
+    p.setAnalyzerRefreshHz(4);setValue("unmask.controlDb",1);setValue("unmask.attenuation",20);setValue("unmask.on",1);
     setValue("unmask.track",0);setValue("unmask.frequency",75);setValue("unmask.agc",0);setValue("output.trim",0);
     for(int block=0;block<360;++block){for(int n=0;n<256;++n){const float v=float(.4*std::sin(2*bassdeamon::pi*75*(block*256+n)/48000.));
         buffer.setSample(0,n,v);buffer.setSample(1,n,v);buffer.setSample(2,n,v);}
@@ -124,8 +124,9 @@ int captureGui(const juce::File& output){
     std::cout<<output.getFullPathName()<<'\n';return 0;
 }
 
-// Local QA: two stereo 48 kHz interleaved float exports, never bundled with CI.
-int captureLoopGui(const juce::File& bassFile, const juce::File& kickFile, const juce::File& output) {
+// Local QA: two stereo sample-rate matched interleaved float exports, never bundled with CI.
+int captureLoopGui(const juce::File& bassFile, const juce::File& kickFile, const juce::File& output, int sampleRate) {
+    if(sampleRate<8000||sampleRate>192000)return 1;
     const auto load=[](const juce::File& file){
         juce::MemoryBlock bytes;
         if(!file.loadFileAsData(bytes) || bytes.getSize()<8 || bytes.getSize()%8!=0)
@@ -139,7 +140,7 @@ int captureLoopGui(const juce::File& bassFile, const juce::File& kickFile, const
     auto layout=processor.getBusesLayout();
     layout.inputBuses.set(1,juce::AudioChannelSet::stereo());
     if(!processor.setBusesLayout(layout))return 1;
-    processor.prepareToPlay(48000,256);
+    processor.prepareToPlay(sampleRate,256);
     class LoopTransport final : public juce::AudioPlayHead {
     public:
         bool playing=false;
@@ -164,28 +165,29 @@ int captureLoopGui(const juce::File& bassFile, const juce::File& kickFile, const
         for(int n=0;n<256;++n){
             const auto k=transport.playing?kick[size_t(pos+n)%kick.size()]:std::array<float,2>{};
             const auto b=!transport.playing?std::array<float,2>{}
-                :knownOffset?kick[(size_t(pos+n+96))%kick.size()]:bass[size_t(pos+n)%bass.size()];
+                :knownOffset?kick[(size_t(pos+n+int(std::round(sampleRate*.002))))%kick.size()]:bass[size_t(pos+n)%bass.size()];
             for(int c=0;c<2;++c){
                 buffer.setSample(c,n,knownOffset?-b[c]:b[c]);
                 buffer.setSample(c+2,n,k[c]);
             }
         }
-        transport.seconds=std::fmod(pos/48000.,.5);
+        transport.seconds=std::fmod(double(pos)/sampleRate,.5);
         processor.processBlock(buffer,midi);
         if(transport.playing)pos+=256;
     };
+    const int captureBlocks=(4*sampleRate+255)/256;
     processor.analysisQueue.enabled.store(false);
     editor->kickEqLearn.onClick();
     editor->learn.onClick();
     for(int block=0;block<900;++block)renderBlock(false);
     if(processor.learnStatus.load()!=7||processor.kickEqStatus.load()!=5)return 1;
     transport.playing=true;
-    for(int block=0;block<375;++block)renderBlock(false);
+    for(int block=0;block<captureBlocks/2;++block)renderBlock(false);
     transport.playing=false;
     for(int block=0;block<900;++block)renderBlock(false);
     if(processor.learnStatus.load()!=7||processor.kickEqStatus.load()!=5)return 1;
     transport.playing=true;
-    for(int block=0;block<375;++block)renderBlock(false);
+    for(int block=0;block<captureBlocks-captureBlocks/2;++block)renderBlock(false);
     processor.timerCallback();
     const auto hz=processor.parameters.getRawParameterValue("kickEq.frequency")->load();
     std::cout<<"Actual loop KICK EQ "<<hz<<" Hz / phase status "<<processor.learnStatus.load()
@@ -195,7 +197,7 @@ int captureLoopGui(const juce::File& bassFile, const juce::File& kickFile, const
     processor.parameters.getParameter("kickEq.on")->setValueNotifyingHost(0);
     processor.parameters.getParameter("glue.on")->setValueNotifyingHost(0);
     editor->learn.onClick();
-    for(int block=0;block<750;++block)renderBlock(true);
+    for(int block=0;block<captureBlocks;++block)renderBlock(true);
     processor.timerCallback();
     const auto delay=processor.parameters.getRawParameterValue("phase.delay")->load();
     const auto inverted=processor.parameters.getRawParameterValue("phase.invert")->load();
@@ -206,21 +208,45 @@ int captureLoopGui(const juce::File& bassFile, const juce::File& kickFile, const
     editor->learn.onClick();
     auto* maxParam=processor.parameters.getParameter("view.maxHz");
     maxParam->setValueNotifyingHost(maxParam->convertTo0to1(250));
-    processor.setAnalyzerRate(5);
+    processor.setAnalyzerRefreshHz(1);
     double clock=0;
     const auto initialRevision=editor->spectrumDisplay.revision;
     for(int block=0;block<1100;++block){
         renderBlock(false);
         if(block%6==0){
-            clock+=32;
+            clock+=6000.0*256/sampleRate;
             editor->refreshVisuals(clock);
         }
     }
     processor.timerCallback();
     const auto slowFrames=editor->spectrumDisplay.revision-initialRevision;
     std::cout<<"1 fps: "<<slowFrames<<" spectrum frames in "<<clock/1000<<" s\n";
-    if(hz<=0||std::abs(delay-2)>.26||inverted<.5f||slowFrames<4||slowFrames>7)return 1;
-    const auto snapshot=editor->createComponentSnapshot(editor->getLocalBounds(),true,1.f);
+    if(hz<=0||std::abs(delay-2)>.26||inverted<.5f||slowFrames<4||slowFrames>8)return 1;
+    const auto set=[&](const char* id,float value){
+        auto* parameter=processor.parameters.getParameter(id);
+        parameter->setValueNotifyingHost(parameter->convertTo0to1(value));
+    };
+    processor.setAnalyzerRefreshHz(7.5);
+    set("unmask.attenuation",12);
+    set("unmask.attack",1);
+    editor->spectrumPost.onClick();
+    juce::Image snapshot;
+    double strongest=0;
+    for(int block=0;block<440;++block) {
+        renderBlock(false);
+        if(block%3!=0)continue;
+        clock+=3000.0*256/sampleRate;
+        editor->refreshVisuals(clock);
+        const auto& response=editor->visualUnmaskResponse;
+        const double centre=processor.focusHz.load();
+        const double cut=response.gainDb(centre,sampleRate);
+        if(cut<strongest) {
+            strongest=cut;
+            snapshot=editor->face.createComponentSnapshot({20,124,828,328},true,1.f);
+        }
+    }
+    std::cout<<"Actual loop / 7.5 fps / visible UNMASK at focus "<<strongest<<" dB\n";
+    if(!snapshot.isValid()||strongest>-.5)return 1;
     auto stream=output.createOutputStream();
     juce::PNGImageFormat png;
     return stream&&stream->setPosition(0)&&stream->truncate().wasOk()&&png.writeImageToStream(snapshot,*stream)?0:1;

@@ -30,8 +30,12 @@ public:
     void setStateInformation(const void*, int) override;
     void selectAB(int slot);
     void loadStartingPoint(int preset);
-    int analyzerRate() const noexcept { return visualAnalyzerRate.load(std::memory_order_relaxed); }
-    void setAnalyzerRate(int value) noexcept { visualAnalyzerRate.store(std::clamp(value,0,5),std::memory_order_relaxed); }
+    double analyzerRefreshHz() const noexcept { return visualAnalyzerHz.load(std::memory_order_relaxed); }
+    void setAnalyzerRefreshHz(double hz) noexcept {
+        visualAnalyzerHz.store(float(std::isfinite(hz) ? std::round(std::clamp(hz,1.,30.) * 10) / 10 : 8.),
+                               std::memory_order_relaxed);
+    }
+    bassdeamon::UnmaskResponse consumeUnmaskResponse() noexcept;
     int spectrumView() const noexcept { return visualSpectrumView.load(std::memory_order_relaxed); }
     void setSpectrumView(int view) noexcept { visualSpectrumView.store(view == 0 ? 0 : 1,std::memory_order_relaxed); }
     int selectedAB() const noexcept { return abSlot; }
@@ -62,7 +66,7 @@ public:
     std::atomic<float> learnCorrelation{0};
 private:
     friend int interactionTests();
-    friend int captureLoopGui(const juce::File&, const juce::File&, const juce::File&);
+    friend int captureLoopGui(const juce::File&, const juce::File&, const juce::File&, int);
     static juce::AudioProcessorValueTreeState::ParameterLayout layout();
     bassdeamon::Settings readSettings() const noexcept;
     void timerCallback() override;
@@ -83,7 +87,11 @@ private:
     std::atomic<bool> resultInvert{false};
     std::array<std::atomic<float>, 9> runtimeSnapshot{}, restoredRuntime{};
     std::array<juce::MemoryBlock, 2> abStates;
-    std::atomic<int> visualSpectrumView{1},visualAnalyzerRate{2};
+    void pushUnmaskResponse(const bassdeamon::UnmaskResponse&) noexcept;
+    juce::AbstractFifo responseFifo{128};
+    std::array<bassdeamon::UnmaskResponse, 128> responseFrames{};
+    std::atomic<int> visualSpectrumView{1};
+    std::atomic<float> visualAnalyzerHz{8};
     int abSlot = 0; // message-thread only; A/B survives editor close/reopen.
     std::atomic<bool> restoreRequested{false};
     std::atomic<bool> historyResetRequested{false};

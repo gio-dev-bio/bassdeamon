@@ -11,7 +11,7 @@ public:
     void resized() override;
 private:
     friend int interactionTests();
-    friend int captureLoopGui(const juce::File&, const juce::File&, const juce::File&);
+    friend int captureLoopGui(const juce::File&, const juce::File&, const juce::File&, int);
     friend int captureGui(const juce::File&);
     using State=juce::AudioProcessorValueTreeState;
     struct Face final : juce::Component {
@@ -57,8 +57,12 @@ private:
     std::vector<std::unique_ptr<Switch>> switches;
     bassdeamon::RelationAnalyzer analyzer;
     bassdeamon::SpectrumDisplay spectrumDisplay;
-    juce::ComboBox analyzerRateBox;
-    int rateSyncedToBox = -1;
+    juce::Slider analyzerRefresh;
+    double syncedRefreshHz = 0;
+    bassdeamon::UnmaskResponse pendingUnmaskResponse, visualUnmaskResponse;
+    juce::Path visualUnmaskPath;
+    std::array<double,2> unmaskPathLimits{};
+    bool unmaskPathDirty = true;
     float visualUnmaskGr = 0;
     bassdeamon::BeatScope visibleScope;
     juce::TextButton sumButton{"SUM K+B"};
@@ -82,7 +86,7 @@ private:
     juce::TextButton undoButton{"UNDO"},redoButton{"REDO"};
     juce::Label cpuLabel;
     double analyzerMilliseconds=0;
-    double lastAnalysisTime=0;
+    double lastAnalysisTime=0, lastAnalysisPoll=-1;
     bool staleAnalysis=false;
     juce::ComboBox presets,ceiling;
     std::unique_ptr<State::ComboBoxAttachment> ceilingAttachment;

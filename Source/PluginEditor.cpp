@@ -1,5 +1,8 @@
 #include "PluginEditor.h"
-#include <complex>
+namespace {
+const juce::Colour eqTrace(0xffffde78);
+const juce::Colour unmaskTrace(0xff69f3d2);
+}
 
 BassDeamonEditor::Knob::Knob(State& state,const char* id,const char* name,const char* unit,bool percent) {
     slider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
@@ -110,22 +113,30 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
     spectrumHold.setTooltip("Freeze the spectrum and its measurements.");
     spectrumHold.setClickingTogglesState(true);
     spectrumHold.onClick=[this]{
-        if(!spectrumHold.getToggleState())spectrumDisplay.reset();
+        if(!spectrumHold.getToggleState()){
+            spectrumDisplay.reset();
+            pendingUnmaskResponse={};
+        }
         face.repaint();
     };
     face.addAndMakeVisible(spectrumHold);
-    analyzerRateBox.addItemList({"30 fps","15 fps","8 fps","4 fps","2 fps","1 fps"},1);
-    rateSyncedToBox = processor.analyzerRate();
-    analyzerRateBox.setSelectedId(rateSyncedToBox+1,juce::dontSendNotification);
-    analyzerRateBox.setBounds(290,166,125,22);
-    analyzerRateBox.setTooltip("Refresh speed for the spectrum, its measurements and the scope.");
-    analyzerRateBox.onChange=[this]{
-        if (const int selected = analyzerRateBox.getSelectedId(); selected > 0) {
-            rateSyncedToBox = selected-1;
-            processor.setAnalyzerRate(rateSyncedToBox);
-        }
+    analyzerRefresh.setSliderStyle(juce::Slider::LinearBar);
+    analyzerRefresh.setTextBoxStyle(juce::Slider::TextBoxLeft,false,125,22);
+    analyzerRefresh.setRange(1,30,.1);
+    analyzerRefresh.setTextValueSuffix(" fps");
+    analyzerRefresh.valueFromTextFunction=[](const juce::String& text) {
+        return text.replaceCharacter(',', '.').getDoubleValue();
     };
-    face.addAndMakeVisible(analyzerRateBox);
+    analyzerRefresh.setScrollWheelEnabled(false);
+    syncedRefreshHz = processor.analyzerRefreshHz();
+    analyzerRefresh.setValue(syncedRefreshHz,juce::dontSendNotification);
+    analyzerRefresh.setBounds(290,166,125,22);
+    analyzerRefresh.setTooltip("Drag or type a refresh rate from 1 to 30 fps.");
+    analyzerRefresh.onValueChange=[this] {
+        processor.setAnalyzerRefreshHz(analyzerRefresh.getValue());
+        syncedRefreshHz = processor.analyzerRefreshHz();
+    };
+    face.addAndMakeVisible(analyzerRefresh);
     for(auto* slider:{&spectrumMin,&spectrumMax}){
         slider->setSliderStyle(juce::Slider::LinearBar);
         slider->setTextBoxStyle(juce::Slider::TextBoxLeft,false,130,26);
@@ -228,7 +239,7 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
         if (child->getY() >= 400) child->setTopLeftPosition(child->getX(),child->getY()+60);
     setResizable(true,true);setResizeLimits(780,894,1560,1789);
     if(auto* c=getConstrainer())c->setFixedAspectRatio(1200.0/1376.0);
-    setSize(900,1032);timerCallback();startTimerHz(30);
+    setSize(900,1032);timerCallback();startTimerHz(60);
 }
 BassDeamonEditor::~BassDeamonEditor(){stopTimer();processor.analysisQueue.enabled.store(false,std::memory_order_release);setLookAndFeel(nullptr);}
 void BassDeamonEditor::resized(){face.setBounds(0,0,1200,1376);face.setTransform(juce::AffineTransform::scale(static_cast<float>(getWidth())/1200.0f));}
@@ -329,7 +340,7 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g){
     console::text(g,"IN "+juce::String(std::max(inputDb,-99.0f),1)+"  /  OUT "+juce::String(std::max(outputDb,-99.0f),1)+" dBFS RMS",{221,808,315,26},13,console::muted);
     console::text(g,"PEAK "+juce::String(std::max(peak,-99.0f),1)+" dBFS",{548,808,180,26},14,clipFrames>0?console::orange:console::cream);
     console::text(g,"TRIM",{762,808,60,26},13,console::muted);
-    console::text(g,"v0.2.13",{1090,808,66,26},13,console::muted,juce::Justification::centredRight);
+    console::text(g,"v0.2.14",{1090,808,66,26},13,console::muted,juce::Justification::centredRight);
     }
     }
     g.drawImageAt(grain,0,0);
@@ -346,8 +357,15 @@ std::array<double,2> BassDeamonEditor::spectrumLimits() const {
 void BassDeamonEditor::paintSpectrum(juce::Graphics& g) {
     const bool post = spectrumIsPost();
     const juce::Colour bassBlue(0xff8faef1);
-    console::text(g,post?"BASS POST":"BASS PRE",{235,140,113,20},14,bassBlue);
-    console::text(g,"KICK",{360,140,60,20},14,console::amber);
+    const auto legend = [&](const juce::String& label, float x, float width, juce::Colour colour) {
+        g.setColour(colour);
+        g.drawLine(x,150,x+12,150,2);
+        console::text(g,label,{x+17,140,width-17,20},13,colour);
+    };
+    legend(post?"BASS POST":"BASS PRE",235,94,bassBlue);
+    legend("KICK",330,55,juce::Colour(0xffd59666));
+    legend("KICK EQ",386,65,eqTrace);
+    if (post) legend("UNMASK",454,71,unmaskTrace);
     console::text(g,"FROM",{526,166,130,15},11,console::muted);
     console::text(g,"TO",{682,166,132,15},11,console::muted);
     console::text(g,"RATE",{235,167,52,20},13,console::muted);
@@ -355,9 +373,13 @@ void BassDeamonEditor::paintSpectrum(juce::Graphics& g) {
     const juce::String status = !spectrumDisplay.ready ? "COLLECTING AUDIO"
         : clashes > 0 ? juce::String(clashes) + (clashes==1?" COLLISION":" COLLISIONS")
         : post ? "NO SIGNIFICANT RESIDUAL" : "NO COLLISION IN VIEW";
-    const auto gr = juce::String(visualUnmaskGr,1);
+    const auto mode = visualUnmaskResponse.mode;
+    const juce::String component = mode == bassdeamon::UnmaskStereoMode::mid ? " MID"
+        : mode == bassdeamon::UnmaskStereoMode::side ? " SIDE" : "";
     const juce::String comparison = processor.compareDry.load() ? "  /  DRY AUDITION" : "";
-    console::text(g,status+"   |   UNMASK GR "+gr+" dB"+comparison,{72,433,740,14},13,console::muted);
+    console::text(g,status+comparison,{72,433,430,14},13,console::muted);
+    if (post) console::text(g,"UNMASK"+component+" PEAK  "+juce::String(visualUnmaskGr,1)+" dB",
+                            {510,433,304,14},13,unmaskTrace,juce::Justification::centredRight);
 }
 
 int BassDeamonEditor::paintSpectrumPlot(juce::Graphics& g,juce::Rectangle<float> plot,bool post) {
@@ -461,36 +483,83 @@ int BassDeamonEditor::paintSpectrumPlot(juce::Graphics& g,juce::Rectangle<float>
     }
     const double eqHz=processor.parameters.getRawParameterValue("kickEq.frequency")->load();
     const double eqCut=processor.parameters.getRawParameterValue("kickEq.cut")->load();
-    if(processor.parameters.getRawParameterValue("kickEq.on")->load()>.5f && eqHz>=30 && eqCut>0){
-        // RBJ bell response of the locked static filter. The right axis is gain,
-        // independent of the dBFS scale used by the spectra.
+    const bool showEq=processor.parameters.getRawParameterValue("kickEq.on")->load()>.5f
+        && processor.parameters.getRawParameterValue("global.on")->load()>.5f
+        && !processor.compareDry.load() && eqHz>=30 && eqCut>0;
+    if (post || showEq) {
+        const float top=plot.getY()+8;
+        const float depth=plot.getHeight()-16;
+        const auto gainY=[&](double change) {
+            return top+float(std::clamp(-change,0.,24.)/24.)*depth;
+        };
+        console::text(g,"dB",{816,173,25,15},11,console::muted,juce::Justification::centred);
+        console::text(g,"dBFS",{27,173,42,15},11,console::muted,juce::Justification::centredRight);
+        for (int level : {0,-4,-12,-24}) {
+            const float y=gainY(level);
+            g.setColour(console::cream.withAlpha(.35f));
+            g.drawHorizontalLine(juce::roundToInt(y),plot.getRight()-4,plot.getRight()+3);
+            console::text(g,juce::String(level),{816,y-7,25,14},11,console::muted,juce::Justification::centred);
+        }
+
         juce::Graphics::ScopedSaveState clip(g);
         g.reduceClipRegion(plot.toNearestInt());
-        const double amplitude=std::pow(10.,-eqCut/40);
-        const double halfRateAngle=bassdeamon::pi/analyzer.sampleRate();
-        const double centre=std::tan(eqHz*halfRateAngle);
-        const double axisDepth=plot.getHeight()*.54;
-        const double top=plot.getY()+5;
-        juce::Path response;
-        for(int i=0;i<=240;++i){
-            const double fraction=i/240.;
-            const double hz=20*std::expm1(start+span*fraction);
-            const double ratio=std::tan(hz*halfRateAngle)/centre;
-            const double real=1-ratio*ratio;
-            const double quadrature=ratio/3.;
-            const double power=real*real;
-            const double damping=quadrature*quadrature;
-            const double change=10*std::log10((power+damping*amplitude*amplitude)/(power+damping/(amplitude*amplitude)));
-            const float x=plot.getX()+float(fraction)*plot.getWidth();
-            const float y=float(top-change*axisDepth/4);
-            if(i==0)response.startNewSubPath(x,y);else response.lineTo(x,y);
+        const auto responsePath=[&](const auto& gainAt, double* deepest) {
+            juce::Path curve;
+            for (int i=0;i<=240;++i) {
+                const double fraction=i/240.;
+                const double hz=20*std::expm1(start+span*fraction);
+                const double change=gainAt(hz);
+                if (deepest) *deepest=std::min(*deepest,change);
+                const float x=plot.getX()+float(fraction)*plot.getWidth();
+                const float y=gainY(change);
+                if (i==0) curve.startNewSubPath(x,y); else curve.lineTo(x,y);
+            }
+            return curve;
+        };
+        if (post) {
+            if (unmaskPathDirty || unmaskPathLimits!=limits) {
+                unmaskPathLimits=limits;
+                unmaskPathDirty=false;
+                visualUnmaskPath.clear();
+                double deepest=0;
+                if (visualUnmaskResponse.wet>1e-5) {
+                    visualUnmaskPath=responsePath([&](double hz) {
+                        return visualUnmaskResponse.gainDb(hz,analyzer.sampleRate());
+                    },&deepest);
+                }
+                if (deepest>-.05) visualUnmaskPath.clear();
+                visualUnmaskGr=deepest<-.05 ? float(deepest) : 0;
+            }
+            if (!visualUnmaskPath.isEmpty()) {
+                auto shade=visualUnmaskPath;
+                shade.lineTo(plot.getRight(),top);
+                shade.lineTo(plot.getX(),top);
+                shade.closeSubPath();
+                g.setColour(unmaskTrace.withAlpha(.12f));
+                g.fillPath(shade);
+                g.setColour(console::ink);
+                g.strokePath(visualUnmaskPath,juce::PathStrokeType(4.4f));
+                g.setColour(unmaskTrace);
+                g.strokePath(visualUnmaskPath,juce::PathStrokeType(2.2f));
+            }
         }
-        g.setColour(console::ink);
-        g.strokePath(response,juce::PathStrokeType(3.8f));
-        g.setColour(console::cream);
-        g.strokePath(response,juce::PathStrokeType(1.6f));
-        console::text(g,"KICK EQ  0 dB",{plot.getRight()-110,float(top+4),104,16},11,console::cream,juce::Justification::centredRight);
-        console::text(g,"-4 dB",{plot.getRight()-60,float(top+axisDepth-9),54,16},11,console::cream,juce::Justification::centredRight);
+        if (showEq) {
+            const double amplitude=std::pow(10.,-eqCut/40);
+            const double halfRateAngle=bassdeamon::pi/analyzer.sampleRate();
+            const double centre=std::tan(eqHz*halfRateAngle);
+            const auto eqPath=responsePath([&](double hz) {
+                const double ratio=std::tan(hz*halfRateAngle)/centre;
+                const double real=1-ratio*ratio;
+                const double damping=ratio*ratio/9.;
+                const double power=real*real;
+                return 10*std::log10((power+damping*amplitude*amplitude)/(power+damping/(amplitude*amplitude)));
+            },nullptr);
+            constexpr float dashes[]{7,4};
+            juce::Path dashed;
+            juce::PathStrokeType(2).createDashedStroke(dashed,eqPath,dashes,2);
+            g.setColour(eqTrace);
+            g.fillPath(dashed);
+        }
     }
     {
         const auto formatDb=[](float value){
@@ -567,32 +636,48 @@ void BassDeamonEditor::timerCallback(){refreshVisuals(juce::Time::getMillisecond
 void BassDeamonEditor::refreshVisuals(double clockMilliseconds){
     const double rate=processor.getSampleRate()>0?processor.getSampleRate():48000;
     if(rate!=analyzer.sampleRate()){analyzer.prepare(rate);spectrumDisplay.reset();}
-    const double analysisStart=juce::Time::getMillisecondCounterHiRes();
-    const auto beforeSequence=analyzer.streamSequence();
-    const auto beforeConsumed=analyzer.consumedFrames;
-    analyzer.consume(processor.analysisQueue,processor.tempo.load(),processor.parameters.getRawParameterValue("view.hold")->load()>.5f);
-    if(analyzer.streamSequence()!=beforeSequence){lastAnalysisTime=clockMilliseconds;staleAnalysis=false;}
-    else if(!staleAnalysis&&clockMilliseconds-lastAnalysisTime>500){analyzer.prepare(rate);if(!spectrumHold.getToggleState())spectrumDisplay.reset();staleAnalysis=true;}
-    analyzerMilliseconds=.85*analyzerMilliseconds+.15*(juce::Time::getMillisecondCounterHiRes()-analysisStart);
-    processor.refreshHistory();undoButton.setEnabled(processor.canUndo());redoButton.setEnabled(processor.canRedo());
-    cpuLabel.setText("DSP CPU "+juce::String(processor.cpuLoad.getLoadAsPercentage(),1)+"%  |  ANALYZER "+juce::String(analyzerMilliseconds,1)+" ms  |  OVR "+juce::String(processor.cpuLoad.getXRunCount()),juce::dontSendNotification);
-    const uint64_t received=analyzer.consumedFrames>=beforeConsumed?analyzer.consumedFrames-beforeConsumed:0;
-    const int currentRate = processor.analyzerRate();
-    // Only mirror external recall. Polling the box each timer tick can overwrite
-    // a popup selection before JUCE delivers its asynchronous notification.
-    if(currentRate!=rateSyncedToBox){
-        rateSyncedToBox=currentRate;
-        analyzerRateBox.setSelectedId(currentRate+1,juce::dontSendNotification);
+    const bool poll = lastAnalysisPoll < 0 || clockMilliseconds < lastAnalysisPoll
+        || clockMilliseconds - lastAnalysisPoll >= 30;
+    uint64_t received=0;
+    if (poll) {
+        lastAnalysisPoll=clockMilliseconds;
+        const double analysisStart=juce::Time::getMillisecondCounterHiRes();
+        const auto beforeSequence=analyzer.streamSequence();
+        const auto beforeConsumed=analyzer.consumedFrames;
+        analyzer.consume(processor.analysisQueue,processor.tempo.load(),processor.parameters.getRawParameterValue("view.hold")->load()>.5f);
+        if (analyzer.streamSequence()!=beforeSequence) {
+            lastAnalysisTime=clockMilliseconds;
+            staleAnalysis=false;
+            received=analyzer.consumedFrames-beforeConsumed;
+        } else if (!staleAnalysis && clockMilliseconds-lastAnalysisTime>500) {
+            analyzer.prepare(rate);
+            staleAnalysis=true;
+        }
+        analyzerMilliseconds=.85*analyzerMilliseconds+.15*(juce::Time::getMillisecondCounterHiRes()-analysisStart);
     }
+    const double currentRate = processor.analyzerRefreshHz();
+    if (currentRate != syncedRefreshHz) {
+        syncedRefreshHz = currentRate;
+        analyzerRefresh.setValue(currentRate,juce::dontSendNotification);
+    }
+    const auto response = processor.consumeUnmaskResponse();
+    if (!spectrumHold.getToggleState() && response.activity >= pendingUnmaskResponse.activity)
+        pendingUnmaskResponse=response;
     const auto revision=spectrumDisplay.revision;
     const bool wasReady=spectrumDisplay.ready;
-    if(!spectrumHold.getToggleState())spectrumDisplay.push(analyzer,received,clockMilliseconds*.001,currentRate);
-    if(!spectrumHold.getToggleState() && (revision!=spectrumDisplay.revision || (wasReady&&!spectrumDisplay.ready) || staleAnalysis)){
+    if(!spectrumHold.getToggleState())spectrumDisplay.pushAtRate(analyzer,received,clockMilliseconds*.001,currentRate);
+    const bool newFrame=revision!=spectrumDisplay.revision || (wasReady&&!spectrumDisplay.ready);
+    if(!spectrumHold.getToggleState() && newFrame){
         visualPre=spectrumDisplay.shown[0];visualPost=spectrumDisplay.shown[1];visualKick=spectrumDisplay.shown[2];
         visualMaskPre=spectrumDisplay.shown[3];visualMaskPost=spectrumDisplay.shown[4];
-        visualUnmaskGr=processor.unmaskReduction.load(std::memory_order_relaxed);
+        visualUnmaskResponse=spectrumDisplay.ready ? pendingUnmaskResponse : bassdeamon::UnmaskResponse{};
+        pendingUnmaskResponse={};
+        unmaskPathDirty=true;
         visibleScope=analyzer.scope;
     }
+    if (!poll && !newFrame) return;
+    processor.refreshHistory();undoButton.setEnabled(processor.canUndo());redoButton.setEnabled(processor.canRedo());
+    cpuLabel.setText("DSP CPU "+juce::String(processor.cpuLoad.getLoadAsPercentage(),1)+"%  |  ANALYZER "+juce::String(analyzerMilliseconds,1)+" ms  |  OVR "+juce::String(processor.cpuLoad.getXRunCount()),juce::dontSendNotification);
     const int timing=int(processor.parameters.getRawParameterValue("glue.timing")->load());
     const bool sync=processor.parameters.getRawParameterValue("unmask.timing")->load()>.5f;
     const bool direct=processor.parameters.getRawParameterValue("unmask.controlDb")->load()>.5f;

@@ -10,7 +10,7 @@ void require(bool value, const char* message) {
     if (!value) throw std::runtime_error(message);
 }
 
-double learn(double sr, double hz, bool unstable, bool continuous, double level=.75,double decay=21,double sweep=0) {
+double learn(double sr, double hz, bool unstable, bool continuous, double level=.75,double decay=21,double sweep=0,int changedHit=-1) {
     KickEqCapture capture;
     capture.start(sr);
     std::array<float,128> left{}, right{};
@@ -21,7 +21,7 @@ double learn(double sr, double hz, bool unstable, bool continuous, double level=
             const double t=(block*128+i)/sr;
             const int beat=int(t/.5);
             const double age=continuous?t:std::fmod(t,.5);
-            const double pitch=hz+(unstable&&beat%2?25:0);
+            const double pitch=hz+(((unstable&&beat%2)||beat==changedHit)?25:0);
             const double tail=continuous?1:std::exp(-age*decay);
             const double click=continuous?0:.25*std::exp(-age*300)*std::sin(2*pi*720*age);
             const double cycles=pitch*age+sweep*.035*(1-std::exp(-age/.035));
@@ -101,6 +101,7 @@ int main(int argc,char**) {
                 require(std::abs(learn(sr,hz,false,false)-hz)<1.0,"Stable kick fundamental missed");
             require(std::abs(learn(sr,55,false,false,.10,75)-55)<2,"Short, quiet kick fundamental missed");
             require(std::abs(learn(sr,42,false,false,.7,9,65)-42)<3,"Repeated pitch sweep lost its settled tail");
+            require(std::abs(learn(sr,55,false,false,.75,21,0,3)-55)<1,"Single pitch outlier rejected a stable kick");
             require(learn(sr,55,true,false)==0,"Unstable kick accepted");
             require(learn(sr,55,false,true)==0,"Sustained tone accepted as repeated hits");
             require(learn(sr,55,false,false,0)==0,"Silence accepted");

@@ -109,8 +109,13 @@ public:
         if (accepted < 2 || accepted * 2 < hits) return 0;
         std::sort(estimates.begin(), estimates.begin() + accepted);
         const double median = estimates[accepted / 2];
-        for (int i = 0; i < accepted; ++i)
-            if (std::abs(estimates[i] - median) > median * .06) return 0;
+        const auto endOfEstimates = estimates.begin() + accepted;
+        const auto agrees = std::count_if(estimates.begin(), endOfEstimates, [median](double hz) {
+            return std::abs(hz - median) <= median * .06;
+        });
+        // A single different hit should not veto a clearly recurring pitch.
+        if (agrees < 2 || 3 * agrees < 2 * accepted || 2 * agrees < hits)
+            return 0;
         return median;
     }
 

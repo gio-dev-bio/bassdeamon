@@ -16,7 +16,7 @@ void guardedProcess(BassDeamonProcessor& processor, juce::AudioBuffer<float>& bu
     require(allocation::count == before, "C++ allocation inside plugin callback");
 }
 int captureGui(const juce::File&);
-int captureLoopGui(const juce::File&,const juce::File&,const juce::File&);
+int captureLoopGui(const juce::File&,const juce::File&,const juce::File&,int);
 int interactionTests();
 int pluginSignalTests(const std::string&);
 int main(int argc, char** argv) {
@@ -24,8 +24,8 @@ int main(int argc, char** argv) {
     if (argc > 2 && juce::String(argv[1]) == "--capture") return captureGui(juce::File(argv[2]));
     if (argc > 2 && juce::String(argv[1]) == "--signals") return pluginSignalTests(argv[2]);
     try {
-        if (argc==5 && juce::String(argv[1])=="--real-loop")
-            return captureLoopGui(juce::File(argv[2]),juce::File(argv[3]),juce::File(argv[4]));
+        if ((argc==5||argc==6) && juce::String(argv[1])=="--real-loop")
+            return captureLoopGui(juce::File(argv[2]),juce::File(argv[3]),juce::File(argv[4]),argc==6?juce::String(argv[5]).getIntValue():48000);
         interactionTests();
         BassDeamonProcessor p;
         auto layout = p.getBusesLayout();
