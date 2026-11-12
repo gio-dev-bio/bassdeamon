@@ -21,7 +21,7 @@ BASSDEAMON 0.2.15 — VST3 macOS Intel (x86_64)
 La GUI mostra:
 - spettro selezionabile con PRE / POST, kick di riferimento e conflitti spettrali significativi con marcatori rossi locali;
 - intervallo libero in Hz con FROM / TO, modificabile trascinando o digitando i valori;
-- scope L a 1/4 in sync, cattura completa stabile, HOLD, somma kick+basso esclusivamente visiva;
+- Scope in sync a 1/4 sulla somma visiva kick+basso POST, con Mono o Stereo, HOLD e COMPARE PRE. MONO CHECK misura il solo basso processato;
 - GLUE: AUTO, MS o SYNC; UNMASK: MS o SYNC. Attack sempre in ms; solo Release in note con SYNC.
 - Soft Tube opzionale prima di UNMASK, spento inizialmente, con oversampling fisso 4x;
 - VU della gain reduction GLUE;
