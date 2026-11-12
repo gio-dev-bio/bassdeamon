@@ -53,7 +53,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout BassDeamonProcessor::layout(
     boolean("unmask.delta", "UNMASK audition delta", false);
     for (const auto* module : {"glue", "phase", "unmask"}) {
         const juce::String prefix(module);
-        p.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID{prefix + ".agc", 1}, prefix + " auto gain", false));
+        p.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID{prefix + ".agc", 1}, prefix + " auto gain", prefix == "unmask"));
         p.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID{prefix + ".agcLock", 1}, prefix + " lock auto gain", false));
     }
     continuous("output.trim", "Output trim (dB)", -24, 12, 0);
@@ -367,6 +367,7 @@ void BassDeamonProcessor::timerCallback() {
 }
 void BassDeamonProcessor::getStateInformation(juce::MemoryBlock& dest) {
     auto state = parameters.copyState(); state.setProperty("schemaVersion", 8, nullptr);
+    state.setProperty("visualRawTheme",usesRawTheme(),nullptr);
     state.setProperty("visualSpectrumView",spectrumView(),nullptr);
     state.setProperty("visualAnalyzerHz",analyzerRefreshHz(),nullptr);
     for (size_t i = 0; i < runtimeSnapshot.size(); ++i)
@@ -425,6 +426,7 @@ void BassDeamonProcessor::setStateInformation(const void* data, int bytes) {
             }
             constexpr std::array<double,6> previousRates{30,15,8,4,2,1};
             const auto oldRate = size_t(std::clamp(xml->getIntAttribute("visualAnalyzerRate",2),0,5));
+            setRawTheme(xml->getBoolAttribute("visualRawTheme",false));
             setAnalyzerRefreshHz(xml->getDoubleAttribute("visualAnalyzerHz",previousRates[oldRate]));
             setSpectrumView(xml->getIntAttribute("visualSpectrumView",int(parameters.getRawParameterValue("view.spectrum")->load())));
             const bassdeamon::Engine::RuntimeState defaults{-24, 2, 20, 180, 0, 0, 0, 75,0};
@@ -447,7 +449,10 @@ void BassDeamonProcessor::selectAB(int slot) {
     getStateInformation(abStates[static_cast<size_t>(abSlot)]);
     auto& target = abStates[static_cast<size_t>(slot)];
     if (target.getSize() == 0) target = abStates[static_cast<size_t>(abSlot)];
-    setStateInformation(target.getData(), static_cast<int>(target.getSize())); abSlot = slot;
+    const bool keepRawTheme = usesRawTheme();
+    setStateInformation(target.getData(), static_cast<int>(target.getSize()));
+    setRawTheme(keepRawTheme);
+    abSlot = slot;
 }
 void BassDeamonProcessor::loadStartingPoint(int preset) {
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());

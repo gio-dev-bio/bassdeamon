@@ -38,14 +38,18 @@ int interactionTests(){
             if(block%6==0)gui->refreshVisuals(block*256/48.);
         }
         ensure(a.parameters.copyState().toXmlString()==before,"PRE/POST modified host parameters");
+        a.setRawTheme(true);
         a.setAnalyzerRefreshHz(7.5);a.setSpectrumView(0);juce::MemoryBlock state;a.getStateInformation(state);b.setStateInformation(state.getData(),int(state.getSize()));
         ensure(b.spectrumView()==0&&b.analyzerRefreshHz()==7.5,"Local visual view/rate not recalled");
+        ensure(b.usesRawTheme(),"Raw theme was not recalled");
         auto oldXml=juce::AudioProcessor::getXmlFromBinary(state.getData(),int(state.getSize()));
         ensure(oldXml!=nullptr,"Saved state was invalid");
         oldXml->removeAttribute("visualAnalyzerHz");
+        oldXml->removeAttribute("visualRawTheme");
         oldXml->setAttribute("visualAnalyzerRate",3);
         juce::AudioProcessor::copyXmlToBinary(*oldXml,state);
         b.setStateInformation(state.getData(),int(state.getSize()));
+        ensure(!b.usesRawTheme(),"Old sessions should open in Classic");
         ensure(b.analyzerRefreshHz()==4,"Legacy 4 fps analyzer rate did not migrate");
         std::cout<<"PASS PRE/POST null test: 184320 identical audio samples across 360 real button clicks, with active processors and AGC; host parameters unchanged\n";
     }
@@ -96,14 +100,14 @@ int interactionTests(){
     ensure(std::abs(editor->attenuationKnob->slider.getValueFromText("-9.3 dB")-9.3)<.001,"Negative dB typing parsed incorrectly");
     ensure(p.undoEdit()&&std::abs(get("unmask.attenuation")-6)<.001,"Attenuation undo failed");
     ensure(p.redoEdit()&&std::abs(get("unmask.attenuation")-11.7f)<.001,"Attenuation redo failed");
-    ensure(editor->showSum,"SUM must be default");ensure(get("view.range")==0,"Spectrum must default 0-1000");
-    ensure(editor->face.getComponentAt(editor->sumButton.getBounds().getCentre())==&editor->sumButton,"SUM hit target covered");
-    const auto stateBeforeSum=p.parameters.copyState().toXmlString();
-    editor->sumButton.onClick();
-    ensure(!editor->showSum&&!editor->sumButton.getToggleState(),"SUM OFF must hide the sum graph");
-    editor->sumButton.onClick();
-    ensure(editor->showSum&&editor->sumButton.getToggleState(),"SUM ON must restore the sum graph");
-    ensure(p.parameters.copyState().toXmlString()==stateBeforeSum,"SUM changed audio parameters");
+    ensure(!editor->compareScopePre,"Scope should default to POST only");ensure(get("view.range")==0,"Spectrum must default 0-1000");
+    ensure(editor->face.getComponentAt(editor->scopeCompareButton.getBounds().getCentre())==&editor->scopeCompareButton,"COMPARE PRE hit target covered");
+    const auto stateBeforeScopeCompare=p.parameters.copyState().toXmlString();
+    editor->scopeCompareButton.onClick();
+    ensure(editor->compareScopePre&&editor->scopeCompareButton.getToggleState(),"COMPARE PRE must show the overlay");
+    editor->scopeCompareButton.onClick();
+    ensure(!editor->compareScopePre&&!editor->scopeCompareButton.getToggleState(),"COMPARE PRE must restore POST only");
+    ensure(p.parameters.copyState().toXmlString()==stateBeforeScopeCompare,"COMPARE PRE changed audio parameters");
     ensure(editor->spectrumIsPost(),"Spectrum must default to POST");
     editor->analyzerRefresh.setValue(6.5,juce::sendNotificationAsync);
     visualTick();
@@ -114,9 +118,31 @@ int interactionTests(){
     ensure(editor->analyzerRefresh.getValue()==8,"RATE recall did not update slider");
     for(auto* button:{&editor->spectrumPre,&editor->spectrumPost})
         ensure(editor->face.getComponentAt(button->getBounds().getCentre())==button,"Spectrum selector hit target covered");
-    for(auto* limit:{&editor->focusMin,&editor->focusMax})
-        ensure(limit->getY()==737 && limit->getBottom()<editor->attenuationKnob->getY(),
-               "Auto Focus range controls must be above the UNMASK knobs");
+    const auto showUnmaskAdvanced=[&](bool visible){
+        editor->unmaskAdvanced.setToggleState(visible,juce::dontSendNotification);
+        editor->unmaskAdvanced.onClick();
+    };
+    const auto unmaskPageState=p.parameters.copyState().toXmlString();
+    ensure(get("unmask.agc")==1&&get("unmask.track")==1,
+           "UNMASK should start with Auto Gain and Auto Focus on");
+    ensure(editor->unmaskDelta->isVisible(),"DELTA is missing from the main UNMASK page");
+    const auto mainDeltaBounds=editor->unmaskDelta->getBounds();
+    ensure(!editor->focusMin.isVisible()&&!editor->unmaskAttackKnob->isVisible(),
+           "Advanced controls should be hidden on the main UNMASK page");
+    ensure(editor->unmaskChannel->isVisible()&&!editor->frequencyKnob->isVisible(),
+           "Main UNMASK page should show the channel and hide manual frequency in Auto Focus");
+    showUnmaskAdvanced(true);
+    ensure(editor->unmaskDelta->isVisible()&&editor->unmaskDelta->getBounds()!=mainDeltaBounds,
+           "DELTA should remain accessible on the Advanced page");
+    ensure(editor->focusMin.isVisible()&&editor->focusMax.isVisible()&&editor->unmaskAttackKnob->isVisible(),
+           "Auto Focus range and attack are missing from Advanced");
+    ensure(!editor->attenuationKnob->isVisible()&&!editor->unmaskChannel->isVisible(),
+           "Main controls are still visible on Advanced");
+    showUnmaskAdvanced(false);
+    ensure(p.parameters.copyState().toXmlString()==unmaskPageState,"UNMASK page changed audio parameters");
+    set("unmask.track",0);visualTick();
+    ensure(editor->frequencyKnob->isVisible(),"Manual Focus frequency is missing");
+    set("unmask.track",1);visualTick();
     // Arbitrary typed values, not the former fixed frequency presets.
     editor->spectrumMin.setValue(37.5,juce::sendNotificationSync);
     editor->spectrumMax.setValue(437.25,juce::sendNotificationSync);
@@ -126,7 +152,7 @@ int interactionTests(){
     const size_t overlapBin=size_t(std::round(75.*bassdeamon::RelationAnalyzer::fftSize/48000.));
     editor->visualPre[overlapBin]=editor->visualPost[overlapBin]=editor->visualKick[overlapBin]=-12;
     const auto redInSpectrum=[&]{
-        const auto image=editor->face.createComponentSnapshot({72,190,742,160});int red=0;
+        const auto image=editor->face.createComponentSnapshot({72,190,1070,160});int red=0;
         for(int y=0;y<image.getHeight();++y)for(int x=0;x<image.getWidth();++x){const auto c=image.getPixelAt(x,y);
             if(c.getRed()>c.getGreen()*1.6&&c.getRed()>c.getBlue()*1.6&&c.getRed()>50)++red;
         }
@@ -143,7 +169,7 @@ int interactionTests(){
     editor->visualMaskPost.fill(0);editor->visualMaskPost[overlapBin]=1;
     ensure(editor->spectrumIsPost()&&editor->spectrumPost.getToggleState(),"POST selector did not switch view");
     ensure(redInSpectrum()>20,"POST collision bands missing");
-    const auto lower=editor->face.createComponentSnapshot({72,240,742,27});int lowerRed=0;
+    const auto lower=editor->face.createComponentSnapshot({72,240,1070,27});int lowerRed=0;
     for(int y=0;y<lower.getHeight();++y)for(int x=0;x<lower.getWidth();++x){const auto colour=lower.getPixelAt(x,y);
         if(colour.getRed()>colour.getGreen()*1.6&&colour.getRed()>colour.getBlue()*1.6&&colour.getRed()>50)++lowerRed;}
     ensure(lowerRed<150,"Collision indicator filled unrelated lower spectrum");
@@ -217,18 +243,18 @@ int interactionTests(){
     ensure(editor->cpuLabel.getText().contains("DSP CPU")&&editor->cpuLabel.getText().contains("ANALYZER"),"CPU display missing");
     ensure(output>1,"GUI audition path has no added audio");ensure(p.tubeAddedDb.load()>-50,"GUI added signal meter missing");
     const auto greenInScope=[&]{
-        const auto image=editor->face.createComponentSnapshot({48,editor->sumButton.getY()+38,1104,75});
+        const auto image=editor->face.createComponentSnapshot({48,editor->scopeCompareButton.getY()+38,1104,75});
         int count=0;
         for(int y=0;y<image.getHeight();++y)for(int x=0;x<image.getWidth();++x){const auto c=image.getPixelAt(x,y);
             if(c.getGreen()>c.getRed()*1.4&&c.getGreen()>c.getBlue()*1.05)++count;
         }
         return count;
     };
-    ensure(greenInScope()>10,"SUM ON did not draw actual POST waveform");
-    editor->sumButton.onClick();
-    ensure(greenInScope()==0,"SUM OFF left waveform visible");
-    editor->sumButton.onClick();
-    ensure(greenInScope()>10,"SUM ON did not restore waveform");
+    ensure(greenInScope()>10,"Scope did not draw actual POST waveform by default");
+    editor->scopeCompareButton.onClick();
+    ensure(greenInScope()>10,"COMPARE PRE hid the POST waveform");
+    editor->scopeCompareButton.onClick();
+    ensure(greenInScope()>10,"POST waveform disappeared after disabling the overlay");
     const auto frozen=editor->spectrumDisplay.revision;
     editor->spectrumHold.setToggleState(true,juce::dontSendNotification);
     for(int b=0;b<70;++b){buffer.clear();p.processBlock(buffer,midi);visualTick();}
@@ -243,6 +269,7 @@ int interactionTests(){
     set("glue.releaseNote",4);host.bpm=90;buffer.clear();p.processBlock(buffer,midi);visualTick();
     ensure(std::abs(p.glueRelease.load()-60000.f/90)<.01,"GLUE timing ignores host tempo");
     ensure(std::abs(p.glueAttack.load()-17)<.01&&std::abs(p.unmaskAttack.load()-7)<.01,"SYNC changed manual attack");
+    showUnmaskAdvanced(true);
     ensure(editor->glueAttackSlider.isVisible()&&editor->unmaskAttackKnob->isVisible(),"SYNC hid millisecond attack controls");
     ensure(!editor->glueReleaseSlider.isVisible()&&!editor->unmaskReleaseKnob->isVisible(),"SYNC retained manual release controls");
     bool glueRelease=false,unmaskRelease=false;
@@ -252,6 +279,7 @@ int interactionTests(){
         if(id=="unmask.releaseNote")unmaskRelease=choice->box.isVisible();
     }
     ensure(glueRelease&&unmaskRelease,"SYNC release note selectors missing");
+    showUnmaskAdvanced(false);
     // View selection and exact limits survive save/recall.
     p.setSpectrumView(2);
     ensure(p.spectrumView()==1,"Legacy overlay view did not migrate to POST");

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(BassDeamon VERSION 0.2.14 LANGUAGES C CXX)
+project(BassDeamon VERSION 0.2.15 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(BASSDEAMON_BUILD_PLUGIN "Build the JUCE VST3" ON)
@@ -64,10 +64,13 @@ if(BASSDEAMON_BUILD_PLUGIN)
         IS_SYNTH FALSE NEEDS_MIDI_INPUT FALSE NEEDS_MIDI_OUTPUT FALSE
         IS_MIDI_EFFECT FALSE EDITOR_WANTS_KEYBOARD_FOCUS FALSE
         COPY_PLUGIN_AFTER_BUILD FALSE VST3_CATEGORIES Fx Dynamics)
+    juce_add_binary_data(BassDeamonArt HEADER_NAME BassDeamonArt.h NAMESPACE BassDeamonArt
+        SOURCES Assets/RawSteel.png Assets/RawKnob.png)
+    set_target_properties(BassDeamonArt PROPERTIES POSITION_INDEPENDENT_CODE TRUE)
     target_sources(BassDeamon PRIVATE Source/PluginProcessor.cpp Source/PluginEditor.cpp)
     target_compile_definitions(BassDeamon PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
         JUCE_VST3_CAN_REPLACE_VST2=0)
-    target_link_libraries(BassDeamon PRIVATE bassdeamon_dsp juce::juce_audio_utils
+    target_link_libraries(BassDeamon PRIVATE bassdeamon_dsp BassDeamonArt juce::juce_audio_utils
         PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
     if(BUILD_TESTING)
         juce_add_console_app(plugin_tests PRODUCT_NAME "BassDeamon plugin contracts")

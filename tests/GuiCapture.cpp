@@ -47,6 +47,11 @@ int captureGui(const juce::File& output){
     eq->setValueNotifyingHost(eq->convertTo0to1(60));
     p.parameters.getParameter("kickEq.on")->setValueNotifyingHost(1);
     if(!save(output))return 1;
+    p.setRawTheme(true);
+    timedGui->syncTheme();
+    if(!save(output.getSiblingFile("GUI-Raw.png")))return 1;
+    p.setRawTheme(false);
+    timedGui->syncTheme();
     p.parameters.getParameter("kickEq.on")->setValueNotifyingHost(0);
     auto* gui=static_cast<BassDeamonEditor*>(editor.get());
     // Freeze one real audio frame for paired pictures. Rendering a full PNG
@@ -60,10 +65,10 @@ int captureGui(const juce::File& output){
     selectViewForCapture(false);
     if(!save(output.getSiblingFile("GUI-Pre.png")))return 1;
     selectViewForCapture(true);
-    gui->sumButton.onClick();
-    if(gui->showSum||gui->sumButton.getToggleState())return 1;
-    if(!save(output.getSiblingFile("GUI-SumOff.png")))return 1;
-    gui->sumButton.onClick();
+    gui->scopeCompareButton.onClick();
+    if(!gui->compareScopePre||!gui->scopeCompareButton.getToggleState())return 1;
+    if(!save(output.getSiblingFile("GUI-ScopeComparePre.png")))return 1;
+    gui->scopeCompareButton.onClick();
     for(const char* id:{"glue.timing","unmask.timing"}){
         auto* parameter=p.parameters.getParameter(id);
         parameter->setValueNotifyingHost(1);
@@ -242,7 +247,7 @@ int captureLoopGui(const juce::File& bassFile, const juce::File& kickFile, const
         const double cut=response.gainDb(centre,sampleRate);
         if(cut<strongest) {
             strongest=cut;
-            snapshot=editor->face.createComponentSnapshot({20,124,828,328},true,1.f);
+            snapshot=editor->face.createComponentSnapshot({20,124,1160,328},true,1.f);
         }
     }
     std::cout<<"Actual loop / 7.5 fps / visible UNMASK at focus "<<strongest<<" dB\n";

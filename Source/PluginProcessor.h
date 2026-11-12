@@ -36,6 +36,8 @@ public:
                                std::memory_order_relaxed);
     }
     bassdeamon::UnmaskResponse consumeUnmaskResponse() noexcept;
+    bool usesRawTheme() const noexcept { return rawTheme.load(std::memory_order_relaxed); }
+    void setRawTheme(bool useRaw) noexcept { rawTheme.store(useRaw,std::memory_order_relaxed); }
     int spectrumView() const noexcept { return visualSpectrumView.load(std::memory_order_relaxed); }
     void setSpectrumView(int view) noexcept { visualSpectrumView.store(view == 0 ? 0 : 1,std::memory_order_relaxed); }
     int selectedAB() const noexcept { return abSlot; }
@@ -90,6 +92,7 @@ private:
     void pushUnmaskResponse(const bassdeamon::UnmaskResponse&) noexcept;
     juce::AbstractFifo responseFifo{128};
     std::array<bassdeamon::UnmaskResponse, 128> responseFrames{};
+    std::atomic<bool> rawTheme{false};
     std::atomic<int> visualSpectrumView{1};
     std::atomic<float> visualAnalyzerHz{8};
     int abSlot = 0; // message-thread only; A/B survives editor close/reopen.

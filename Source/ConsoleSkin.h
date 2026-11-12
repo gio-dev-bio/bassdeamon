@@ -64,6 +64,34 @@ public:
         setColour(juce::TooltipWindow::backgroundColourId,juce::Colour(0xffe8d6af));
         setColour(juce::TooltipWindow::textColourId,ink);
     }
+    bool isRaw() const noexcept { return raw; }
+
+    bool setRaw(bool useRaw);
+
+    void paintPanel(juce::Graphics& g, juce::Rectangle<float> r, bool dark=false) const {
+        if (!raw || !steel.isValid()) {
+            panel(g,r,dark);
+            return;
+        }
+        g.setColour(juce::Colours::black.withAlpha(.78f));
+        g.fillRoundedRectangle(r.translated(0,3),6);
+        juce::Graphics::ScopedSaveState scope(g);
+        juce::Path edge;
+        edge.addRoundedRectangle(r,6);
+        g.reduceClipRegion(edge);
+        g.setTiledImageFill(steel,0,0,1.f);
+        g.fillRect(r);
+        g.setGradientFill(juce::ColourGradient(juce::Colours::white.withAlpha(dark?0.f:.035f),0,r.getY(),
+            juce::Colours::black.withAlpha(dark?.34f:.21f),0,r.getBottom(),false));
+        g.fillRect(r);
+        g.setColour(juce::Colour(0xff9a8065).withAlpha(.82f));
+        g.drawRoundedRectangle(r.reduced(.75f),5,1.5f);
+        g.setColour(juce::Colours::black.withAlpha(.7f));
+        g.drawRoundedRectangle(r.reduced(2.5f),4,1);
+        for (float x:{r.getX()+10,r.getRight()-10})
+            for (float y:{r.getY()+10,r.getBottom()-10}) screw(g,x,y);
+    }
+
     void drawRotarySlider(juce::Graphics& g, int x, int y, int w, int h, float position, float start, float end, juce::Slider& slider) override {
         auto r=juce::Rectangle<float>(static_cast<float>(x),static_cast<float>(y),static_cast<float>(w),static_cast<float>(h)).reduced(std::min(12.0f,static_cast<float>(h)*0.1f));
         const float radius=std::min(r.getWidth(),r.getHeight())*0.5f, cx=r.getCentreX(),cy=r.getCentreY();
@@ -77,6 +105,16 @@ public:
         juce::Path active;active.addCentredArc(cx,cy,radius+2,radius+2,0,start,angle,true);
         g.setColour(amber.withAlpha(slider.isEnabled()?0.85f:0.2f));g.strokePath(active,juce::PathStrokeType(2.5f));
         g.setColour(juce::Colours::black.withAlpha(0.65f));g.fillEllipse(cx-radius+2,cy-radius+5,2*radius,2*radius);
+        if (raw && knob.isValid()) {
+            g.setOpacity(slider.isEnabled()?1.f:.64f);
+            g.drawImage(knob,{cx-radius,cy-radius,2*radius,2*radius});
+            g.setColour(slider.isEnabled()?cream:muted);
+            const float sn=std::sin(angle),cs=std::cos(angle);
+            g.drawLine(cx+sn*radius*.33f,cy-cs*radius*.33f,
+                       cx+sn*radius*.77f,cy-cs*radius*.77f,radius>42?4.f:2.6f);
+            return;
+        }
+
         g.setGradientFill(juce::ColourGradient(juce::Colour(0xff8d8268),cx-radius,cy-radius,ink,cx+radius,cy+radius,false));
         g.fillEllipse(cx-radius,cy-radius,2*radius,2*radius);
         g.setColour(copper.withAlpha(0.85f));g.drawEllipse(cx-radius+3,cy-radius+3,2*radius-6,2*radius-6,1.5f);
@@ -105,9 +143,25 @@ public:
     juce::Font getComboBoxFont(juce::ComboBox&) override {return font(16);}
     juce::Font getLabelFont(juce::Label&) override {return font(14);}
 private:
-    static void button(juce::Graphics& g,juce::Button& b,bool hover,bool down,bool on) {
+    bool raw=false;
+    juce::Image steel,knob;
+    void button(juce::Graphics& g,juce::Button& b,bool hover,bool down,bool on) const {
         auto r=b.getLocalBounds().toFloat().reduced(1);
         g.setColour(juce::Colours::black.withAlpha(0.6f));g.fillRoundedRectangle(r.translated(0,2),4);
+        if (raw) {
+            const auto top=on?juce::Colour(0xff87592f):juce::Colour(0xff474139);
+            const auto bottom=on?juce::Colour(0xff49301e):juce::Colour(0xff211e1a);
+            g.setGradientFill(juce::ColourGradient(hover?top.brighter(.12f):top,0,r.getY(),
+                down?bottom.darker(.2f):bottom,0,r.getBottom(),false));
+            g.fillRoundedRectangle(r,4);
+            g.setColour((on?amber:copper).withAlpha(b.isEnabled()?.68f:.35f));
+            g.drawRoundedRectangle(r,4,1);
+            if (on) g.fillRoundedRectangle(r.getX()+5,r.getY()+5,2,r.getHeight()-10,1);
+            g.setColour(cream.withAlpha(b.isEnabled()?1.f:.45f));
+            g.setFont(font(r.getHeight()<28?12.5f:14.5f,true));
+            g.drawFittedText(b.getButtonText(),r.reduced(7,0).toNearestInt(),juce::Justification::centred,1);
+            return;
+        }
         const auto top=on?amber:juce::Colour(0xff4a4238),bottom=on?juce::Colour(0xffa15c24):juce::Colour(0xff2b2620);
         g.setGradientFill(juce::ColourGradient((down?top.darker():top).brighter(hover?0.1f:0),0,r.getY(),bottom,0,r.getBottom(),false));
         g.fillRoundedRectangle(r,4);g.setColour(on?cream:copper);g.drawRoundedRectangle(r,4,1);

@@ -293,6 +293,7 @@ public:
         thresholdDb = -24; ratio = 2; attackMs = 20; releaseMs = 180;
         glueReduction = 0; onsetClock = lastOnset = 0; kickIntervalMs = 0;
         controlCounter = 0; smoothed = false; meters = {};
+        directWeightDenominator = std::max(1e-12, *std::max_element(focusWeights.begin(),focusWeights.end()));
         globalInitialised=globalPaused=false;globalRamp.reset(1);delayFade.reset(1);polarityRamp.reset(1);
         inputPowerMeter = outputPowerMeter = outputHeld = kickHeld = 0;
         focusHz = 75; trackedFocusHz = 75;
@@ -539,6 +540,7 @@ public:
                     right.b0=left.b0; right.b1=left.b1; right.b2=left.b2; right.a1=left.a1; right.a2=left.a2;
                     if (std::abs(cutDb[b]) < 1e-12) right.z1=right.z2=0;
                 }
+                directWeightDenominator = std::max(1e-12, *std::max_element(focusWeights.begin(),focusWeights.end()));
             }
             glueMix = follow(glueMix, s.glue ? 1 : 0, smoothA);
             phaseMix = follow(phaseMix, s.phase ? 1 : 0, smoothA);
@@ -622,7 +624,6 @@ public:
                 signal[1] += centre - difference;
             };
             double maxCut = 0,directActivity=0;
-            const double maxWeight=*std::max_element(focusWeights.begin(),focusWeights.end());
             auto legacy=x;
             for (size_t b = 0; b < frequencies.size(); ++b) {
                 double be = 0, ke = 0;
@@ -646,13 +647,13 @@ public:
                 const double target = -unmaskDepth * activity * focusWeights[b];
                 cutDb[b] = follow(cutDb[b], target, target < cutDb[b] ? cutAttackA : cutReleaseA);
                 maxCut = std::max(maxCut, -cutDb[b]);
-                directActivity=std::max(directActivity,activity*focusWeights[b]/std::max(1e-12,maxWeight));
+                directActivity=std::max(directActivity,activity*focusWeights[b]);
                 for (int c = 0; c < channels; ++c) legacy[c] = filters[b][c].tick(legacy[c]);
             }
             // dB control is a calibrated single dynamic bell: the requested
             // attenuation is its centre gain at full detector activity. Legacy
             // sessions keep the former distributed-band path until dB is selected.
-            const double directTarget=-std::clamp(s.unmaskAttenuationDb,0.0,24.0)*directActivity;
+            const double directTarget=-std::clamp(s.unmaskAttenuationDb,0.0,24.0)*(directActivity/directWeightDenominator);
             directCutDb=follow(directCutDb,directTarget,directTarget<directCutDb?cutAttackA:cutReleaseA);
             if(controlCounter%32==0){
                 directFilters[0].peak(focusHz,smoothedFilterQ,directCutDb,sampleRate);
@@ -757,6 +758,7 @@ private:
     double inputPowerMeter = 0, outputPowerMeter = 0, outputHeld = 0, kickHeld = 0;
     double focusHz = 75, trackedFocusHz = 75, focusA = 0, peakA = 0;
     std::uint64_t onsetClock = 0, lastOnset = 0;
+    double directWeightDenominator = 1e-12;
     int controlCounter = 0;
     bool smoothed = false;
     Ramp globalRamp,delayFade,polarityRamp,midMix,sideMix;

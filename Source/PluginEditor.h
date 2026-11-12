@@ -41,9 +41,10 @@ private:
     void addChoice(const char*,const juce::StringArray&,juce::Rectangle<int>);
     void paintConsole(juce::Graphics&);
     void paintSpectrum(juce::Graphics&);
+    void layoutUnmask();
+    void refreshUnmaskControls();
     int paintSpectrumPlot(juce::Graphics&, juce::Rectangle<float>, bool post);
     void paintWave(juce::Graphics&);
-    void paintVU(juce::Graphics&);
     bool spectrumIsPost() const;
     std::array<double,2> spectrumLimits() const;
     void timerCallback() override;
@@ -65,7 +66,8 @@ private:
     bool unmaskPathDirty = true;
     float visualUnmaskGr = 0;
     bassdeamon::BeatScope visibleScope;
-    juce::TextButton sumButton{"SUM K+B"};
+    juce::ComboBox scopeChannel;
+    juce::TextButton scopeCompareButton{"COMPARE PRE"};
     juce::TextButton spectrumPre{"PRE"},spectrumPost{"POST"},spectrumHold{"HOLD"};
     juce::TextButton kickEqLearn{"LEARN"}, dryCompare{"DRY"}, matchCompare{"LEVEL MATCH"};
     juce::Slider kickEqFrequency,kickEqCut;
@@ -74,17 +76,23 @@ private:
     std::unique_ptr<State::SliderAttachment> focusMinAttachment,focusMaxAttachment;
     juce::Slider spectrumMin,spectrumMax;
     std::unique_ptr<State::SliderAttachment> spectrumMinAttachment,spectrumMaxAttachment;
-    bool showSum=true;
+    bool compareScopePre=false;
     struct Choice {juce::ComboBox box;std::unique_ptr<State::ComboBoxAttachment> attachment;};
     std::vector<std::unique_ptr<Choice>> choices;
     std::array<float,bassdeamon::RelationAnalyzer::bins> visualPre{},visualPost{},visualKick{},visualMaskPre{},visualMaskPost{};
     juce::Slider glueAttackSlider,glueReleaseSlider;
     std::unique_ptr<State::SliderAttachment> glueAttackAttachment,glueReleaseAttachment;
-    Knob *unmaskAttackKnob=nullptr,*unmaskReleaseKnob=nullptr;
-    float scopeScale=1;
+    Knob *unmaskAttackKnob=nullptr,*unmaskReleaseKnob=nullptr,*unmaskWidthKnob=nullptr;
+    juce::TextButton unmaskAdvanced{"ADVANCED"};
+    juce::Component *unmaskChannel=nullptr,*unmaskAutoFocus=nullptr,*unmaskHoldFocus=nullptr,*unmaskReleaseNote=nullptr;
+    juce::Component* unmaskDelta=nullptr;
+    std::array<juce::Component*,4> unmaskAdvancedControls{};
+    bool showUnmaskAdvanced=false;
     juce::TextButton learn{"LEARN + APPLY"},aButton{"A"},bButton{"B"};
     juce::TextButton undoButton{"UNDO"},redoButton{"REDO"};
     juce::Label cpuLabel;
+    juce::ComboBox themeSelector;
+    void syncTheme();
     double analyzerMilliseconds=0;
     double lastAnalysisTime=0, lastAnalysisPoll=-1;
     bool staleAnalysis=false;
@@ -96,7 +104,7 @@ private:
     juce::Image grain;
     std::array<float,bassdeamon::bandCount> bass{},kick{},cut{};
     std::array<float,3> compensation{};
-    float vu=0, focus=75,peak=-120,inputDb=-120,outputDb=-120,sidePeak=0,q=2;
+    float glueGr=0, focus=75,peak=-120,inputDb=-120,outputDb=-120,sidePeak=0,q=2;
     int clipFrames=0;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BassDeamonEditor)
 };

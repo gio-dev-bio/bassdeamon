@@ -1,4 +1,4 @@
-BASSDEAMON 0.2.14 — VST3 macOS Intel (x86_64)
+BASSDEAMON 0.2.15 — VST3 macOS Intel (x86_64)
 
 1. Chiudi Cubase.
 2. Estrai lo ZIP e copia BassDeamon.vst3 in:

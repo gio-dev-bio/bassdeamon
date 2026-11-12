@@ -24,6 +24,39 @@ int main(){try{
         check(scope.high==frozen,"scope HOLD moved");
         check(std::abs(scope.milliseconds-60000/bpm)<.001,"scope time scale wrong");
     }
+    // The two channels must be folded sample by sample before the scope bins.
+    BeatScope stereo;
+    stereo.prepare(48000);
+    for (int i=0;i<=24000;++i) {
+        AnalysisFrame f;
+        f.beat=i/24000.;
+        f.post={.5f,-.5f};
+        f.kick={.125f,.125f};
+        stereo.tick(f,120,false);
+    }
+    check(stereo.completed==1,"stereo quarter was not captured");
+    check(stereo.high[BeatScope::postLeft][0]==.625f &&
+          stereo.low[BeatScope::postRight][0]==-.375f,"scope lost the independent stereo sums");
+    check(stereo.high[BeatScope::postMono][0]==.125f,"mono scope did not fold both sums");
+    check(stereo.monoCheck.correlationValid && stereo.monoCheck.correlation==-1 &&
+          stereo.monoCheck.foldLossDb<=-79.99,"bass mono check included the kick or missed cancellation");
+    StereoPhaseAnalysis phaseCheck;
+    phaseCheck.prepare(48000);
+    for (size_t beat=0;beat<4;++beat) {
+        for (int i=0;i<24000;++i) {
+            constexpr double pi=3.14159265358979323846;
+            const double low=.1*std::sin(2*pi*48*i/48000.);
+            const double high=.4*std::sin(2*pi*960*i/48000.);
+            phaseCheck.add(low+high, (beat==2?-low:low)+high);
+        }
+        phaseCheck.finishBeat(beat);
+    }
+    const auto phaseReport=phaseCheck.report();
+    check(phaseReport.fullBand.affectedBeats==0,"strong upper bass incorrectly flagged");
+    check(phaseReport.sub.worstBeat==2 && phaseReport.sub.affectedBeats==1,
+          "phase analysis missed a single problematic sub beat");
+    check(monoLossSeverity(phaseReport.sub.worst)==MonoLossSeverity::high,
+          "sub phase cancellation severity incorrect");
     // The old state starts with automatic GLUE and manual UNMASK milliseconds.
     Engine e;e.prepare(48000);Settings s;s.glueTiming=2;s.glueAttackNote=3;s.glueReleaseNote=4;s.glueAttackMs=17;
     s.unmaskSync=true;s.unmaskAttackNote=2;s.unmaskReleaseNote=5;s.unmaskAttackMs=7;

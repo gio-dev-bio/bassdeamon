@@ -5,6 +5,7 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include "StereoPhaseAnalysis.h"
 
 namespace bassdeamon {
 struct AnalysisFrame {std::array<float,2> pre{},post{},kick{};double beat=-1;uint64_t sequence=0;};
@@ -44,9 +45,11 @@ class BeatScope {
 public:
     static constexpr size_t size=512;
     using Wave=std::array<float,size>;
-    std::array<Wave,5> low{},high{};
+    enum Stream : size_t { bassPre, bassPost, kick, preLeft, postLeft, preRight, postRight, preMono, postMono, streamCount };
+    std::array<Wave,streamCount> low{},high{};
+    MonoCompatibility monoCheck;
     uint64_t completed=0;double milliseconds=500;
-    void prepare(double sr) noexcept {rate=sr;fallback=0;lastBeat=-1;cycle=-1;completed=0;valid=false;low={};high={};reset();}
+    void prepare(double sr) noexcept {rate=sr;fallback=0;lastBeat=-1;cycle=-1;completed=0;valid=false;low={};high={};monoCheck={};reset();}
     void tick(const AnalysisFrame& f,double bpm,bool hold) noexcept {
         const double tempo=std::isfinite(bpm)&&bpm>=20&&bpm<=400?bpm:120;
         const double step=tempo/(60*rate);
@@ -55,16 +58,27 @@ public:
         const auto nextCycle=int64_t(std::floor(beat));const double phase=beat-std::floor(beat);
         const size_t bin=std::min(size-1,size_t(phase*size));
         if(nextCycle!=cycle){
-            if(valid&&lastBin>=size-2&&!hold){low=buildingLow;high=buildingHigh;++completed;milliseconds=60000/tempo;}
+            if(valid&&lastBin>=size-2&&!hold){
+                low=buildingLow;high=buildingHigh;++completed;milliseconds=60000/tempo;
+                monoCheck=stereoPower.measure();
+            }
             reset();cycle=nextCycle;valid=bin==0;
         } else if(lastBeat>=0&&std::abs(beat-lastBeat-step)>step*2)valid=false;
-        const std::array<float,5> values{f.pre[0],f.post[0],f.kick[0],f.pre[0]+f.kick[0],f.post[0]+f.kick[0]};
-        for(size_t t=0;t<5;++t){buildingLow[t][bin]=std::min(buildingLow[t][bin],values[t]);buildingHigh[t][bin]=std::max(buildingHigh[t][bin],values[t]);}
+        const float preL=f.pre[0]+f.kick[0], postL=f.post[0]+f.kick[0];
+        const float preR=f.pre[1]+f.kick[1], postR=f.post[1]+f.kick[1];
+        const std::array<float,streamCount> values{f.pre[0],f.post[0],f.kick[0],
+            preL,postL,preR,postR,(preL+preR)*.5f,(postL+postR)*.5f};
+        stereoPower.add(f.post[0],f.post[1]);
+        for(size_t t=0;t<values.size();++t){buildingLow[t][bin]=std::min(buildingLow[t][bin],values[t]);buildingHigh[t][bin]=std::max(buildingHigh[t][bin],values[t]);}
         lastBeat=beat;lastBin=bin;
     }
 private:
-    void reset() noexcept {buildingLow={};buildingHigh={};lastBin=0;}
-    std::array<Wave,5> buildingLow{},buildingHigh{};
+    void reset() noexcept {
+        buildingLow={};buildingHigh={};lastBin=0;
+        stereoPower={};
+    }
+    std::array<Wave,streamCount> buildingLow{},buildingHigh{};
+    StereoPower stereoPower;
     double rate=48000,fallback=0,lastBeat=-1;int64_t cycle=-1;size_t lastBin=0;bool valid=false;
 };
 
