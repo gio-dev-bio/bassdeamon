@@ -131,7 +131,7 @@ public:
         g.setColour(slider.isEnabled()?cream:muted);g.drawLine(cx+std::sin(angle)*base,cy-std::cos(angle)*base,cx+std::sin(angle)*tip,cy-std::cos(angle)*tip,radius>42?4.5f:3.0f);
         g.setColour(cream.withAlpha(0.06f));g.drawEllipse(cx-radius+9,cy-radius+9,2*radius-18,2*radius-18,1);
     }
-    void drawToggleButton(juce::Graphics& g,juce::ToggleButton& b,bool hover,bool down) override {button(g,b,hover,down,b.getToggleState());}
+    void drawToggleButton(juce::Graphics& g,juce::ToggleButton& b,bool hover,bool down) override {metalToggle(g,b,hover,down);}
     void drawButtonBackground(juce::Graphics& g,juce::Button& b,const juce::Colour&,bool hover,bool down) override {button(g,b,hover,down,b.getToggleState());}
     void drawButtonText(juce::Graphics&,juce::TextButton&,bool,bool) override {}
     void drawComboBox(juce::Graphics& g,int w,int h,bool,int,int,int,int,juce::ComboBox&) override {
@@ -145,6 +145,49 @@ public:
 private:
     bool raw=false;
     juce::Image steel,knob;
+    // Mechanical steel toggle: purely visual, JUCE ButtonAttachment and accessibility unchanged.
+    void metalToggle(juce::Graphics& g, juce::ToggleButton& b, bool hover, bool down) const {
+        const auto r=b.getLocalBounds().toFloat().reduced(1.0f);
+        if (r.getWidth()<33.0f || r.getHeight()<20.0f) {
+            button(g,b,hover,down,b.getToggleState());
+            return;
+        }
+        const bool on=b.getToggleState();
+        const float radius=juce::jlimit(7.0f,13.0f,r.getHeight()*0.38f);
+        const float cx=r.getRight()-radius-5.0f;
+        const float cy=r.getCentreY();
+        const float shaftLength=juce::jlimit(3.0f,8.0f,r.getHeight()*0.25f);
+        g.setColour(juce::Colours::black.withAlpha(0.66f));
+        g.fillEllipse(cx-radius+1,cy-radius+2,radius*2,radius*2);
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xffe2d7c0),cx-radius,cy-radius,
+                                               juce::Colour(0xff554d44),cx+radius,cy+radius,false));
+        g.fillEllipse(cx-radius,cy-radius,radius*2,radius*2);
+        g.setColour(juce::Colour(0xff211e1b));g.drawEllipse(cx-radius,cy-radius,radius*2,radius*2,1.2f);
+        g.setColour(juce::Colour(0xff24211e));g.fillEllipse(cx-radius*.67f,cy-radius*.67f,radius*1.34f,radius*1.34f);
+        const float sx=cx+(on?shaftLength:-shaftLength)*.66f;
+        const float sy=cy+(on?-shaftLength:shaftLength)*.85f+(down?1.0f:0.0f);
+        g.setColour(juce::Colours::black.withAlpha(.7f));
+        g.drawLine(cx+1,cy+1,sx+1,sy+1,5.2f);
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xfff6ecd7),cx-radius,cy-radius,
+                                               juce::Colour(0xff817c72),cx+radius,cy+radius,false));
+        g.drawLine(cx,cy,sx,sy,4.5f);
+        g.setColour(juce::Colour(0xfff2e5cb));
+        g.fillEllipse(sx-2.6f,sy-2.6f,5.2f,5.2f);
+        const float lampX=cx-radius*1.8f;
+        if (r.getWidth()>62.0f) {
+            g.setColour(on?amber:juce::Colour(0xff40362c));
+            g.fillEllipse(lampX-2.4f,cy-2.4f,4.8f,4.8f);
+            if (on) {g.setColour(amber.withAlpha(.16f));g.fillEllipse(lampX-5,cy-5,10,10);}
+        }
+        const auto labelArea=juce::Rectangle<float>(r.getX()+3,r.getY(),juce::jmax(1.0f,lampX-r.getX()-9),r.getHeight());
+        g.setColour(b.isEnabled()?cream:muted.withAlpha(.5f));
+        g.setFont(font(r.getHeight()<25?11.0f:12.5f,true));
+        g.drawFittedText(b.getButtonText(),labelArea.toNearestInt(),juce::Justification::centred,1);
+        if (hover && b.isEnabled()) {
+            g.setColour(cream.withAlpha(.15f));
+            g.drawEllipse(cx-radius-2,cy-radius-2,2*radius+4,2*radius+4,1.0f);
+        }
+    }
     void button(juce::Graphics& g,juce::Button& b,bool hover,bool down,bool on) const {
         auto r=b.getLocalBounds().toFloat().reduced(1);
         g.setColour(juce::Colours::black.withAlpha(0.6f));g.fillRoundedRectangle(r.translated(0,2),4);
