@@ -1,0 +1,39 @@
+name: Extended signals and bypass
+on:
+  push:
+    branches: ['codex/**']
+    paths: ['Source/**', 'tests/Signal*', 'tests/PluginSignalTests.cpp', 'tests/GuiInteractionTests.cpp', '.github/workflows/signal-tests.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: signals-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  signals:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure native processor test host
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build DSP and JUCE signal tests
+        run: cmake --build build --config Release --target signal_tests plugin_tests --parallel 3
+      - name: Verify native GUI controls and state
+        run: build/plugin_tests_artefacts/Release/plugin_tests
+      - name: Render varied DSP signals
+        run: build/signal_tests signal-results
+      - name: Test host and internal bypass sample by sample
+        run: build/plugin_tests_artefacts/Release/plugin_tests --signals signal-results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Extended-signal-results-0.2.9-${{ matrix.runner }}
+          retention-days: 14
+          path: |
+            signal-results/*.csv
+            signal-results/*.json
+

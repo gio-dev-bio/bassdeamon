@@ -1,0 +1,164 @@
+name: BassDeamon build and validation
+on:
+  push:
+    branches: [main, 'codex/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: bassdeamon-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  dsp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure dependency-free DSP tests
+        run: cmake -S . -B build -DBASSDEAMON_BUILD_PLUGIN=OFF -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build --parallel 2
+      - run: ctest --test-dir build --output-on-failure
+      - name: Address and undefined behaviour sanitizers
+        run: |
+          g++ -std=c++17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -ISource tests/DspTests.cpp -o /tmp/dsp-sanitized
+          /tmp/dsp-sanitized
+          g++ -std=c++17 -O1 -g -pthread -fsanitize=address,undefined -fno-omit-frame-pointer -ISource tests/NewFeatureTests.cpp -o /tmp/features-sanitized
+          /tmp/features-sanitized
+          g++ -std=c++17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -ISource tests/AnalyzerTests.cpp -o /tmp/analyzer-sanitized
+          /tmp/analyzer-sanitized
+  macos:
+    # Temporary Intel-only build while hosted ARM runners lack capacity.
+    runs-on: macos-15-intel
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure Intel VST3
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+      - run: cmake --build build --config Release --parallel 3
+      - run: ctest --test-dir build -C Release --verbose --output-log validation-results.txt
+      - name: Record spectrum precision and selective overlap checks
+        run: build/analyzer_tests > analyzer-results.txt
+      - name: Record full audio collision matrix
+        run: |
+          cp build/analyzer-matrix.csv analyzer-matrix.csv
+          sed -n '/Real Soft Tube/,/Matrix:/p' validation-results.txt > analyzer-matrix-results.txt
+      - name: Record calibrated attenuation
+        run: build/manual_attenuation > attenuation-results.txt
+      - name: Record usability and measured response
+        run: build/usability_tests > usability-results.txt
+      - name: Record new feature contracts and timings
+        run: build/new_feature_tests tube50.f32 > new-feature-results.txt
+      - name: Measure Kick EQ and comparison callback cost
+        run: build/kick_eq_tests --benchmark | tee kick-eq-performance.csv
+      - name: Render the real plugin GUI for visual review
+        run: build/plugin_tests_artefacts/Release/plugin_tests --capture "$PWD/GUI-Preview.png"
+      - name: Sign the complete bundle after manifest generation
+        run: |
+          codesign --force --sign - --timestamp=none build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3
+          codesign --verify --strict --verbose=2 build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3
+      - name: Validate the actual VST3 with an Intel external host
+        timeout-minutes: 20
+        run: |
+          curl --fail --location --retry 3 https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_macOS.zip --output pluginval.zip
+          ditto -x -k pluginval.zip validator
+          chmod +x validator/pluginval.app/Contents/MacOS/pluginval
+          set -o pipefail
+          arch -x86_64 validator/pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --repeat 2 --randomise --random-seed 2702 --timeout-ms 60000 --validate "$PWD/build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3" 2>&1 | tee pluginval-results.txt
+      - name: Package ad-hoc signed development plugin
+        run: |
+          package="$PWD/BassDeamon-0.2.15-macOS-intel.zip"
+          (cd build/BassDeamon_artefacts/Release/VST3 && zip -Xqr "$package" BassDeamon.vst3)
+          mkdir -p package-verification
+          unzip -q "$package" -d package-verification
+          codesign --verify --strict --verbose=2 package-verification/BassDeamon.vst3
+          mkdir -p intel-package
+          sed '1s|.*|BASSDEAMON 0.2.15 — VST3 macOS Intel (x86_64)|' INSTALL.txt > intel-package/INSTALL.txt
+          zip -Xj BassDeamon-0.2.15-macOS-intel.zip intel-package/INSTALL.txt docs/GUIDA_0.2.15_IT.md analyzer-matrix.csv analyzer-matrix-results.txt analyzer-results.txt validation-results.txt pluginval-results.txt attenuation-results.txt kick-eq-performance.csv
+          lipo build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3/Contents/MacOS/BassDeamon -verify_arch x86_64
+          unzip -t BassDeamon-0.2.15-macOS-intel.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BassDeamon-0.2.15-macOS-intel
+          retention-days: 14
+          path: |
+            BassDeamon-0.2.15-macOS-intel.zip
+            GUI-Post-20dB.png
+            GUI-Pre-20dB.png
+            GUI-Preview.png
+            GUI-Raw.png
+            kick-eq-performance.csv
+            GUI-Pre.png
+            GUI-Overlap.png
+            GUI-Overlap-Pre.png
+            GUI-ShortKick-Post.png
+            GUI-ShortKick-Pre.png
+            GUI-ScopeComparePre.png
+            GUI-Sync.png
+            attenuation-results.txt
+            pluginval-results.txt
+            validation-results.txt
+            analyzer-matrix.csv
+            analyzer-matrix-results.txt
+            analyzer-results.txt
+            usability-results.txt
+            new-feature-results.txt
+            tube50.f32
+
+  benchmark:
+    if: github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile native baseline/candidate benchmark
+        run: clang++ -std=c++17 -O3 -DNDEBUG -ISource tests/Benchmark.cpp -o /tmp/dsp-benchmark
+      - name: Benchmark CPU and render controlled audio fixtures
+        run: |
+          /tmp/dsp-benchmark bench-results
+          python3 - <<'PYINFO'
+          import json,platform,subprocess,pathlib
+          def read(*cmd):
+              return subprocess.check_output(cmd,text=True).strip()
+          info={'machine':platform.machine(),'os':platform.platform(),'cpu':read('sysctl','-n','machdep.cpu.brand_string'),'logical_cpus':read('sysctl','-n','hw.logicalcpu'),'compiler':read('clang++','--version'),'flags':'-std=c++17 -O3 -DNDEBUG; native architecture, no fast-math'}
+          pathlib.Path('bench-results/hardware.json').write_text(json.dumps(info,indent=2))
+          PYINFO
+      - name: Verify distortion, silence, null tests and automation transients
+        run: |
+          python3 -m venv /tmp/bench-venv
+          /tmp/bench-venv/bin/pip -q install numpy==2.2.6 scipy==1.15.3
+          /tmp/bench-venv/bin/python benchmarks/analyze.py bench-results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-${{ matrix.runner }}
+          path: |
+            bench-results/*.csv
+            bench-results/*.json
+
+  feature-native:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native Soft Tube and analysis contracts
+        run: |
+          clang++ -std=c++17 -O3 -pthread -ISource tests/NewFeatureTests.cpp -o /tmp/features
+          /tmp/features tube50.f32 > new-feature-results.txt
+          uname -a > hardware.txt
+          sysctl -n machdep.cpu.brand_string >> hardware.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SoftTube-native-${{ matrix.runner }}
+          retention-days: 14
+          path: |
+            new-feature-results.txt
+            hardware.txt
+            tube50.f32

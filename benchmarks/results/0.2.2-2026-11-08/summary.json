@@ -1,0 +1,75 @@
+{
+  "production_commit": "369ab56987fcff48c68786df1ff7b522e8f9528d",
+  "learn_matrix_cases": 24,
+  "learn_matrix_failures": 0,
+  "transition_matrix_cases": 24,
+  "transition_compared_samples": 1195008,
+  "transition_bit_differences": 0,
+  "transition_callback_allocations": 0,
+  "transition_nonfinite": 0,
+  "local_sanitizers": "AddressSanitizer + UBSan passed with leak detection disabled because local LeakSanitizer is incompatible with ptrace; full sanitizer CI is separate.",
+  "build_run": 42480140095,
+  "signal_run": 42480140164,
+  "arm_cpu_example": {
+    "revision": "0.2.2",
+    "sample_rate": "48000",
+    "buffer": "128",
+    "mode": "all",
+    "mean_us": "36.23468",
+    "p50_us": "35.792",
+    "p95_us": "44.417",
+    "p99_us": "47.667",
+    "max_us": "71.667",
+    "one_core_percent": "1.3588005",
+    "callback_allocations": "0"
+  },
+  "arm_audio_regression_failures": [],
+  "arm_overrun_cases": {
+    "0.2.0": 8,
+    "0.2.2": 7
+  },
+  "intel_cpu_example": {
+    "revision": "0.2.2",
+    "sample_rate": "48000",
+    "buffer": "128",
+    "mode": "all",
+    "mean_us": "77.39435556",
+    "p50_us": "70.92",
+    "p95_us": "123.576",
+    "p99_us": "131.618",
+    "max_us": "178.36",
+    "one_core_percent": "2.902288333",
+    "callback_allocations": "0"
+  },
+  "intel_audio_regression_failures": [],
+  "intel_overrun_cases": {
+    "0.2.0": 18,
+    "0.2.2": 15
+  },
+  "arm_signals": {
+    "dsp_cases": 717,
+    "nonfinite": 0,
+    "host_bypass_cases": 504,
+    "host_bypass_bit_differences": 0,
+    "global_cases": 8,
+    "global_late_max_error": 0.0,
+    "global_initial_bit_differences": 0
+  },
+  "intel_signals": {
+    "dsp_cases": 717,
+    "nonfinite": 0,
+    "host_bypass_cases": 504,
+    "host_bypass_bit_differences": 0,
+    "global_cases": 8,
+    "global_late_max_error": 0.0,
+    "global_initial_bit_differences": 0
+  },
+  "ci": {
+    "build_run": 42480140095,
+    "build": "success",
+    "signals_run": 42480140164,
+    "native_intel_signals": "success",
+    "native_arm_signals": "success",
+    "pluginval": "ARM and x86_64, strictness 5, success"
+  }
+}

@@ -1,0 +1,36 @@
+BASSDEAMON 0.2.15 — VST3 macOS Intel (x86_64)
+
+1. Chiudi Cubase.
+2. Estrai lo ZIP e copia BassDeamon.vst3 in:
+   /Library/Audio/Plug-Ins/VST3/
+   Sostituisci la versione precedente senza cambiare il nome del plugin.
+3. Se macOS blocca questa build di sviluppo, apri Terminale ed esegui:
+
+   sudo xattr -r -d com.apple.quarantine "/Library/Audio/Plug-Ins/VST3/BassDeamon.vst3"
+
+   Il comando riguarda solo questo plugin. Durante la password non appaiono caratteri.
+   Il pacchetto è firmato ad-hoc, non notarizzato da Apple.
+4. Riapri Cubase. Se il plugin è nella Blocklist:
+   Studio > VST Plug-in Manager > Blocklist > BassDeamon > Riattiva.
+5. Inserisci BassDeamon sul canale BASSO. Attiva il suo sidechain in Cubase
+   e invia il KICK come riferimento. Il kick non entra nell'uscita del plugin.
+6. Parti da INIT / CLEAN LOW END. PHASE è inizialmente spento.
+   Per Learn, fai suonare kick e basso per 4 secondi, poi confronta PHASE on/off.
+   Il risultato è statico fino a una nuova analisi o a una modifica manuale.
+
+La GUI mostra:
+- spettro selezionabile con PRE / POST, kick di riferimento e conflitti spettrali significativi con marcatori rossi locali;
+- intervallo libero in Hz con FROM / TO, modificabile trascinando o digitando i valori;
+- scope L a 1/4 in sync, cattura completa stabile, HOLD, somma kick+basso esclusivamente visiva;
+- GLUE: AUTO, MS o SYNC; UNMASK: MS o SYNC. Attack sempre in ms; solo Release in note con SYNC.
+- Soft Tube opzionale prima di UNMASK, spento inizialmente, con oversampling fisso 4x;
+- VU della gain reduction GLUE;
+- AGC indipendente e Lock per ogni modulo;
+- AUTO FOCUS / HOLD FOCUS e focus manuale per UNMASK;
+- UNDO / REDO per modifiche e starting point; A/B, output trim e peak indicator.
+- DSP CPU: percentuale del tempo disponibile per il callback audio; ANALYZER in ms separati; OVR conta i superamenti del budget.
+
+AUTO FOCUS non è un riconoscitore di note/fondamentale.
+Nessun limiter è attivo: riduci il trim se il peak diventa rosso.
+I filtri UNMASK sono migliorati rispetto alla 0.1 e possono cambiare il suono:
+confronta la nuova versione su una copia del progetto.

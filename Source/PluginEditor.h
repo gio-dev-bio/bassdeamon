@@ -1,0 +1,110 @@
+#pragma once
+#include "PluginProcessor.h"
+#include "ConsoleSkin.h"
+#include "SpectrumDisplay.h"
+
+class BassDeamonEditor final : public juce::AudioProcessorEditor, private juce::Timer {
+public:
+    explicit BassDeamonEditor(BassDeamonProcessor&);
+    ~BassDeamonEditor() override;
+    void paint(juce::Graphics& g) override {g.fillAll(console::ink);}
+    void resized() override;
+private:
+    friend int interactionTests();
+    friend int captureLoopGui(const juce::File&, const juce::File&, const juce::File&, int);
+    friend int captureGui(const juce::File&);
+    using State=juce::AudioProcessorValueTreeState;
+    struct Face final : juce::Component {
+        explicit Face(BassDeamonEditor& e):editor(e){}
+        void paint(juce::Graphics& g) override {editor.paintConsole(g);}
+        BassDeamonEditor& editor;
+    };
+    struct Knob final : juce::Component {
+        Knob(State&,const char*,const char*,const char*,bool);
+        void resized() override;
+        juce::Label label;
+        juce::Slider slider;
+        std::unique_ptr<State::SliderAttachment> attachment;
+    };
+    // Host automation/state recall also sends button notifications. Only an
+    // actual GUI gesture may change other parameters to select a monitor mode.
+    struct UserToggle final : juce::ToggleButton {
+        bool userGesture=false;
+        void internalClickCallback(const juce::ModifierKeys& modifiers) override {
+            juce::ScopedValueSetter<bool> gesture(userGesture,true);
+            juce::ToggleButton::internalClickCallback(modifiers);
+        }
+    };
+    struct Switch {UserToggle button;std::unique_ptr<State::ButtonAttachment> attachment;};
+    void addSwitch(const char*,const char*,juce::Rectangle<int>,const char* tooltip);
+    Knob& addKnob(const char*,const char*,const char*,bool,juce::Rectangle<int>,const char*);
+    void addChoice(const char*,const juce::StringArray&,juce::Rectangle<int>);
+    void paintConsole(juce::Graphics&);
+    void paintSpectrum(juce::Graphics&);
+    void layoutUnmask();
+    void refreshUnmaskControls();
+    int paintSpectrumPlot(juce::Graphics&, juce::Rectangle<float>, bool post);
+    void paintWave(juce::Graphics&);
+    bool spectrumIsPost() const;
+    std::array<double,2> spectrumLimits() const;
+    void timerCallback() override;
+    void refreshVisuals(double clockMilliseconds);
+    void createTexture();
+    BassDeamonProcessor& processor;
+    console::Skin skin;
+    Face face{*this};
+    juce::TooltipWindow tooltips{this,600};
+    std::vector<std::unique_ptr<Knob>> knobs;
+    std::vector<std::unique_ptr<Switch>> switches;
+    bassdeamon::RelationAnalyzer analyzer;
+    bassdeamon::SpectrumDisplay spectrumDisplay;
+    juce::Slider analyzerRefresh;
+    double syncedRefreshHz = 0;
+    bassdeamon::UnmaskResponse pendingUnmaskResponse, visualUnmaskResponse;
+    juce::Path visualUnmaskPath;
+    std::array<double,2> unmaskPathLimits{};
+    bool unmaskPathDirty = true;
+    float visualUnmaskGr = 0;
+    bassdeamon::BeatScope visibleScope;
+    juce::ComboBox scopeChannel;
+    juce::TextButton scopeCompareButton{"COMPARE PRE"};
+    juce::TextButton spectrumPre{"PRE"},spectrumPost{"POST"},spectrumHold{"HOLD"};
+    juce::TextButton kickEqLearn{"LEARN"}, dryCompare{"DRY"}, matchCompare{"LEVEL MATCH"};
+    juce::Slider kickEqFrequency,kickEqCut;
+    std::unique_ptr<State::SliderAttachment> kickEqFrequencyAttachment,kickEqCutAttachment;
+    juce::Slider focusMin,focusMax;
+    std::unique_ptr<State::SliderAttachment> focusMinAttachment,focusMaxAttachment;
+    juce::Slider spectrumMin,spectrumMax;
+    std::unique_ptr<State::SliderAttachment> spectrumMinAttachment,spectrumMaxAttachment;
+    bool compareScopePre=false;
+    struct Choice {juce::ComboBox box;std::unique_ptr<State::ComboBoxAttachment> attachment;};
+    std::vector<std::unique_ptr<Choice>> choices;
+    std::array<float,bassdeamon::RelationAnalyzer::bins> visualPre{},visualPost{},visualKick{},visualMaskPre{},visualMaskPost{};
+    juce::Slider glueAttackSlider,glueReleaseSlider;
+    std::unique_ptr<State::SliderAttachment> glueAttackAttachment,glueReleaseAttachment;
+    Knob *unmaskAttackKnob=nullptr,*unmaskReleaseKnob=nullptr,*unmaskWidthKnob=nullptr;
+    juce::TextButton unmaskAdvanced{"ADVANCED"};
+    juce::Component *unmaskChannel=nullptr,*unmaskAutoFocus=nullptr,*unmaskHoldFocus=nullptr,*unmaskReleaseNote=nullptr;
+    juce::Component* unmaskDelta=nullptr;
+    std::array<juce::Component*,4> unmaskAdvancedControls{};
+    bool showUnmaskAdvanced=false;
+    juce::TextButton learn{"LEARN + APPLY"},aButton{"A"},bButton{"B"};
+    juce::TextButton undoButton{"UNDO"},redoButton{"REDO"};
+    juce::Label cpuLabel;
+    juce::ComboBox themeSelector;
+    void syncTheme();
+    double analyzerMilliseconds=0;
+    double lastAnalysisTime=0, lastAnalysisPoll=-1;
+    bool staleAnalysis=false;
+    juce::ComboBox presets,ceiling;
+    std::unique_ptr<State::ComboBoxAttachment> ceilingAttachment;
+    juce::Slider output;
+    std::unique_ptr<State::SliderAttachment> outputAttachment;
+    Knob *frequencyKnob=nullptr,*attenuationKnob=nullptr,*depthKnob=nullptr;
+    juce::Image grain;
+    std::array<float,bassdeamon::bandCount> bass{},kick{},cut{};
+    std::array<float,3> compensation{};
+    float glueGr=0, focus=75,peak=-120,inputDb=-120,outputDb=-120,sidePeak=0,q=2;
+    int clipFrames=0;
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BassDeamonEditor)
+};
