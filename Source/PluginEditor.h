@@ -67,6 +67,9 @@ private:
     float visualUnmaskGr = 0;
     bassdeamon::BeatScope visibleScope;
     juce::ComboBox scopeChannel;
+    juce::TextButton phaseScopeButton{"PHASE A/B"};
+    juce::Slider phaseReference;
+    Knob* rotationKnob=nullptr;
     juce::TextButton scopeCompareButton{"COMPARE PRE"};
     juce::TextButton spectrumPre{"PRE"},spectrumPost{"POST"},spectrumHold{"HOLD"};
     juce::TextButton kickEqLearn{"LEARN"}, dryCompare{"DRY"}, matchCompare{"LEVEL MATCH"};
@@ -93,6 +96,24 @@ private:
     juce::Label cpuLabel;
     juce::ComboBox themeSelector;
     void syncTheme();
+    void refreshAutoMix();
+    struct AutoMixPanel : juce::Component {
+        void paint(juce::Graphics& g) override {
+            g.fillAll(console::ink.withAlpha(.98f));
+            g.setColour(console::copper);
+            g.drawRect(getLocalBounds(), 2);
+        }
+    } autoPanel;
+    juce::DrawableButton autoMixButton{"Auto Mix", juce::DrawableButton::ImageAboveTextLabel};
+    juce::ComboBox autoBars;
+    juce::Label autoTitle, autoStatus;
+    juce::TextEditor autoReport;
+    juce::TextButton autoScan{"ANALYZE"}, autoDry{"A / DRY"}, autoWet{"B / AUTO MIX"},
+        autoMatch{"LEVEL MATCH"}, autoApply{"APPLY"}, autoCancel{"CANCEL"};
+    juce::Slider subMonoHz;
+    std::unique_ptr<State::SliderAttachment> subMonoAttachment;
+    int autoSide = 0;
+    bool autoResultShown = false;
     double analyzerMilliseconds=0;
     double lastAnalysisTime=0, lastAnalysisPoll=-1;
     bool staleAnalysis=false;

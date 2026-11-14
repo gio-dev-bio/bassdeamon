@@ -9,7 +9,7 @@ int captureGui(const juce::File& output){
     auto layout=p.getBusesLayout();layout.inputBuses.set(1,juce::AudioChannelSet::mono());
     if(!p.setBusesLayout(layout))return 1;
     p.prepareToPlay(48000,256);juce::AudioBuffer<float> buffer(3,256);juce::MidiBuffer midi;
-    std::unique_ptr<juce::AudioProcessorEditor> editor(p.createEditor());editor->setSize(1200,1376);
+    std::unique_ptr<juce::AudioProcessorEditor> editor(p.createEditor());editor->setSize(1200,1336);
     auto* timedGui=static_cast<BassDeamonEditor*>(editor.get());timedGui->stopTimer();double visualClock=0;
     const auto visualTick=[&]{visualClock+=1000./30;timedGui->refreshVisuals(visualClock);};
     auto* tube=p.parameters.getParameter("tube.on");tube->setValueNotifyingHost(1);
@@ -50,6 +50,32 @@ int captureGui(const juce::File& output){
     p.setRawTheme(true);
     timedGui->syncTheme();
     if(!save(output.getSiblingFile("GUI-Raw.png")))return 1;
+    const auto setPhase=[&](const char* id,float value) {
+        auto* parameter=p.parameters.getParameter(id);
+        parameter->setValueNotifyingHost(parameter->convertTo0to1(value));
+    };
+    setPhase("phase.on",1);
+    setPhase("phase.rotate",1);
+    setPhase("phase.frequency",float(bassdeamon::cornerForAllPassDegrees(-45,60,48000)));
+    timedGui->phaseScopeButton.setToggleState(true,juce::dontSendNotification);
+    timedGui->phaseScopeButton.onClick();
+    for(int block=0;block<360;++block) {
+        for(int n=0;n<256;++n) {
+            const double t=(800*256+block*256+n)/48000.;
+            const float bass=float(.32*std::sin(2*bassdeamon::pi*60*t));
+            buffer.setSample(0,n,bass);buffer.setSample(1,n,bass);
+            buffer.setSample(2,n,float(-.55*std::exp(-std::fmod(t,.5)*5)*std::sin(2*bassdeamon::pi*60*t)));
+        }
+        p.processBlock(buffer,midi);
+        if(block%6==0)visualTick();
+    }
+    visualTick();
+    if(!timedGui->visibleScope.phaseMeasured || !save(output.getSiblingFile("GUI-Phase-AB.png")))return 1;
+    timedGui->phaseScopeButton.setToggleState(false,juce::dontSendNotification);
+    timedGui->phaseScopeButton.onClick();
+    setPhase("phase.on",0);
+    setPhase("phase.rotate",0);
+    setPhase("phase.frequency",90);
     p.setRawTheme(false);
     timedGui->syncTheme();
     p.parameters.getParameter("kickEq.on")->setValueNotifyingHost(0);
@@ -161,7 +187,7 @@ int captureLoopGui(const juce::File& bassFile, const juce::File& kickFile, const
     } transport;
     processor.setPlayHead(&transport);
     std::unique_ptr<BassDeamonEditor> editor(static_cast<BassDeamonEditor*>(processor.createEditor()));
-    editor->setSize(1200,1376);
+    editor->setSize(1200,1336);
     editor->stopTimer();
     juce::AudioBuffer<float> buffer(4,256);
     juce::MidiBuffer midi;

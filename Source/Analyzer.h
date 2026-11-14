@@ -6,9 +6,10 @@
 #include <complex>
 #include <cstdint>
 #include "StereoPhaseAnalysis.h"
+#include "SubMono.h"
 
 namespace bassdeamon {
-struct AnalysisFrame {std::array<float,2> pre{},post{},kick{};double beat=-1;uint64_t sequence=0;};
+struct AnalysisFrame {std::array<float,2> pre{},post{},kick{};double beat=-1;uint64_t sequence=0;std::array<float,2> phase{};bool phaseValid=false;};
 // One audio-thread producer, one editor-thread consumer. Never waits for the UI.
 class AnalysisQueue {
 public:
@@ -45,11 +46,23 @@ class BeatScope {
 public:
     static constexpr size_t size=512;
     using Wave=std::array<float,size>;
-    enum Stream : size_t { bassPre, bassPost, kick, preLeft, postLeft, preRight, postRight, preMono, postMono, streamCount };
+    enum Stream : size_t { bassPre, bassPost, kick, preLeft, postLeft, preRight, postRight, preMono, postMono, phaseOff, phaseOn, streamCount };
     std::array<Wave,streamCount> low{},high{};
-    MonoCompatibility monoCheck;
+    MonoCompatibility monoCheck, subMonoCheck;
+    bool phaseMeasured=false;
+    double phaseDelta=0, measuredPhaseHz=0;
+    void setPhaseFrequency(double hz) noexcept {
+        if (hz==phaseHz) return;
+        phaseHz=hz;
+        phaseMeasured=false;
+        phaseSamples=0;
+        phaseEnergy={};
+        phaseFilters={};
+        for (auto& filter : phaseFilters) filter.setFrequency(hz,rate);
+    }
+    void setSubFrequency(double hz) noexcept { for (auto& filter : subFilters) filter.setCutoff(hz,rate); }
     uint64_t completed=0;double milliseconds=500;
-    void prepare(double sr) noexcept {rate=sr;fallback=0;lastBeat=-1;cycle=-1;completed=0;valid=false;low={};high={};monoCheck={};reset();}
+    void prepare(double sr) noexcept {rate=sr;fallback=0;lastBeat=-1;cycle=-1;completed=0;valid=false;low={};high={};monoCheck={};subMonoCheck={};subFilters={};setSubFrequency(120);phaseHz=0;setPhaseFrequency(60);reset();}
     void tick(const AnalysisFrame& f,double bpm,bool hold) noexcept {
         const double tempo=std::isfinite(bpm)&&bpm>=20&&bpm<=400?bpm:120;
         const double step=tempo/(60*rate);
@@ -61,24 +74,60 @@ public:
             if(valid&&lastBin>=size-2&&!hold){
                 low=buildingLow;high=buildingHigh;++completed;milliseconds=60000/tempo;
                 monoCheck=stereoPower.measure();
+                subMonoCheck=subPower.measure();
+                phaseMeasured=phaseSamples>rate*60/tempo*.95 && phaseEnergy[0]>1e-5 &&
+                    phaseEnergy[1]>1e-5 && phaseEnergy[2]>1e-5;
+                if (phaseMeasured) {
+                    measuredPhaseHz=phaseHz;
+                    const double match=std::sqrt(phaseEnergy[0]/phaseEnergy[1]);
+                    const double common=phaseEnergy[0]+phaseEnergy[2];
+                    const double off=common+2*phaseEnergy[3], on=common+2*phaseEnergy[4]*match;
+                    phaseDelta=10*std::log10(std::max(on,common*1e-6)/std::max(off,common*1e-6));
+                }
             }
             reset();cycle=nextCycle;valid=bin==0;
         } else if(lastBeat>=0&&std::abs(beat-lastBeat-step)>step*2)valid=false;
         const float preL=f.pre[0]+f.kick[0], postL=f.post[0]+f.kick[0];
         const float preR=f.pre[1]+f.kick[1], postR=f.post[1]+f.kick[1];
+        const float phaseKick=(f.kick[0]+f.kick[1])*.5f;
+        if (f.phaseValid) {
+            const double off=phaseFilters[0].tick(f.phase[0]), on=phaseFilters[1].tick(f.phase[1]);
+            const double k=phaseFilters[2].tick(phaseKick);
+            phaseEnergy[0]+=off*off; phaseEnergy[1]+=on*on; phaseEnergy[2]+=k*k;
+            phaseEnergy[3]+=off*k; phaseEnergy[4]+=on*k;
+            ++phaseSamples;
+        }
         const std::array<float,streamCount> values{f.pre[0],f.post[0],f.kick[0],
-            preL,postL,preR,postR,(preL+preR)*.5f,(postL+postR)*.5f};
+            preL,postL,preR,postR,(preL+preR)*.5f,(postL+postR)*.5f, f.phase[0]+phaseKick, f.phase[1]+phaseKick};
         stereoPower.add(f.post[0],f.post[1]);
+        subPower.add(subFilters[0].lowSide(f.post[0]),subFilters[1].lowSide(f.post[1]));
         for(size_t t=0;t<values.size();++t){buildingLow[t][bin]=std::min(buildingLow[t][bin],values[t]);buildingHigh[t][bin]=std::max(buildingHigh[t][bin],values[t]);}
         lastBeat=beat;lastBin=bin;
     }
 private:
     void reset() noexcept {
         buildingLow={};buildingHigh={};lastBin=0;
-        stereoPower={};
+        stereoPower={}; subPower={}; phaseEnergy={}; phaseSamples=0;
     }
     std::array<Wave,streamCount> buildingLow{},buildingHigh{};
-    StereoPower stereoPower;
+    struct PhaseBand {
+        double b=0,a1=0,a2=0,z1=0,z2=0;
+        void setFrequency(double hz,double sr) noexcept {
+            const double w=6.283185307179586*hz/sr, alpha=std::sin(w)*.25;
+            b=alpha/(1+alpha); a1=-2*std::cos(w)/(1+alpha); a2=(1-alpha)/(1+alpha);
+        }
+        double tick(double x) noexcept {
+            const double y=b*x+z1;
+            z1=z2-a1*y; z2=-b*x-a2*y;
+            return y;
+        }
+    };
+    double phaseHz=0;
+    size_t phaseSamples=0;
+    std::array<double,5> phaseEnergy{};
+    std::array<PhaseBand,3> phaseFilters{};
+    StereoPower stereoPower, subPower;
+    std::array<SubMono,2> subFilters;
     double rate=48000,fallback=0,lastBeat=-1;int64_t cycle=-1;size_t lastBin=0;bool valid=false;
 };
 

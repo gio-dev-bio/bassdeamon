@@ -3,7 +3,7 @@
 #include <optional>
 
 namespace {
-constexpr std::array<const char*, 55> ids{
+constexpr std::array<const char*, 57> ids{
     "glue.on", "glue.amount", "glue.lock", "phase.on", "phase.invert", "phase.delay",
     "phase.rotate", "phase.frequency", "unmask.on", "unmask.amount", "unmask.delta",
     "glue.agc", "glue.agcLock", "phase.agc", "phase.agcLock", "unmask.agc", "unmask.agcLock",
@@ -12,7 +12,7 @@ constexpr std::array<const char*, 55> ids{
     "tube.on","tube.drive","tube.amount","tube.source","tube.colour","tube.agc","tube.agcLock","tube.audition",
     "glue.timing","glue.attackMs","glue.releaseMs","glue.attackNote","glue.releaseNote",
     "unmask.timing","unmask.attackNote","unmask.releaseNote","view.range","view.hold",
-    "view.spectrum","view.minHz","view.maxHz","unmask.attenuation","unmask.controlDb","unmask.stereoMode","unmask.focusMinHz","unmask.focusMaxHz","kickEq.on","kickEq.frequency","kickEq.cut"};
+    "view.spectrum","view.minHz","view.maxHz","unmask.attenuation","unmask.controlDb","unmask.stereoMode","unmask.focusMinHz","unmask.focusMaxHz","kickEq.on","kickEq.frequency","kickEq.cut","subMono.on","subMono.hz"};
 }
 
 BassDeamonProcessor::BassDeamonProcessor()
@@ -97,6 +97,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout BassDeamonProcessor::layout(
     boolean("kickEq.on","Kick EQ enabled",false);
     continuous("kickEq.frequency","Kick EQ frequency (Hz)",0,130,0);
     continuous("kickEq.cut","Kick EQ cut (dB)",0,4,1.5f);
+    boolean("subMono.on", "Sub Mono active", false);
+    continuous("subMono.hz", "Sub Mono frequency (Hz)", 40, 250, 120);
     return p;
 }
 
@@ -105,6 +107,7 @@ void BassDeamonProcessor::prepareToPlay(double sr, int maximumBlock) {
     // standalone host calls prepare directly (JUCE's initial rate is zero).
     setRateAndBufferSizeDetails(sr,maximumBlock);
     cpuLoad.reset(sr,std::max(1,maximumBlock));
+    cancelAutoMix();
     engine.prepare(sr); setLatencySamples(0);
     kickEqGeneration.fetch_add(1);
     kickEqStatus.store(0);
@@ -122,8 +125,8 @@ bool BassDeamonProcessor::isBusesLayoutSupported(const BusesLayout& b) const {
     const auto side = b.getChannelSet(true, 1);
     return side.isDisabled() || side == juce::AudioChannelSet::mono() || side == juce::AudioChannelSet::stereo();
 }
-bassdeamon::Settings BassDeamonProcessor::readSettings() const noexcept {
-    const auto value = [&](size_t i) { return raw[i]->load(std::memory_order_relaxed); };
+bassdeamon::Settings BassDeamonProcessor::readSettings(bool proposal) const noexcept {
+    const auto value = [&](size_t i) { return proposal ? autoParameters[i].load(std::memory_order_relaxed) : raw[i]->load(std::memory_order_relaxed); };
     bassdeamon::Settings s;
     s.glue = value(0) > 0.5f; s.glueAmount = value(1); s.glueLocked = value(2) > 0.5f;
     s.phase = value(3) > 0.5f; s.invert = value(4) > 0.5f; s.delayMs = value(5);
@@ -144,6 +147,7 @@ bassdeamon::Settings BassDeamonProcessor::readSettings() const noexcept {
     s.kickEqEnabled = value(52) > .5f;
     s.kickEqFrequency = value(53);
     s.kickEqCut = value(54);
+    s.subMono = value(55) > .5f; s.subMonoHz = value(56);
     s.auditionDry = compareDry.load(std::memory_order_relaxed);
     s.matchEnabled = compareMatch.load(std::memory_order_relaxed);
     s.active=value(18)>.5f;
@@ -168,11 +172,14 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
         engine.restoreRuntime(restored); engine.clearHistory(); wasLearning = false;
         resultReady.store(false); learnStatus.store(0);
     }
-    double bpm = 0,ppq=-1;
+    double bpm = 0,ppq=-1, beatsPerBar=4;
     bool transportAllowsLearn = true;
     if (auto* playhead = getPlayHead()) {
         if (const auto position = playhead->getPosition()) {
             if (const auto hostTempo = position->getBpm()) bpm = *hostTempo;
+            if (const auto signature = position->getTimeSignature())
+                if (signature->numerator > 0 && signature->denominator > 0)
+                    beatsPerBar = 4. * signature->numerator / signature->denominator;
             const bool playing = position->getIsPlaying();
             transportAllowsLearn = playing;
             if(playing)if(const auto q=position->getPpqPosition())ppq=*q;
@@ -199,7 +206,7 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     if(!settings.active){engine.cancelLearn();wasLearning=false;learnStatus.store(0);resultReady.store(false);}
     const float* kick[2]{nullptr, nullptr};
     const int sideChannels = side.getNumChannels();
-    if (transportAllowsLearn && learnRequested.exchange(false)&&settings.active) {
+    if (autoAudition.load() == 0 && transportAllowsLearn && learnRequested.exchange(false)&&settings.active) {
         resultReady.store(false);
         if (sideChannels > 0) {
             engine.startLearn(); wasLearning = true; learnStatus.store(1);
@@ -233,6 +240,8 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
         kickEqProgress.store(kickEqCapture.progress(), std::memory_order_relaxed);
         if (ready) kickEqCaptureState.store(CaptureState::ready, std::memory_order_release);
     }
+    captureAutoMix(bass, side, transportAllowsLearn, bpm, beatsPerBar, settings);
+    settings = auditionSettings(settings);
     if(!analysisQueue.enabled.load(std::memory_order_relaxed)){
         engine.process(bass.getArrayOfWritePointers(),bass.getNumChannels(),
                        sideChannels>0?kick:nullptr,sideChannels,bass.getNumSamples(),settings,bpm);
@@ -240,16 +249,20 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
         // Fixed stack workspace handles host blocks larger than the prepare hint.
         constexpr int chunkSize=256;std::array<std::array<float,chunkSize>,2> before{};
         const int channels=bass.getNumChannels();
+        std::array<bassdeamon::PhaseTap,chunkSize> phaseTap{};
+        const bool phaseScope=phaseScopeEnabled.load(std::memory_order_relaxed) && settings.active && settings.phase && sideChannels>0;
         for(int offset=0;offset<bass.getNumSamples();offset+=chunkSize){
             const int count=std::min(chunkSize,bass.getNumSamples()-offset);
             float* output[2]{};const float* reference[2]{};
             for(int c=0;c<channels;++c){output[c]=bass.getWritePointer(c)+offset;std::copy_n(output[c],count,before[size_t(c)].begin());}
             for(int c=0;c<sideChannels;++c)reference[c]=kick[c]+offset;
-            engine.process(output,channels,sideChannels>0?reference:nullptr,sideChannels,count,settings,bpm);
+            engine.process(output,channels,sideChannels>0?reference:nullptr,sideChannels,count,settings,bpm,phaseScope?phaseTap.data():nullptr);
             for(int n=0;n<count;++n){bassdeamon::AnalysisFrame frame;
                 for(int c=0;c<2;++c){const int source=std::min(c,channels-1);
                     frame.pre[size_t(c)]=before[size_t(source)][size_t(n)];frame.post[size_t(c)]=output[source][n];
                     if(sideChannels>0)frame.kick[size_t(c)]=reference[std::min(c,sideChannels-1)][n];}
+                frame.phaseValid=phaseScope;
+                if (phaseScope) frame.phase={phaseTap[n].before,phaseTap[n].after};
                 frame.beat=ppq>=0?ppq+(offset+n)*tempo.load(std::memory_order_relaxed)/(60*getSampleRate()):-1;
                 analysisQueue.push(frame);
             }
@@ -279,6 +292,10 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
         pushUnmaskResponse(engine.unmaskResponse(settings, bass.getNumChannels()));
 }
 void BassDeamonProcessor::processBlockBypassed(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) {
+    cancelAutoMix();
+    const auto state = autoMixState();
+    if (state == AutoMixState::recording)
+        autoState.store(AutoMixState::idle, std::memory_order_release);
     std::optional<juce::AudioProcessLoadMeasurer::ScopedTimer> cpuTimer;
     if(buffer.getNumSamples()>0)cpuTimer.emplace(cpuLoad,buffer.getNumSamples());
     if(analysisQueue.enabled.load(std::memory_order_relaxed)){
@@ -333,6 +350,7 @@ void BassDeamonProcessor::publishMeters() noexcept {
 }
 void BassDeamonProcessor::timerCallback() {
     refreshHistory();
+    updateAutoMix();
     if (kickEqCaptureState.load(std::memory_order_acquire) == CaptureState::ready) {
         const double hz = kickEqCapture.frequency();
         const bool current = captureGeneration == kickEqGeneration.load() &&
@@ -365,8 +383,182 @@ void BassDeamonProcessor::timerCallback() {
     set("phase.on", 1.0f);
     parameters.copyState();undoManager.beginNewTransaction();
 }
+void BassDeamonProcessor::startAutoMix(int bars) {
+    if (autoMixState() != AutoMixState::idle) return;
+    autoRate = getSampleRate() > 0 ? getSampleRate() : 48000.;
+    autoBars = bars == 4 || bars == 16 ? bars : 8;
+    // Bound memory and prepare all storage off the audio thread.
+    const double initialTempo = std::clamp(double(tempo.load()),20.,400.);
+    const double budget = std::clamp(autoBars * 8 * 60 / initialTempo, 16., 100.);
+    autoResult = {};
+    try {
+        autoAudio.resize(size_t(std::min(5000000., autoRate * budget)));
+    } catch (const std::exception&) {
+        autoCancelled.store(false);
+        autoResult.analysisFailed = true;
+        autoState.store(AutoMixState::ready, std::memory_order_release);
+        return;
+    }
+    autoCount = autoTarget = 0;
+    autoLengthUnsupported = false;
+    autoCancelled.store(false);
+    autoMixProgress.store(0);
+    autoAudition.store(0);
+    autoState.store(AutoMixState::armed, std::memory_order_release);
+}
+
+void BassDeamonProcessor::cancelAutoMix() noexcept {
+    autoCancelled.store(true, std::memory_order_release);
+    autoAudition.store(0, std::memory_order_release);
+}
+
+void BassDeamonProcessor::captureAutoMix(const juce::AudioBuffer<float>& bass, const juce::AudioBuffer<float>& kick,
+                                         bool playing, double bpm, double beatsPerBar, const bassdeamon::Settings& settings) {
+    auto state = autoMixState();
+    if (state != AutoMixState::armed && state != AutoMixState::recording) return;
+    if (autoCancelled.load(std::memory_order_acquire)) {
+        if (state == AutoMixState::recording)
+            autoState.store(AutoMixState::idle, std::memory_order_release);
+        return;
+    }
+    if (!playing || !settings.active || bass.getNumChannels() == 0 || bass.getNumSamples() == 0) return;
+    if (state == AutoMixState::armed) {
+        if (!autoState.compare_exchange_strong(state, AutoMixState::recording)) return;
+        if (autoCancelled.load(std::memory_order_acquire)) {
+            autoState.store(AutoMixState::idle, std::memory_order_release);
+            return;
+        }
+        autoBase = settings;
+        autoRuntime = engine.runtimeState();
+        for (size_t i = 0; i < ids.size(); ++i) autoOriginal[i] = raw[i]->load(std::memory_order_relaxed);
+        autoChannels = bass.getNumChannels();
+        autoBpm = std::isfinite(bpm) && bpm >= 20 && bpm <= 400 ? bpm : 120.;
+        const double samples = autoBars * beatsPerBar * 60 * autoRate / autoBpm;
+        if (samples < 1 || samples > autoAudio.size() || autoRate != getSampleRate()) {
+            autoLengthUnsupported = true;
+            autoState.store(AutoMixState::captured, std::memory_order_release);
+            return;
+        }
+        autoTarget = size_t(std::ceil(samples));
+    }
+    const int channels = kick.getNumChannels();
+    const auto clean = [](float v) { return std::isfinite(v) ? v : 0.f; };
+    const auto count = std::min(autoTarget - autoCount, size_t(bass.getNumSamples()));
+    for (size_t n = 0; n < count; ++n) {
+        const int sample = int(n);
+        autoAudio[autoCount + n] = {
+            clean(bass.getSample(0, sample)), clean(bass.getSample(autoChannels - 1, sample)),
+            channels ? clean(kick.getSample(0, sample)) : 0.f,
+            channels ? clean(kick.getSample(channels - 1, sample)) : 0.f,
+            float((autoCount + n) * autoBpm / (60 * autoRate))
+        };
+    }
+    autoCount += count;
+    autoMixProgress.store(float(autoCount) / float(autoTarget), std::memory_order_relaxed);
+    if (autoCount == autoTarget) autoState.store(AutoMixState::captured, std::memory_order_release);
+}
+
+void BassDeamonProcessor::updateAutoMix() {
+    const auto state = autoMixState();
+    if (state == AutoMixState::idle) {
+        if (!autoAudio.empty()) std::vector<bassdeamon::AutoMixFrame>().swap(autoAudio);
+        return;
+    }
+    if ((state == AutoMixState::ready) && autoCancelled.load()) {
+        autoState.store(AutoMixState::idle, std::memory_order_release);
+        return;
+    }
+    if (state == AutoMixState::captured) {
+        if (autoCancelled.load()) {
+            autoState.store(AutoMixState::idle, std::memory_order_release);
+            return;
+        }
+        if (autoLengthUnsupported) {
+            autoResult.unsupportedLength = true;
+            autoState.store(AutoMixState::ready, std::memory_order_release);
+            return;
+        }
+        autoAudio.resize(autoCount);
+        try {
+            autoWorker = std::async(std::launch::async,
+            [audio = std::move(autoAudio), rate = autoRate, bpm = autoBpm, channels = autoChannels, settings = autoBase, runtime = autoRuntime] {
+                return bassdeamon::analyzeAutoMix(audio, rate, bpm, channels, settings, runtime);
+            });
+        } catch (const std::exception&) {
+            autoResult.analysisFailed = true;
+            autoState.store(AutoMixState::ready, std::memory_order_release);
+            return;
+        }
+        autoState.store(AutoMixState::analyzing, std::memory_order_release);
+        return;
+    }
+    if (state != AutoMixState::analyzing ||
+        autoWorker.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+    try {
+        autoResult = autoWorker.get();
+    } catch (const std::exception&) {
+        autoResult = {};
+        autoResult.analysisFailed = true;
+    }
+    if (autoCancelled.load()) {
+        autoState.store(AutoMixState::idle, std::memory_order_release);
+        return;
+    }
+    for (size_t i = 0; i < ids.size(); ++i) autoParameters[i].store(autoOriginal[i]);
+    for (const auto& change : autoResult.changes) {
+        const auto found = std::find_if(ids.begin(), ids.end(), [&](const char* id) {
+            return std::strcmp(id, change.parameter) == 0;
+        });
+        if (found != ids.end()) autoParameters[size_t(found - ids.begin())].store(change.value);
+    }
+    autoDryDb.store(float(autoResult.dryGainDb));
+    autoWetDb.store(float(autoResult.wetGainDb));
+    autoState.store(AutoMixState::ready, std::memory_order_release);
+}
+
+void BassDeamonProcessor::auditionAutoMix(int side, bool match) noexcept {
+    autoLevelMatch.store(match);
+    if (autoMixState() == AutoMixState::ready && !autoCancelled.load() && !autoResult.changes.empty())
+        autoAudition.store(side, std::memory_order_release);
+}
+
+bassdeamon::Settings BassDeamonProcessor::auditionSettings(bassdeamon::Settings settings) const noexcept {
+    const int side = autoAudition.load(std::memory_order_acquire);
+    if (autoCancelled.load(std::memory_order_relaxed) || side == 0 || !settings.active) return settings;
+    if (side == 2) {
+        const bool pause = settings.pausePhaseLearn;
+        settings = readSettings(true);
+        settings.pausePhaseLearn = pause;
+    }
+    settings.auditionDry = side == 1;
+    settings.matchEnabled = settings.delta = settings.tube.audition = false;
+    if (autoLevelMatch.load(std::memory_order_relaxed)) {
+        settings.auditionDryDb = autoDryDb.load(std::memory_order_relaxed);
+        settings.auditionWetDb = autoWetDb.load(std::memory_order_relaxed);
+    }
+    return settings;
+}
+
+void BassDeamonProcessor::applyAutoMix() {
+    if (autoMixState() != AutoMixState::ready || autoCancelled.load()) return;
+    cancelAutoMix();
+    if (autoResult.changes.empty()) return;
+    refreshHistory();
+    undoManager.beginNewTransaction("Apply Auto Mix");
+    for (const auto& change : autoResult.changes) {
+        if (auto* parameter = parameters.getParameter(change.parameter)) {
+            parameter->beginChangeGesture();
+            parameter->setValueNotifyingHost(parameter->convertTo0to1(change.value));
+            parameter->endChangeGesture();
+        }
+    }
+    parameters.copyState();
+    undoManager.beginNewTransaction();
+}
+
 void BassDeamonProcessor::getStateInformation(juce::MemoryBlock& dest) {
-    auto state = parameters.copyState(); state.setProperty("schemaVersion", 8, nullptr);
+    auto state = parameters.copyState(); state.setProperty("schemaVersion", 9, nullptr);
+    state.setProperty("phaseReferenceHz",phaseReferenceHz.load(),nullptr);
     state.setProperty("visualRawTheme",usesRawTheme(),nullptr);
     state.setProperty("visualSpectrumView",spectrumView(),nullptr);
     state.setProperty("visualAnalyzerHz",analyzerRefreshHz(),nullptr);
@@ -375,8 +567,9 @@ void BassDeamonProcessor::getStateInformation(juce::MemoryBlock& dest) {
     if (auto xml = state.createXml()) copyXmlToBinary(*xml, dest);
 }
 void BassDeamonProcessor::setStateInformation(const void* data, int bytes) {
+    cancelAutoMix();
     if (auto xml = getXmlFromBinary(data, bytes)) {
-        if (xml->hasTagName(parameters.state.getType()) && xml->getIntAttribute("schemaVersion", 1) <= 8) {
+        if (xml->hasTagName(parameters.state.getType()) && xml->getIntAttribute("schemaVersion", 1) <= 9) {
             kickEqGeneration.fetch_add(1);
             kickEqLearnRequested.store(false);
             kickEqStatus.store(0);
@@ -407,6 +600,11 @@ void BassDeamonProcessor::setStateInformation(const void* data, int bytes) {
             if(xml->getIntAttribute("schemaVersion",1)<3)
                 for(size_t i=26;i<ids.size();++i){auto* parameter=parameters.getParameter(ids[i]);parameter->setValueNotifyingHost(parameter->getDefaultValue());}
             // Merge known parameter values into the current schema: v0.1 sessions lack v0.2 IDs.
+            if (xml->getIntAttribute("schemaVersion", 1) < 9)
+                for (size_t i = 55; i < ids.size(); ++i) {
+                    auto* param = parameters.getParameter(ids[i]);
+                    param->setValueNotifyingHost(param->getDefaultValue());
+                }
             const auto incoming = juce::ValueTree::fromXml(*xml);
             for (int i = 0; i < incoming.getNumChildren(); ++i) {
                 const auto child = incoming.getChild(i);
@@ -426,6 +624,8 @@ void BassDeamonProcessor::setStateInformation(const void* data, int bytes) {
             }
             constexpr std::array<double,6> previousRates{30,15,8,4,2,1};
             const auto oldRate = size_t(std::clamp(xml->getIntAttribute("visualAnalyzerRate",2),0,5));
+            const double reference=xml->getDoubleAttribute("phaseReferenceHz",60.);
+            phaseReferenceHz.store(float(std::isfinite(reference)?std::clamp(reference,30.,130.):60.));
             setRawTheme(xml->getBoolAttribute("visualRawTheme",false));
             setAnalyzerRefreshHz(xml->getDoubleAttribute("visualAnalyzerHz",previousRates[oldRate]));
             setSpectrumView(xml->getIntAttribute("visualSpectrumView",int(parameters.getRawParameterValue("view.spectrum")->load())));
@@ -455,6 +655,7 @@ void BassDeamonProcessor::selectAB(int slot) {
     abSlot = slot;
 }
 void BassDeamonProcessor::loadStartingPoint(int preset) {
+    cancelAutoMix();
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
     kickEqGeneration.fetch_add(1);
     kickEqLearnRequested.store(false);

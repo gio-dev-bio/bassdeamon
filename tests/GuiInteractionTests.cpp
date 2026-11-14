@@ -3,6 +3,7 @@
 #include <random>
 #include <cstring>
 #include <stdexcept>
+#include <cstdlib>
 
 namespace {
 void ensure(bool v,const char* m){if(!v)throw std::runtime_error(m);}
@@ -342,6 +343,52 @@ int interactionTests(){
     editor->matchCompare.onClick();editor->dryCompare.onClick();
     ensure(p.compareMatch.load()&&p.compareDry.load(),"Comparison controls did not toggle");
     editor->matchCompare.onClick();editor->dryCompare.onClick();
+    editor->autoMixButton.onClick();
+    ensure(editor->autoPanel.isVisible(), "Auto Mix did not open");
+    editor->autoBars.setSelectedId(1,juce::dontSendNotification);
+    editor->autoScan.onClick();
+    host.playing=false;
+    buffer.clear();p.processBlock(buffer,midi);
+    ensure(p.autoMixState()==BassDeamonProcessor::AutoMixState::armed, "Auto Mix captured stopped transport");
+    host.playing=true;host.bpm=120;
+    set("phase.on",0);set("kickEq.on",0);set("kickEq.frequency",0);
+    for (int pos=0;pos<8*48000;pos+=256) {
+        host.time=std::fmod(pos/48000.,.5);
+        for (int n=0;n<256;++n) {
+            const double t=(pos+n)/48000.,age=std::fmod(t,.5);
+            buffer.setSample(0,n,float(.4*std::sin(2*bassdeamon::pi*60*t)));
+            buffer.setSample(1,n,float(.65*std::exp(-18*age)*std::sin(2*bassdeamon::pi*60*age)));
+        }
+        p.processBlock(buffer,midi);
+    }
+    for (int i=0;i<5000 && p.autoMixState()!=BassDeamonProcessor::AutoMixState::ready;++i) {
+        p.timerCallback();
+        juce::Thread::sleep(2);
+    }
+    editor->refreshAutoMix();
+    ensure(editor->autoApply.isEnabled()&&get("kickEq.on")==0, "Auto Mix changed host parameters before Apply");
+    if (const auto* path=std::getenv("BASSDEAMON_AUTO_MIX_PREVIEW")) {
+        editor->setSize(1200,1336);
+        p.setRawTheme(true);editor->syncTheme();
+        const auto image=editor->createComponentSnapshot(editor->getLocalBounds(),true,1.f);
+        auto stream=juce::File(juce::String::fromUTF8(path)).createOutputStream();
+        juce::PNGImageFormat format;
+        ensure(stream && stream->setPosition(0) && stream->truncate().wasOk()
+            && format.writeImageToStream(image,*stream), "Auto Mix preview could not be saved");
+    }
+    editor->autoDry.onClick();
+    ensure(p.autoAudition.load()==1, "Auto Mix Dry audition did not select A");
+    editor->autoWet.onClick();
+    ensure(p.autoAudition.load()==2, "Auto Mix proposal audition did not select B");
+    editor->autoApply.onClick();
+    ensure(get("kickEq.on")==1&&std::abs(get("kickEq.frequency")-60)<1, "Auto Mix did not commit proposed Kick EQ");
+    ensure(p.undoEdit()&&get("kickEq.on")==0&&get("kickEq.frequency")==0, "Auto Mix Undo did not restore original settings");
+    set("subMono.on",1);set("subMono.hz",135);
+    juce::MemoryBlock subState;
+    p.getStateInformation(subState);
+    set("subMono.on",0);set("subMono.hz",100);
+    p.setStateInformation(subState.getData(),int(subState.getSize()));
+    ensure(get("subMono.on")==1&&std::abs(get("subMono.hz")-135)<.001, "Sub Mono settings did not survive recall");
     // Schema-3 sessions restore the original timing modes on an existing instance.
     auto old=p.parameters.copyState();old.setProperty("schemaVersion",3,nullptr);
     const juce::StringArray newIds{"glue.timing","glue.attackMs","glue.releaseMs","glue.attackNote","glue.releaseNote","unmask.timing","unmask.attackNote","unmask.releaseNote","view.range","view.hold","view.spectrum","view.minHz","view.maxHz"};

@@ -43,10 +43,10 @@ public:
     double frequency() const noexcept {
         std::array<double, 2> energy{};
         for (int c = 0; c < 2; ++c)
-            for (float v : audio[c]) energy[c] += double(v) * v;
+            for (int n = 0; n < count; ++n) energy[c] += double(audio[c][n]) * audio[c][n];
         const auto& signal = audio[energy[1] > energy[0] ? 1 : 0];
         double peak = 0;
-        for (float v : signal) peak = std::max(peak, std::abs(double(v)));
+        for (int n = 0; n < count; ++n) peak = std::max(peak, std::abs(double(signal[n])));
         if (peak < .0015) return 0;
 
         const int refractory = int(rate * .18);
@@ -56,7 +56,7 @@ public:
         const int tailOffset = int(rate * .004);
         const int secondOffset = int(rate * .022);
         const int settledOffset = int(rate * .115);
-        const int end = capacity - settledOffset - secondOffset - window - maxLag - 2;
+        const int end = count - settledOffset - secondOffset - window - maxLag - 2;
         std::array<double, 24> estimates{};
         int accepted = 0, hits = 0, nextHit = 0;
         double envelope = 0;

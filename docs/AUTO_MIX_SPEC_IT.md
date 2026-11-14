@@ -1,6 +1,6 @@
 # BassDeamon · Auto Mix
 
-Specifica approvata. Il pannello e il motore Auto Mix sono da implementare.
+Il pannello Auto Mix cattura il passaggio in riproduzione e analizza il risultato in background. La proposta diventa permanente con **Apply**.
 
 ## Flusso iniziale
 
@@ -25,7 +25,7 @@ Durante l'analisi iniziale, misurare il basso in ingresso senza il kick del side
 
 Riutilizzare le soglie del Mono Check: **Low Loss** sotto 4,5 dB di perdita, **Caution** da 4,5 dB, **High Loss** da 8 dB e **No Signal** con segnale insufficiente. Descrivere come cancellazione tra canali solo un caso supportato dalla correlazione negativa. Il referto è informativo.
 
-Il calcolo è in `Source/StereoPhaseAnalysis.h`. La cattura e il referto nel pannello fanno parte dell'integrazione di Auto Mix.
+La lettura sub usa la frequenza impostata nella barra Output, a 120 Hz per impostazione iniziale.
 
 ## Proposte per modulo
 
@@ -40,6 +40,10 @@ Il calcolo è in `Source/StereoPhaseAnalysis.h`. La cattura e il referto nel pan
 ## Barra Output
 
 Un'unica barra in fondo alla console raggruppa **Kick SC**, **Sub Mono**, **Output Trim**, meter **IN / OUT** sulla stessa scala dBFS RMS e picco in uscita. Il confronto RMS del percorso corrente indica **Matched** entro 0,2 dB, **Different** oltre la tolleranza e **No Signal** quando entrambi i livelli sono a −60 dBFS RMS o meno. **Kick SC** è un indicatore di presenza del sidechain. **Sub Mono** parte spento, con frequenza iniziale regolabile di 120 Hz, e agisce prima del Trim. La misura **Sub Fold Loss** si trova nello Scope.
+
+## Lettura All-Pass
+
+Quando **Phase** e **All-Pass** sono attivi, il modulo mostra la rotazione teorica del solo filtro. Il riferimento è il valore di Kick EQ se impostato, oppure 60 Hz.
 
 ## Anteprime
 

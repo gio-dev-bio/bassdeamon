@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <vector>
 #include "SoftTube.h"
+#include "SubMono.h"
 
 namespace bassdeamon {
 constexpr double pi = 3.14159265358979323846;
@@ -30,6 +31,8 @@ enum class UnmaskStereoMode { stereo, mid, side };
 struct Settings {
     bool active = true;
     bool pausePhaseLearn = false;
+    bool subMono = false;
+    double subMonoHz = 120, auditionDryDb = 0, auditionWetDb = 0;
     bool kickEqEnabled = false, matchEnabled = false, auditionDry = false;
     double kickEqFrequency = 0, kickEqCut = 1.5;
     TubeSettings tube;
@@ -91,6 +94,10 @@ struct Biquad {
         b2 = (1 - alpha * A) / a0; a1 = b1; a2 = (1 - alpha / A) / a0;
     }
 };
+
+inline double allPassDegrees(double hz, double corner, double rate) noexcept {
+    return -360 / pi * std::atan(std::tan(pi * hz / rate) / std::tan(pi * corner / rate));
+}
 
 // Instantaneous small-signal response of the UNMASK filters, before Auto Gain.
 struct UnmaskResponse {
@@ -277,6 +284,13 @@ private:
     LearnResult result;
 };
 
+inline double cornerForAllPassDegrees(double degrees, double hz, double rate) noexcept {
+    const double angle = std::clamp(-degrees, .001, 179.999) * pi / 360;
+    return std::clamp(rate / pi * std::atan(std::tan(pi * hz / rate) / std::tan(angle)), 20., 500.);
+}
+
+struct PhaseTap { float before = 0, after = 0; };
+
 class Engine {
 public:
     void prepare(double sr) {
@@ -286,7 +300,9 @@ public:
         kickEqRetune.reset(1);
         kickEqHz = kickEqDb = 0;
         kickEqMix.reset(0);
+        subMono = {}; subMonoMix.reset(0); subMonoCutoff = 0;
         monitorMix.reset(0);
+        dryMonitorGain.reset(1);
         monitorGain.reset(1);
         wetPower = 0;
         bassEnergy = envelope = kickFast = kickSlow = 0;
@@ -344,6 +360,7 @@ public:
         for (auto* bank : {&detectorsBass, &detectorsKick, &filters})
             for (auto& band : *bank) for (auto& f : band) f.z1 = f.z2 = 0;
         allpassX.fill(0); allpassY.fill(0);
+        subMono.clear();
         bassE.fill(0); kickE.fill(0); bassEnergy = envelope = kickFast = kickSlow = 0;
         inputPowerMeter = outputPowerMeter = outputHeld = kickHeld = 0;
         if(!preserveLearn)learner.cancel();
@@ -354,7 +371,7 @@ public:
     }
 
     void process(float* const* bass, int channels, const float* const* kick, int kickChannels,
-                 int samples, const Settings& s, double bpm = 0) noexcept {
+                 int samples, const Settings& s, double bpm = 0, PhaseTap* phaseTap = nullptr) noexcept {
         if (channels < 1 || channels > 2) return;
         tube.configure(s.tube);
         const int rampSamples=std::max(1,static_cast<int>(sampleRate*.02));
@@ -435,8 +452,14 @@ public:
         const bool match = s.matchEnabled && normalMonitoring;
         const double matchDb = match && inputPowerMeter > 1e-9 && wetPower > 1e-9
             ? std::clamp(10 * std::log10(inputPowerMeter / wetPower), -12.0, 12.0) : 0;
-        monitorGain.set(matchDb == 0 ? 1 : gain(matchDb), rampSamples);
-        const bool monitor = match || !monitorMix.finished() || monitorMix.value() != 0 || !monitorGain.finished();
+        monitorGain.set(gain(matchDb + s.auditionWetDb), rampSamples);
+        dryMonitorGain.set(gain(s.auditionDryDb), rampSamples);
+        subMonoMix.set(channels == 2 && s.subMono ? 1 : 0, rampSamples);
+        const bool runSubMono = channels == 2 && (s.subMono || !subMonoMix.finished());
+        const double subMonoTarget = std::clamp(s.subMonoHz, 40., 250.);
+        if (!runSubMono) { subMono.clear(); subMonoCutoff = 0; }
+        else if (subMonoCutoff == 0) subMonoCutoff = subMonoTarget;
+        const bool monitor = match || !monitorMix.finished() || monitorMix.value() != 0 || !monitorGain.finished() || monitorGain.value() != 1 || !dryMonitorGain.finished();
         if (!match) wetPower = 0;
         for (int n = 0; n < samples; ++n) {
             const float dryLeft=bass[0][n],dryRight=channels==2?bass[1][n]:0;
@@ -582,6 +605,7 @@ public:
                 cachedAllpassA = (t-1)/(t+1); cachedRotationHz = rotationHz;
             }
             const double a = cachedAllpassA;
+            if (phaseTap) phaseTap[n].before = float(channels == 2 ? (x[0]+x[1])*.5 : x[0]);
             double phaseReference = 0;
             for (int c = 0; c < channels; ++c) {
                 delays[c].push(x[c]);
@@ -594,6 +618,7 @@ public:
             }
             const double phaseAgc = compensate(1, phaseReference, power(x, channels), phaseMix);
             for (auto& v : x) v *= phaseAgc;
+            if (phaseTap) phaseTap[n].after = float(channels == 2 ? (x[0]+x[1])*.5 : x[0]);
 
             // Optional parallel Soft Tube before UNMASK. No arithmetic is added
             // to x in the disabled/settled branch, preserving the 0.2.2 output.
@@ -678,10 +703,20 @@ public:
             const double unmaskAgc = compensate(2, selectedPower(beforeUnmask), selectedPower(x), unmaskMix);
             if (!linked)
                 applySelectedChange(x, x[0] * (unmaskAgc - 1), x[1] * (unmaskAgc - 1));
+            if (runSubMono) {
+                if (controlCounter % 32 == 0 || (n == 0 && subMonoCutoff == subMonoTarget)) {
+                    subMonoCutoff = follow(subMonoCutoff, subMonoTarget, filterParameterA);
+                    subMono.setCutoff(subMonoCutoff, sampleRate);
+                }
+                const double lowSide = subMonoMix.next() * subMono.lowSide((x[0] - x[1]) * .5);
+                x[0] -= lowSide;
+                x[1] += lowSide;
+            }
             outputGain = follow(outputGain, trimTarget, smoothA);
             deltaMix = follow(deltaMix, s.delta && s.unmask && !(s.tube.enabled&&s.tube.audition) ? 1 : 0, smoothA);
             const double listenDry = monitor ? monitorMix.next() : 0;
             const double listenGain = monitor ? monitorGain.next() : 1;
+            const double dryGain = monitor ? dryMonitorGain.next() : 1;
             double wet = 0;
             for (int c = 0; c < channels; ++c) {
                 // Delta is removed bass BEFORE AGC/output trim; never includes kick.
@@ -692,7 +727,7 @@ public:
                     if (match) wet += out * out;
                     const double reference = std::isfinite(dry) ? dry : 0;
                     const double matched = out * listenGain;
-                    out = matched + listenDry * (reference - matched);
+                    out = matched + listenDry * (reference * dryGain - matched);
                 }
                 bass[c][n] = activeMix==0?dry:static_cast<float>(activeMix==1?out:static_cast<double>(dry)+activeMix*(out-dry));
                 outputHeld = std::max(std::abs(static_cast<double>(bass[c][n])), outputHeld * peakA);
@@ -761,6 +796,9 @@ private:
     double directWeightDenominator = 1e-12;
     int controlCounter = 0;
     bool smoothed = false;
+    SubMono subMono;
+    Ramp subMonoMix, dryMonitorGain;
+    double subMonoCutoff = 0;
     Ramp globalRamp,delayFade,polarityRamp,midMix,sideMix;
     bool globalInitialised=false,globalPaused=false;
     double previousDelaySamples=0;
