@@ -148,7 +148,7 @@ public:
                 g.drawLine(juce::Line<float>{polar(a,radius*.76f),polar(a,skirt)},2.f);
             }
         }
-        const float cap=radius*.76f;
+        const float cap=radius*.80f;
         {
             juce::Graphics::ScopedSaveState capState(g);
             juce::Path clip;
@@ -157,20 +157,21 @@ public:
             g.setGradientFill(juce::ColourGradient(juce::Colour(0xff514b40),cx-cap*.7f,cy-cap,
                 juce::Colour(0xff201e1a),cx+cap*.3f,cy+cap,false));
             g.fillEllipse(disc(cap));
-            if (raw && knob.isValid()) {
+            if (knob.isValid()) {
                 g.setOpacity(enabled?1.f:.6f);
                 g.drawImage(knob,disc(cap));
                 g.setOpacity(1.f);
             }
-            g.setColour(cream.withAlpha(.15f));
-            g.drawEllipse(disc(cap-1),1.f);
+            g.setGradientFill(juce::ColourGradient(juce::Colour(0xffffe5bc).withAlpha(.72f),cx,cy-cap,
+                juce::Colour(0xff16110b).withAlpha(.83f),cx,cy+cap,false));
+            g.drawEllipse(disc(cap-1),1.35f);
         }
         const auto pointerBase=polar(angle,radius*.27f);
         const auto pointerTip=polar(angle,radius*.70f);
         const float weight=radius>39?4.f:2.8f;
         g.setColour(ink);
         g.drawLine(juce::Line<float>{pointerBase.translated(0,1),pointerTip.translated(0,1)},weight+1.6f);
-        g.setColour(raw?juce::Colour(0xff211910):(enabled?cream.brighter(.12f):muted));
+        g.setColour(juce::Colour(enabled?0xff211910:0xff494036));
         g.drawLine(juce::Line<float>{pointerBase,pointerTip},weight);
     }
     void drawToggleButton(juce::Graphics& g,juce::ToggleButton& b,bool hover,bool down) override {metalToggle(g,b,hover,down);}

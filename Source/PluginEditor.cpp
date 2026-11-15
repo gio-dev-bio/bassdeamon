@@ -2,11 +2,12 @@
 #include "BassDeamonArt.h"
 
 bool console::Skin::setRaw(bool useRaw) {
+    if (!knob.isValid())
+        knob=juce::ImageCache::getFromMemory(BassDeamonArt::RawKnob_png,BassDeamonArt::RawKnob_pngSize);
     if (raw==useRaw) return false;
     raw=useRaw;
     if (raw && !steel.isValid()) {
         steel=juce::ImageCache::getFromMemory(BassDeamonArt::RawSteel_png,BassDeamonArt::RawSteel_pngSize);
-        knob=juce::ImageCache::getFromMemory(BassDeamonArt::RawKnob_png,BassDeamonArt::RawKnob_pngSize);
     }
     return true;
 }
@@ -53,9 +54,9 @@ void paintReductionMeter(juce::Graphics& g,float x,float y,float reduction,int f
     g.fillRoundedRectangle(dial,3);
     juce::Graphics::ScopedSaveState meterClip(g);
     g.reduceClipRegion(dial.toNearestInt());
-    const auto mark=[fullScale,x,y,width,raw](float reduction) {
+    const auto mark=[fullScale,x,y,width](float reduction) {
         const float normal=1.f-2.f*std::sqrt(std::clamp(reduction/float(fullScale),0.f,1.f));
-        return juce::Point<float>(x+(raw?-1.f:1.f)*normal*width*.365f,y+30+normal*normal*8);
+        return juce::Point<float>(x+normal*width*.365f,y+30+normal*normal*8);
     };
     juce::Path scale;
     scale.startNewSubPath(mark(float(fullScale)));
@@ -65,7 +66,7 @@ void paintReductionMeter(juce::Graphics& g,float x,float y,float reduction,int f
     for (int tickDb : {fullScale,fullScale == 24 ? 12 : 10,6,3,0}) {
         const auto tick=mark(float(tickDb));
         g.drawLine(tick.x,tick.y,tick.x,tick.y+4,1);
-        console::text(g,juce::String(tickDb),{tick.x-9,tick.y-11,18,10},9,console::ink,
+        console::text(g,juce::String(-tickDb),{tick.x-12,tick.y-11,24,10},9,console::ink,
                       juce::Justification::centred);
     }
     if (raw) console::text(g,"GAIN REDUCTION",{meter.getX(),y+4,width,14},12,console::ink,juce::Justification::centred);
@@ -84,7 +85,8 @@ void paintReductionMeter(juce::Graphics& g,float x,float y,float reduction,int f
     g.setColour(console::ink.withAlpha(.9f));
     g.fillEllipse(pivot.x-3.5f,pivot.y-3.5f,7.f,7.f);
     if (!raw) console::text(g,"GAIN REDUCTION",{meter.getX()+8,y+55,104,18},12,console::ink);
-    console::text(g,juce::String(reduction,1)+" dB",{meter.getRight()-70,y+55,61,18},12,console::ink,
+    const float displayedDb=reduction>=.05f?-reduction:0.f;
+    console::text(g,juce::String(displayedDb,1)+" dB",{meter.getRight()-70,y+55,61,18},12,console::ink,
                   juce::Justification::centredRight);
 }
 

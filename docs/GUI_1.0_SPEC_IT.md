@@ -16,6 +16,7 @@ Decisioni approvate per la GUI e per il percorso audio della prossima versione. 
 
 - Logo gotico **BASS ✝ DEAMON** in avorio con croce in rame e firma **Engineered by Guy_BioRg**. Etichette in inglese.
 - **Skin** sceglie fra **Classic** e **Raw**. Il tema Raw riprende una console analogica vissuta, con selettori metallici e meter a lancetta intera, dello stesso stile per Glue, Unmask e Duck.
+- Manopole in metallo spazzolato. I meter di riduzione partono da 0 dB a destra e si muovono verso sinistra per valori negativi.
 - Testata con preset, Power, Undo/Redo, A/B globale, CPU DSP, due barre **IN RMS / OUT RMS** in dBFS con scala e finestra di misura comuni. Il kick sidechain è escluso dalla misura RMS del basso.
 - **Analyzer / Scope** condividono il display a tutta larghezza. Kick EQ e Phase in fasce compatte. Saturation nella fascia inferiore. Un solo indicatore generale di presenza del kick in sidechain.
 
