@@ -555,14 +555,18 @@ void BassDeamonEditor::layoutMain() {
     place("phase.on",{812,461,53,25});
     phaseAngle.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     phaseAngle.setTextBoxStyle(juce::Slider::TextBoxRight,false,64,24);
-    phaseAngle.setTextValueSuffix("°");
     phaseAngle.setNumDecimalPlacesToDisplay(1);
     phaseAngle.setDoubleClickReturnValue(true,0);
     phaseAngle.setScrollWheelEnabled(false);
     phaseAngle.setBounds(865,455,130,40);
-    phaseAngle.setTooltip("Phase rotation at the reference frequency. Double-click to return to 0°. Phase must be enabled.");
+    phaseAngle.setTooltip("Phase rotation at the reference frequency. Double-click to reset to zero. Phase must be enabled.");
     face.addAndMakeVisible(phaseAngle);
     phaseAngleAttachment=std::make_unique<State::SliderAttachment>(processor.parameters,"phase.angle",phaseAngle);
+    phaseAngle.textFromValueFunction=[](double value){
+        return juce::String(value,1)+juce::String::charToString(0x00b0);
+    };
+    phaseAngle.valueFromTextFunction=[](const juce::String& value){return value.getDoubleValue();};
+    phaseAngle.updateText();
     phaseScopeButton.setBounds(998,461,74,25);
     phaseAdvanced.setBounds(1077,461,89,25);
     phaseAdvanced.onClick=[this]{showPhaseAdvanced=!showPhaseAdvanced;refreshDisplayPage();face.repaint();};
