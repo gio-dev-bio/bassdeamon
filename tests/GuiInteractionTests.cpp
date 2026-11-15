@@ -260,6 +260,30 @@ int interactionTests(){
     editor->scopeCompareButton.onClick();
     ensure(greenInScope()>10,"POST waveform disappeared after disabling the overlay");
     editor->analyzerTab.onClick();
+    editor->scopeTab.onClick();
+    editor->spectrumHold.setToggleState(true,juce::dontSendNotification);
+    for (int c=0;c<buffer.getNumChannels();++c)
+        for (int n=0;n<buffer.getNumSamples();++n) buffer.setSample(c,n,.125f);
+    p.processBlockBypassed(buffer,midi);
+    const auto queued=p.analysisQueue.pending();
+    p.processBlockBypassed(buffer,midi);
+    ensure(p.analysisQueue.pending()==queued,"Host bypass fed the analyzer queue");
+    ensure(buffer.getSample(0,255)==.125f,"Host bypass changed the bass");
+    visualTick();
+    ensure(editor->visualBypassed&&!editor->spectrumDisplay.ready&&editor->visibleScope.completed==0,
+           "Host bypass did not clear the displays, including HOLD");
+    editor->spectrumHold.setToggleState(false,juce::dontSendNotification);
+    set("global.on",0);
+    p.processBlock(buffer,midi);visualTick();
+    ensure(editor->visualBypassed && p.analysisQueue.pending()==0,"Power off sent audio to the display");
+    set("global.on",1);
+    for (int b=0;b<120;++b) {
+        for (int n=0;n<256;++n) buffer.setSample(0,n,float(.3*std::sin(2*bassdeamon::pi*60*(b*256+n)/48000.)));
+        p.processBlock(buffer,midi);
+        if (b%6==0) visualTick();
+    }
+    ensure(!editor->visualBypassed&&editor->visibleScope.completed>0,"Scope did not resume after bypass");
+    editor->analyzerTab.onClick();
     const auto frozen=editor->spectrumDisplay.revision;
     editor->spectrumHold.setToggleState(true,juce::dontSendNotification);
     for(int b=0;b<70;++b){buffer.clear();p.processBlock(buffer,midi);visualTick();}

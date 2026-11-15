@@ -67,6 +67,9 @@ public:
     juce::AudioProcessorValueTreeState parameters;
     juce::AudioProcessLoadMeasurer cpuLoad;
     bassdeamon::AnalysisQueue analysisQueue;
+    bool displayBypassed() const noexcept {
+        return hostBypassed.load(std::memory_order_acquire) || raw[18]->load(std::memory_order_relaxed)<.5f;
+    }
     std::atomic<float> tubeGainDb{0},tubeAddedDb{-120},tempo{120},unmaskAttack{8},unmaskRelease{120},learnProgress{0};
     std::atomic<bool> tempoFromHost{false};
     std::atomic<float> duckReduction{0};
@@ -98,8 +101,10 @@ private:
     std::vector<bassdeamon::AutoMixFrame> autoAudio;
     std::future<bassdeamon::AutoMixResult> autoWorker;
     bassdeamon::AutoMixResult autoResult;
-    std::array<std::atomic<float>, 61> autoParameters{};
-    std::array<float, 61> autoOriginal{};
+    static constexpr size_t parameterCount=68;
+    std::array<std::atomic<float>,parameterCount> autoParameters{};
+    std::array<float,parameterCount> autoOriginal{};
+    std::atomic<bool> hostBypassed{false};
     std::atomic<float> autoDryDb{0}, autoWetDb{0};
     bassdeamon::Settings autoBase;
     bassdeamon::Engine::RuntimeState autoRuntime{};
@@ -115,7 +120,7 @@ private:
     std::atomic<unsigned> kickEqGeneration{0};
     unsigned captureGeneration = 0; // published with CaptureState::ready
     float captureStartFrequency = 0;
-    std::array<std::atomic<float>*, 68> raw{};
+    std::array<std::atomic<float>*,parameterCount> raw{};
     std::atomic<bool> learnRequested{false}, resultReady{false};
     std::atomic<float> resultDelay{0};
     std::atomic<bool> resultInvert{false};

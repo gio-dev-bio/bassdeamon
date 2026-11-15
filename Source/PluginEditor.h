@@ -2,6 +2,8 @@
 #include "PluginProcessor.h"
 #include "ConsoleSkin.h"
 #include "SpectrumDisplay.h"
+#include <mutex>
+#include <thread>
 
 class BassDeamonEditor final : public juce::AudioProcessorEditor, private juce::Timer {
 public:
@@ -40,6 +42,9 @@ private:
     Knob& addKnob(const char*,const char*,const char*,bool,juce::Rectangle<int>,const char*);
     void addChoice(const char*,const juce::StringArray&,juce::Rectangle<int>);
     void paintConsole(juce::Graphics&);
+    void rebuildConsoleBackground();
+    void analyzeFrames(double clockMilliseconds);
+    void clearVisualAnalysis();
     void paintSpectrum(juce::Graphics&);
     void layoutMain();
     void layoutUnmask();
@@ -64,6 +69,13 @@ private:
     std::vector<std::unique_ptr<Knob>> knobs;
     std::vector<std::unique_ptr<Switch>> switches;
     bassdeamon::RelationAnalyzer analyzer;
+    std::mutex analysisMutex;
+    std::thread analysisThread;
+    std::atomic<bool> stopAnalysis{false};
+    uint64_t analysisRevision=0, displayedAnalysisRevision=0, displayedSamples=0;
+    bool analysisWasBypassed=false, visualBypassed=false;
+    double displaySampleRate=48000, workerAnalysisMilliseconds=0;
+    juce::Image consoleBackground;
     bassdeamon::SpectrumDisplay spectrumDisplay;
     juce::Slider analyzerRefresh;
     double syncedRefreshHz = 0;
