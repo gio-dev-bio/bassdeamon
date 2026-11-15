@@ -1,6 +1,5 @@
 #include "PluginEditor.h"
 #include "BassDeamonArt.h"
-#include <BassDeamonArt.h>
 
 bool console::Skin::setRaw(bool useRaw) {
     if (raw==useRaw) return false;
@@ -747,6 +746,17 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g) {
         const float x=24+float(index)*389;
         skin.paintPanel(g,{x,503,374,267});
         stageTitle(g,stages[index],{x+18,509,152,27},20);
+    }
+    if (skin.isRaw()) {
+        for (float x : {110.f,499.f,888.f}) {
+            if (x==499.f && showUnmaskAdvanced) continue;
+            const juce::Rectangle<float> bezel(x-4,538,195,88);
+            g.setColour(juce::Colour(0xff110b08));
+            g.fillRoundedRectangle(bezel,6);
+            g.setGradientFill(juce::ColourGradient(juce::Colour(0xffad7b4d),x,538,
+                juce::Colour(0xff482716),x,626,false));
+            g.drawRoundedRectangle(bezel.reduced(1),5,2);
+        }
     }
     paintReductionMeter(g,110,542,glueGr,20,"GAIN REDUCTION");
     if (!showUnmaskAdvanced) paintReductionMeter(g,499,542,processor.unmaskReduction.load(),24,"GAIN REDUCTION");

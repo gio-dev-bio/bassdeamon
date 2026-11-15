@@ -373,7 +373,7 @@ int interactionTests(){
     editor->refreshAutoMix();
     ensure(editor->autoApply.isEnabled()&&get("kickEq.on")==0&&get("duck.on")==0, "Auto Mix changed host parameters before Apply");
     if (const auto* path=std::getenv("BASSDEAMON_AUTO_MIX_PREVIEW")) {
-        editor->setSize(1200,1400);
+        editor->setSize(1200,870);
         p.setRawTheme(true);editor->syncTheme();
         const auto image=editor->createComponentSnapshot(editor->getLocalBounds(),true,1.f);
         auto stream=juce::File(juce::String::fromUTF8(path)).createOutputStream();
