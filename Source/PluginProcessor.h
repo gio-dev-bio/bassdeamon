@@ -115,7 +115,7 @@ private:
     std::atomic<unsigned> kickEqGeneration{0};
     unsigned captureGeneration = 0; // published with CaptureState::ready
     float captureStartFrequency = 0;
-    std::array<std::atomic<float>*, 64> raw{};
+    std::array<std::atomic<float>*, 68> raw{};
     std::atomic<bool> learnRequested{false}, resultReady{false};
     std::atomic<float> resultDelay{0};
     std::atomic<bool> resultInvert{false};

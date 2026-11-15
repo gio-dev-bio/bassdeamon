@@ -249,9 +249,39 @@ int main() {
             };
             const double transient=reduction(48,288), body=reduction(480,1680), next=reduction(6000,7440);
             require(transient>1.5 && body>2.4 && body<=3.001 && next<.8,"Duck failed the transient/body/recovery checks");
+            duck.duckMultiband=true;
+            auto banded=bass, bandedOther=bass, bandedSilent=bass;
+            Engine bands,otherBands,bandsSilent;
+            for (auto* engine : {&bands,&otherBands,&bandsSilent}) engine->prepare(sr);
+            render(bands,banded,&kick,duck);
+            render(otherBands,bandedOther,&kick,duck,63);
+            render(bandsSilent,bandedSilent,&silence,duck);
+            require(banded==bandedOther && bandedSilent==bass,"Multiband Duck bypass or block invariance failed");
+            require(banded!=bass && banded!=wet,"Multiband Duck did not produce its own response");
             std::cout<<"PASS Duck transient "<<transient<<" dB, kick body "<<body
                      <<" dB, next note "<<next<<" dB / exact OFF and no-sidechain bypass\n";
         }
+
+        {
+            Settings settings;
+            settings.glue=settings.unmask=false;
+            settings.tube.enabled=true;
+            settings.tube.driveDb=14;
+            settings.tube.amount=.8;
+            Signal dry(8192);
+            for (size_t n=0;n<dry.size();++n) dry[n]=float(.65*std::sin(2*pi*110*n/48000.));
+            auto two=dry,four=dry;
+            Engine a,b;
+            a.prepare(48000);b.prepare(48000);
+            render(a,four,nullptr,settings);
+            settings.tube.oversampling=2;
+            render(b,two,nullptr,settings);
+            require(two!=four && two!=dry && four!=dry,"Oversampling modes did not affect the saturated signal");
+            render(a,four,nullptr,settings,63);
+            require(std::all_of(four.begin(),four.end(),[](float v){return std::isfinite(v);}),
+                    "Changing oversampling generated invalid samples");
+        }
+
 
         // Extreme legal settings stay finite at all supported rates.
         for (double sr : {8000.0, 44100.0, 96000.0, 192000.0}) {

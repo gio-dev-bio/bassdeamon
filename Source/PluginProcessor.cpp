@@ -3,7 +3,7 @@
 #include <optional>
 
 namespace {
-constexpr std::array<const char*, 64> ids{
+constexpr std::array<const char*, 68> ids{
     "glue.on", "glue.amount", "glue.lock", "phase.on", "phase.invert", "phase.delay",
     "phase.rotate", "phase.frequency", "unmask.on", "unmask.amount", "unmask.delta",
     "glue.agc", "glue.agcLock", "phase.agc", "phase.agcLock", "unmask.agc", "unmask.agcLock",
@@ -12,7 +12,7 @@ constexpr std::array<const char*, 64> ids{
     "tube.on","tube.drive","tube.amount","tube.source","tube.colour","tube.agc","tube.agcLock","tube.audition",
     "glue.timing","glue.attackMs","glue.releaseMs","glue.attackNote","glue.releaseNote",
     "unmask.timing","unmask.attackNote","unmask.releaseNote","view.range","view.hold",
-    "view.spectrum","view.minHz","view.maxHz","unmask.attenuation","unmask.controlDb","unmask.stereoMode","unmask.focusMinHz","unmask.focusMaxHz","kickEq.on","kickEq.frequency","kickEq.cut","subMono.on","subMono.hz","duck.on","duck.amount","duck.attack","duck.release","duck.timing","duck.releaseNote","tube.oversampling"};
+    "view.spectrum","view.minHz","view.maxHz","unmask.attenuation","unmask.controlDb","unmask.stereoMode","unmask.focusMinHz","unmask.focusMaxHz","kickEq.on","kickEq.frequency","kickEq.cut","subMono.on","subMono.hz","duck.on","duck.amount","duck.attack","duck.release","duck.timing","duck.releaseNote","tube.oversampling","duck.multiband","duck.body","duck.punch","duck.click"};
 }
 
 BassDeamonProcessor::BassDeamonProcessor()
@@ -106,6 +106,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout BassDeamonProcessor::layout(
     choice("duck.timing","Duck release timing",{"MS","SYNC"},0);
     choice("duck.releaseNote","Duck release note",notes,2);
     choice("tube.oversampling","Saturation oversampling",{"2X","4X"},1);
+    boolean("duck.multiband","Duck multiband",false);
+    continuous("duck.body","Duck Body amount",0,1,1);
+    continuous("duck.punch","Duck Punch amount",0,1,.65f);
+    continuous("duck.click","Duck Click amount",0,1,.35f);
     return p;
 }
 
@@ -158,6 +162,7 @@ bassdeamon::Settings BassDeamonProcessor::readSettings(bool proposal) const noex
     s.duck = value(57) > .5f; s.duckAmountDb = value(58);
     s.duckAttackMs = value(59); s.duckReleaseMs = value(60);
     s.duckSync=value(61)>.5f; s.duckReleaseNote=int(value(62));
+    s.duckMultiband=value(64)>.5f; s.duckBands={value(65),value(66),value(67)};
     s.auditionDry = compareDry.load(std::memory_order_relaxed);
     s.matchEnabled = compareMatch.load(std::memory_order_relaxed);
     s.active=value(18)>.5f;

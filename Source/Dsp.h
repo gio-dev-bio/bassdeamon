@@ -33,6 +33,8 @@ struct Settings {
     bool pausePhaseLearn = false;
     bool duck = false, duckSync = false;
     int duckReleaseNote = 2;
+    bool duckMultiband = false;
+    std::array<double,3> duckBands{1,.65,.35}; // Body, Punch, Click
     double duckAmountDb = 3, duckAttackMs = 1.5, duckReleaseMs = 65;
     bool subMono = false;
     double subMonoHz = 120, auditionDryDb = 0, auditionWetDb = 0;
@@ -295,6 +297,16 @@ inline double cornerForAllPassDegrees(double degrees, double hz, double rate) no
 
 struct PhaseTap { float before = 0, after = 0; };
 
+// Complementary bands sum to the original signal, including filter history.
+struct DuckBands {
+    std::array<double,2> body{}, broad{};
+    std::array<double,3> split(double input,int channel,double bodyPole,double punchPole) noexcept {
+        body[channel]=bodyPole*body[channel]+(1-bodyPole)*input;
+        broad[channel]=punchPole*broad[channel]+(1-punchPole)*input;
+        return {body[channel],broad[channel]-body[channel],input-broad[channel]};
+    }
+};
+
 class Engine {
 public:
     void prepare(double sr) {
@@ -306,6 +318,11 @@ public:
         kickEqMix.reset(0);
         duckEnvelope = duckReduction = 0;
         duckDetectorRelease = pole(12, sampleRate);
+        duckBodyPole=std::exp(-2*pi*110/sampleRate);
+        duckPunchPole=std::exp(-2*pi*800/sampleRate);
+        duckBandMix.reset(0);
+        duckBassBands={};duckKickBands={};
+        duckBandEnvelope.fill(0);duckBandReduction.fill(0);
         subMono = {}; subMonoMix.reset(0); subMonoCutoff = 0;
         monitorMix.reset(0);
         dryMonitorGain.reset(1);
@@ -368,6 +385,9 @@ public:
         allpassX.fill(0); allpassY.fill(0);
         duckEnvelope = duckReduction = 0;
         meters.duckReductionDb = 0;
+        duckBandMix.reset(0);
+        duckBassBands={};duckKickBands={};
+        duckBandEnvelope.fill(0);duckBandReduction.fill(0);
         subMono.clear();
         bassE.fill(0); kickE.fill(0); bassEnergy = envelope = kickFast = kickSlow = 0;
         inputPowerMeter = outputPowerMeter = outputHeld = kickHeld = 0;
@@ -471,12 +491,22 @@ public:
         if (!match) wetPower = 0;
         const bool duckEnabled = s.duck && s.active && normalMonitoring && !s.auditionDry && kick && kickChannels > 0;
         const double duckDepth = duckEnabled ? std::clamp(s.duckAmountDb,0.,18.) : 0.;
-        const bool runDuck = duckDepth > 0 || duckReduction > 0;
+        duckBandMix.set(s.duckMultiband?1:0,rampSamples);
+        const bool runDuck = duckDepth > 0 || duckReduction > 0
+            || std::any_of(duckBandReduction.begin(),duckBandReduction.end(),[](double v){return v>0;});
         const double duckAttack = runDuck ? pole(std::clamp(s.duckAttackMs,.25,20.),sampleRate) : 0.;
-        const double releaseMs = s.duckSync ? noteMilliseconds(s.duckReleaseNote,bpm)
+        const double duckReleaseMs = s.duckSync ? noteMilliseconds(s.duckReleaseNote,bpm)
                                             : std::clamp(s.duckReleaseMs,20.,350.);
-        const double duckRelease = runDuck ? pole(duckDepth > 0 ? releaseMs : 5.,sampleRate) : 0.;
-        if (duckDepth == 0) duckEnvelope = 0;
+        const double duckRelease = runDuck ? pole(duckDepth > 0 ? duckReleaseMs : 5.,sampleRate) : 0.;
+        if (duckDepth == 0) {
+            duckEnvelope=0;
+            duckBandEnvelope.fill(0);
+        }
+        if (!runDuck) {
+            duckBassBands={};duckKickBands={};
+            duckBandMix.reset(s.duckMultiband?1:0);
+        }
+        double displayedDuckReduction=0;
         for (int n = 0; n < samples; ++n) {
             const float dryLeft=bass[0][n],dryRight=channels==2?bass[1][n]:0;
             const double activeMix=globalRamp.next();
@@ -656,8 +686,33 @@ public:
                 const double target = duckDepth * weight * weight * (3 - 2 * weight);
                 duckReduction = follow(duckReduction,target,target>duckReduction?duckAttack:duckRelease);
                 if (duckReduction < 1e-7) duckReduction = 0;
-                const double duckGain = gain(-duckReduction);
-                for (auto& channel : x) channel *= duckGain;
+                const double bandMix=duckBandMix.next();
+                const double duckGain=gain(-duckReduction);
+                displayedDuckReduction=(1-bandMix)*duckReduction;
+                if (bandMix>0) {
+                    const auto left=duckKickBands.split(k[0],0,duckBodyPole,duckPunchPole);
+                    const auto right=duckKickBands.split(k[1],1,duckBodyPole,duckPunchPole);
+                    std::array<double,3> bandGain{};
+                    for (size_t band=0;band<bandGain.size();++band) {
+                        const double peak=std::max(std::abs(left[band]),std::abs(right[band]));
+                        duckBandEnvelope[band]=duckDepth>0?std::max(peak,duckBandEnvelope[band]*duckDetectorRelease):0;
+                        const double level=std::clamp((duckBandEnvelope[band]-.003)/.045,0.,1.);
+                        const double bandTarget=duckDepth*std::clamp(s.duckBands[band],0.,1.)*level*level*(3-2*level);
+                        auto& reduction=duckBandReduction[band];
+                        reduction=follow(reduction,bandTarget,bandTarget>reduction?duckAttack:duckRelease);
+                        if (reduction<1e-7) reduction=0;
+                        bandGain[band]=gain(-reduction);
+                        displayedDuckReduction=std::max(displayedDuckReduction,bandMix*reduction);
+                    }
+                    for (int c=0;c<channels;++c) {
+                        const auto bands=duckBassBands.split(x[c],c,duckBodyPole,duckPunchPole);
+                        const double filtered=x[c]+bands[0]*(bandGain[0]-1)+bands[1]*(bandGain[1]-1)+bands[2]*(bandGain[2]-1);
+                        x[c]+=(1-bandMix)*x[c]*(duckGain-1)+bandMix*(filtered-x[c]);
+                    }
+                } else {
+                    duckBandReduction.fill(0);
+                    for (auto& channel : x) channel*=duckGain;
+                }
             }
             const auto beforeUnmask = x;
             const auto selectedPower = [&](const std::array<double, 2>& signal) {
@@ -768,7 +823,7 @@ public:
             meters.glueReductionDb = glueReduction * glueMix;
             meters.unmaskReductionDb = (s.unmaskDirect?-directCutDb:maxCut) * unmaskMix; // maximum individual band, not total cut
         }
-        meters.duckReductionDb = duckReduction;
+        meters.duckReductionDb = displayedDuckReduction;
         meters.matchGainDb = match ? db(monitorGain.value()) : 0;
         meters.tubeAddedDb=db(std::sqrt(tube.addedPower()));
         meters.peak = outputHeld; meters.kickPeak = kickHeld;
@@ -827,6 +882,10 @@ private:
     int controlCounter = 0;
     bool smoothed = false;
     double duckEnvelope = 0, duckReduction = 0, duckDetectorRelease = 0;
+    double duckBodyPole=0,duckPunchPole=0;
+    DuckBands duckBassBands,duckKickBands;
+    std::array<double,3> duckBandEnvelope{},duckBandReduction{};
+    Ramp duckBandMix;
     SubMono subMono;
     Ramp subMonoMix, dryMonitorGain;
     double subMonoCutoff = 0;

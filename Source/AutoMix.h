@@ -217,6 +217,24 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
         settings.tube.enabled = true; settings.tube.driveDb = 3; settings.tube.amount = .15;
     }
 
+    const auto measureDuckBands=[&]{
+        DuckBands bassBands,kickBands;
+        std::array<double,3> shared{};
+        const double bodyPole=std::exp(-2*pi*110/rate), punchPole=std::exp(-2*pi*800/rate);
+        for (const auto& frame : audio) {
+            const std::array<double,2> b{frame.left,frame.right}, k{frame.kickLeft,frame.kickRight};
+            for(int channel=0;channel<channels;++channel) {
+                const auto bass=bassBands.split(b[channel],channel,bodyPole,punchPole);
+                const auto kick=kickBands.split(k[channel],channel,bodyPole,punchPole);
+                for(size_t band=0;band<shared.size();++band)
+                    shared[band]+=std::min(bass[band]*bass[band],kick[band]*kick[band]);
+            }
+        }
+        const double strongestBand=*std::max_element(shared.begin(),shared.end());
+        for (auto& value : shared)
+            value=strongestBand>0?std::round(100*std::sqrt(value/strongestBand))/100:0;
+        return shared;
+    };
     const auto duck = analyzeDuckTiming(audio,rate);
     result.duckTimingAvailable = duck.amountDb>0;
     if (result.duckTimingAvailable) {
@@ -230,6 +248,13 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
         settings.duckAttackMs=duck.attackMs;
         settings.duckReleaseMs=duck.releaseMs;
         settings.duckSync=false;
+        const auto bands=measureDuckBands();
+        constexpr std::array bandIds{"duck.body","duck.punch","duck.click"};
+        propose("duck.multiband",settings.duckMultiband,1);
+        for (size_t band=0;band<bands.size();++band)
+            propose(bandIds[band],settings.duckBands[band],bands[band]);
+        settings.duckBands=bands;
+        settings.duckMultiband=true;
     }
 
     settings.active = true;

@@ -398,6 +398,10 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
     addKnob("duck.amount","AMOUNT"," dB",false,{},"Maximum Duck attenuation.");
     addKnob("duck.attack","ATTACK"," ms",false,{},"Duck attack in milliseconds.");
     addKnob("duck.release","RELEASE"," ms",false,{},"Duck release in milliseconds.");
+    addSwitch("duck.multiband","MULTIBAND",{},"Process Body, Punch and Click independently.");
+    addKnob("duck.body","","",true,{},"Depth for the kick body band.");
+    addKnob("duck.punch","","",true,{},"Depth for the kick punch band.");
+    addKnob("duck.click","","",true,{},"Depth for the kick click band.");
     addChoice("duck.timing",{"MS","SYNC"},{});
     addChoice("duck.releaseNote",notes,{});
     addChoice("tube.oversampling",{"2X","4X"},{});
@@ -557,8 +561,18 @@ void BassDeamonEditor::layoutMain() {
     place("duck.on",{1084,511,58,25});duckAdvanced.setBounds(1022,733,131,27);
     duckAdvanced.onClick=[this]{showDuckAdvanced=!showDuckAdvanced;refreshDisplayPage();};
     place("duck.amount",{917,628,154,112});
-    place("duck.attack",{813,635,107,100});place("duck.release",{932,635,107,100});
-    place("duck.timing",{1047,638,105,26});place("duck.releaseNote",{932,691,107,29});
+    place("duck.multiband",{808,733,105,27});
+    const auto duckField=[&](const char* id,juce::Rectangle<int> bounds) {
+        auto* knob=static_cast<Knob*>(place(id,bounds));
+        knob->label.setVisible(false);
+        knob->slider.setSliderStyle(juce::Slider::LinearBar);
+        knob->slider.setTextBoxStyle(juce::Slider::TextBoxLeft,false,bounds.getWidth(),24);
+        knob->resized();
+    };
+    duckField("duck.attack",{810,646,103,25});duckField("duck.release",{928,646,103,25});
+    place("duck.releaseNote",{928,646,103,25});place("duck.timing",{1046,646,105,25});
+    duckField("duck.body",{810,703,103,25});duckField("duck.punch",{928,703,103,25});
+    duckField("duck.click",{1046,703,105,25});
 
     place("tube.on",{175,786,58,25});place("tube.audition",{241,786,65,25});
     const auto tubeField=[&](const char* id,int x,int width) {
@@ -582,6 +596,7 @@ void BassDeamonEditor::refreshDisplayPage() {
     const bool scopePage=showScope && !showPhaseAdvanced;
     analyzerTab.setToggleState(analyzerPage,juce::dontSendNotification);
     scopeTab.setToggleState(scopePage,juce::dontSendNotification);
+    processor.phaseScopeEnabled.store(scopePage && phaseScopeButton.getToggleState());
     phaseAdvanced.setToggleState(showPhaseAdvanced,juce::dontSendNotification);
     for (auto* item : std::array<juce::Component*,6>{&spectrumPre,&spectrumPost,&spectrumHold,&analyzerRefresh,&spectrumMin,&spectrumMax})
         item->setVisible(analyzerPage);
@@ -590,7 +605,8 @@ void BassDeamonEditor::refreshDisplayPage() {
     for (auto* item : phaseControls) item->setVisible(showPhaseAdvanced);
     duckAdvanced.setToggleState(showDuckAdvanced,juce::dontSendNotification);
     control("duck.amount")->setVisible(!showDuckAdvanced);
-    control("duck.attack")->setVisible(showDuckAdvanced);
+    for (const char* id : {"duck.attack","duck.multiband","duck.body","duck.punch","duck.click"})
+        control(id)->setVisible(showDuckAdvanced);
     control("duck.timing")->setVisible(showDuckAdvanced);
     const bool sync=processor.parameters.getRawParameterValue("duck.timing")->load()>.5f;
     control("duck.release")->setVisible(showDuckAdvanced && !sync);
@@ -747,8 +763,11 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g) {
     } else if (processor.parameters.getRawParameterValue("unmask.track")->load()>.5f) {
         console::text(g,"FOCUS "+juce::String(focus,1)+" Hz",{566,512,125,22},12,console::muted);
     }
-    if (showDuckAdvanced && processor.parameters.getRawParameterValue("duck.timing")->load()>.5f)
-        console::text(g,"RELEASE",{932,666,107,22},12,console::cream,juce::Justification::centred);
+    if (showDuckAdvanced) {
+        constexpr std::array labels{"ATTACK","RELEASE","RELEASE MODE","BODY","PUNCH","CLICK"};
+        for (size_t i=0;i<labels.size();++i)
+            console::text(g,labels[i],{810.f+118.f*float(i%3),i<3?625.f:681.f,105,20},12,console::muted);
+    }
 
     skin.paintPanel(g,{24,776,1152,44});
     stageTitle(g,Stage::softTube,{39,782,137,31},17);
