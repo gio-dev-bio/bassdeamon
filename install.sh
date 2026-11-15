@@ -42,7 +42,7 @@ stage="$(run /usr/bin/mktemp -d "$destination/.BassDeamon-install.XXXXXX")"
 target="$destination/$plugin"
 
 cleanup() {
-    if [[ -e "$stage/previous" || -L "$stage/previous" ]]; then
+    if run /bin/test -e "$stage/previous" || run /bin/test -L "$stage/previous"; then
         if [[ ! -e "$target" && ! -L "$target" ]]; then
             run /bin/mv "$stage/previous" "$target" || return 1
         fi
