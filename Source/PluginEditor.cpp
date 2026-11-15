@@ -17,6 +17,7 @@ const juce::Colour eqTrace(0xffffde78);
 const juce::Colour unmaskTrace(0xff69f3d2);
 
 enum class Stage { kickEq, glue, phase, softTube, duck, unmask };
+constexpr int advancedButtonWidth=104, advancedButtonHeight=25;
 constexpr std::array stageNames{"KICK EQ","GLUE","PHASE","SATURATION","DUCK","UNMASK"};
 
 void stageTitle(juce::Graphics& g, Stage stage, juce::Rectangle<float> area, float fontSize, bool enabled=true) {
@@ -560,7 +561,7 @@ void BassDeamonEditor::layoutMain() {
     phaseAngle.setNumDecimalPlacesToDisplay(1);
     phaseAngle.setDoubleClickReturnValue(true,0);
     phaseAngle.setScrollWheelEnabled(false);
-    phaseAngle.setBounds(865,455,130,40);
+    phaseAngle.setBounds(865,455,114,40);
     phaseAngle.setTooltip("Phase rotation at the reference frequency. Double-click to reset to zero. Phase must be enabled.");
     face.addAndMakeVisible(phaseAngle);
     phaseAngleAttachment=std::make_unique<State::SliderAttachment>(processor.parameters,"phase.angle",phaseAngle);
@@ -569,8 +570,8 @@ void BassDeamonEditor::layoutMain() {
     };
     phaseAngle.valueFromTextFunction=[](const juce::String& value){return value.getDoubleValue();};
     phaseAngle.updateText();
-    phaseScopeButton.setBounds(998,461,74,25);
-    phaseAdvanced.setBounds(1077,461,89,25);
+    phaseScopeButton.setBounds(985,461,72,25);
+    phaseAdvanced.setBounds(1063,461,advancedButtonWidth,advancedButtonHeight);
     phaseAdvanced.onClick=[this]{showPhaseAdvanced=!showPhaseAdvanced;refreshDisplayPage();face.repaint();};
     const auto compare=phaseScopeButton.onClick;
     phaseScopeButton.onClick=[this,compare]{
@@ -592,7 +593,7 @@ void BassDeamonEditor::layoutMain() {
     place("glue.releaseNote",glueReleaseSlider.getBounds());
 
     place("unmask.on",{1088,511,56,25});
-    place("duck.on",{695,511,58,25});duckAdvanced.setBounds(633,733,131,27);
+    place("duck.on",{695,511,58,25});duckAdvanced.setBounds(660,733,advancedButtonWidth,advancedButtonHeight);
     duckAdvanced.onClick=[this]{showDuckAdvanced=!showDuckAdvanced;refreshDisplayPage();face.repaint();};
     place("duck.amount",{528,628,154,112});
     place("duck.multiband",{419,733,105,27});
@@ -653,7 +654,7 @@ void BassDeamonEditor::layoutUnmask() {
         child->setBounds(bounds);
         return child;
     };
-    unmaskAdvanced.setBounds(1038,733,113,27);
+    unmaskAdvanced.setBounds(1047,733,advancedButtonWidth,advancedButtonHeight);
     unmaskAdvanced.setTooltip("Show UNMASK timing, focus limits and gain settings.");
     unmaskAdvanced.setClickingTogglesState(true);
     unmaskAdvanced.onClick=[this] {
@@ -664,30 +665,30 @@ void BassDeamonEditor::layoutUnmask() {
     };
     face.addAndMakeVisible(unmaskAdvanced);
 
-    attenuationKnob->setBounds(814,624,144,115);
+    attenuationKnob->setBounds(814,627,144,104);
     depthKnob->setBounds(attenuationKnob->getBounds());
-    unmaskWidthKnob->setBounds(989,624,144,115);
-    unmaskChannel=position("unmask.stereoMode",{1037,603,100,25});
+    unmaskWidthKnob->setBounds(989,627,144,104);
+    unmaskChannel=position("unmask.stereoMode",{938,583,102,25});
     unmaskAutoFocus=position("unmask.track",{821,733,102,27});
     frequencyKnob->slider.setSliderStyle(juce::Slider::LinearBar);
     frequencyKnob->slider.setTextBoxStyle(juce::Slider::TextBoxLeft,false,122,24);
     frequencyKnob->label.setVisible(false);
-    frequencyKnob->setBounds(937,539,122,24);
+    frequencyKnob->setBounds(955,510,122,24);
     frequencyKnob->slider.setTooltip("Manual focus frequency in Hz. Available when Auto Focus is off.");
 
     unmaskDelta=position("unmask.delta",{929,733,102,27});
     unmaskAdvancedControls={
-        position("unmask.agc",{818,569,103,26}),
-        position("unmask.agcLock",{929,569,101,26}),
-        position("unmask.timing",{817,632,92,26}),
-        position("unmask.controlDb",{818,669,115,26})
+        position("unmask.agc",{821,543,104,25}),
+        position("unmask.agcLock",{936,543,104,25}),
+        position("unmask.timing",{821,583,102,25}),
+        position("unmask.controlDb",{1047,583,104,25})
     };
-    unmaskAttackKnob->setBounds(922,611,102,105);
-    unmaskReleaseKnob->setBounds(1035,611,102,105);
-    unmaskReleaseNote=position("unmask.releaseNote",{1035,666,102,29});
-    unmaskHoldFocus=position("unmask.hold",{1036,569,94,26});
-    focusMin.setBounds(821,703,87,25);
-    focusMax.setBounds(917,703,87,25);
+    unmaskAttackKnob->setBounds(862,610,120,93);
+    unmaskReleaseKnob->setBounds(1001,610,120,93);
+    unmaskReleaseNote=position("unmask.releaseNote",{1001,649,120,26});
+    unmaskHoldFocus=position("unmask.hold",{1047,543,104,25});
+    focusMin.setBounds(821,733,87,25);
+    focusMax.setBounds(917,733,87,25);
     refreshUnmaskControls();
 }
 
@@ -705,7 +706,7 @@ void BassDeamonEditor::refreshUnmaskControls() {
     frequencyKnob->setVisible(!advanced && !autoFocus);
     unmaskAutoFocus->setVisible(!advanced);
     unmaskChannel->setVisible(advanced);
-    unmaskDelta->setTopLeftPosition(advanced?1038:929,advanced?703:733);
+    unmaskDelta->setTopLeftPosition(advanced?1047:929,advanced?706:733);
     for (auto* control:unmaskAdvancedControls) control->setVisible(advanced);
     unmaskAttackKnob->setVisible(advanced);
     unmaskReleaseKnob->setVisible(advanced && !sync);
@@ -805,7 +806,12 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g) {
         console::text(g,juce::String(processor.glueRelease.load(),1)+" ms",{288,642,82,26},15,console::amber);
     }
     if (showUnmaskAdvanced) {
-        console::text(g,"FOCUS RANGE",{821,684,178,18},12,console::muted);
+        console::text(g,"TIMING",{821,568,102,15},11,console::muted);
+        console::text(g,"CHANNEL",{938,568,102,15},11,console::muted);
+        if (processor.parameters.getRawParameterValue("unmask.timing")->load()>.5f)
+            console::text(g,"RELEASE",{1001,680,120,23},13,console::cream,juce::Justification::centred);
+        if (processor.parameters.getRawParameterValue("unmask.track")->load()>.5f)
+            console::text(g,"FOCUS RANGE",{821,715,183,16},11,console::muted);
     } else if (processor.parameters.getRawParameterValue("unmask.track")->load()>.5f) {
         console::text(g,"FOCUS "+juce::String(focus,1)+" Hz",{955,512,125,22},12,console::muted);
     }

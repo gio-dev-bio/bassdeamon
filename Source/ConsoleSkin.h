@@ -96,6 +96,30 @@ public:
             g.setColour(juce::Colour(0xffc88e55).withAlpha(.23f));
             g.drawHorizontalLine(juce::roundToInt(r.getY()+3),r.getX()+13,r.getRight()-13);
         }
+        // Oxidation and chipped lacquer sit on the perimeter so labels
+        // remain on a dark, even face. The editor caches this background.
+        juce::Random wear(juce::roundToInt(r.getX()*73+r.getY()*131+r.getWidth()));
+        const auto wornEdge=[&](juce::Point<float> origin, bool horizontal, float inward, float length) {
+            const int marks=juce::roundToInt(length/(dark?10.f:5.f));
+            for (int i=0;i<marks;++i) {
+                const float along=8.f+wear.nextFloat()*(length-16.f);
+                const float depth=1.f+wear.nextFloat()*wear.nextFloat()*(dark?4.f:9.f);
+                const float width=1.f+wear.nextFloat()*wear.nextFloat()*8.f;
+                const auto start=origin+(horizontal?juce::Point<float>(along,depth*inward)
+                                                   :juce::Point<float>(depth*inward,along));
+                const auto delta=horizontal?juce::Point<float>(width,.7f*inward)
+                                           :juce::Point<float>(.7f*inward,width);
+                g.setColour(juce::Colour(0xff150c08).withAlpha(.38f+wear.nextFloat()*.30f));
+                g.drawLine(juce::Line<float>(start,start+delta),1.5f);
+                g.setColour(juce::Colour(0xffba8454).withAlpha(.17f+wear.nextFloat()*.52f));
+                const auto lip=horizontal?juce::Point<float>(0,1.f*inward):juce::Point<float>(1.f*inward,0);
+                g.drawLine(juce::Line<float>(start+lip,start+delta+lip),.7f);
+            }
+        };
+        wornEdge(r.getTopLeft(),true,1,r.getWidth());
+        wornEdge(r.getBottomLeft(),true,-1,r.getWidth());
+        wornEdge(r.getTopLeft(),false,1,r.getHeight());
+        wornEdge(r.getTopRight(),false,-1,r.getHeight());
         for (float x:{r.getX()+10,r.getRight()-10})
             for (float y:{r.getY()+10,r.getBottom()-10}) screw(g,x,y);
     }
