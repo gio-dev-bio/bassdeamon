@@ -27,10 +27,10 @@ jobs:
           codesign --force --sign - --timestamp=none "$bundle"
           codesign --verify --strict --verbose=2 "$bundle"
       - name: Capture the actual editor
-        if: matrix.runner == 'macos-26-intel'
+        if: matrix.runner == 'macos-26'
         run: build/plugin_tests_artefacts/Release/plugin_tests --capture "$PWD/GUI-Preview.png"
       - name: Package Universal plugin
-        if: matrix.runner == 'macos-26-intel'
+        if: matrix.runner == 'macos-26'
         run: |
           package="$PWD/BassDeamon-1.0.1-macOS-Universal.zip"
           (cd build/BassDeamon_artefacts/Release/VST3 && zip -Xqr "$package" BassDeamon.vst3)
@@ -42,7 +42,7 @@ jobs:
           lipo "$bundle/Contents/MacOS/BassDeamon" -verify_arch x86_64 arm64
           codesign --verify --strict --verbose=2 "$bundle"
       - name: Test installation and replacement from the extracted ZIP
-        if: matrix.runner == 'macos-26-intel'
+        if: matrix.runner == 'macos-26'
         run: |
           export HOME="$(mktemp -d)"
           bash package-verification/install.sh
@@ -51,7 +51,7 @@ jobs:
           test -x "$installed/Contents/MacOS/BassDeamon"
           codesign --verify --strict "$installed"
       - uses: actions/upload-artifact@v4
-        if: matrix.runner == 'macos-26-intel'
+        if: matrix.runner == 'macos-26'
         with:
           name: BassDeamon-1.0.1-macOS-Universal
           path: |
