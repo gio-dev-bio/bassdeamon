@@ -224,10 +224,12 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
         propose("duck.amount", settings.duckAmountDb, duck.amountDb);
         propose("duck.attack", settings.duckAttackMs, duck.attackMs);
         propose("duck.release", settings.duckReleaseMs, duck.releaseMs);
+        propose("duck.timing", settings.duckSync, 0);
         settings.duck=true;
         settings.duckAmountDb=duck.amountDb;
         settings.duckAttackMs=duck.attackMs;
         settings.duckReleaseMs=duck.releaseMs;
+        settings.duckSync=false;
     }
 
     settings.active = true;

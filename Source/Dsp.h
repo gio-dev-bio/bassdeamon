@@ -31,7 +31,8 @@ enum class UnmaskStereoMode { stereo, mid, side };
 struct Settings {
     bool active = true;
     bool pausePhaseLearn = false;
-    bool duck = false;
+    bool duck = false, duckSync = false;
+    int duckReleaseNote = 2;
     double duckAmountDb = 3, duckAttackMs = 1.5, duckReleaseMs = 65;
     bool subMono = false;
     double subMonoHz = 120, auditionDryDb = 0, auditionWetDb = 0;
@@ -472,7 +473,9 @@ public:
         const double duckDepth = duckEnabled ? std::clamp(s.duckAmountDb,0.,18.) : 0.;
         const bool runDuck = duckDepth > 0 || duckReduction > 0;
         const double duckAttack = runDuck ? pole(std::clamp(s.duckAttackMs,.25,20.),sampleRate) : 0.;
-        const double duckRelease = runDuck ? pole(duckDepth > 0 ? std::clamp(s.duckReleaseMs,20.,350.) : 5.,sampleRate) : 0.;
+        const double releaseMs = s.duckSync ? noteMilliseconds(s.duckReleaseNote,bpm)
+                                            : std::clamp(s.duckReleaseMs,20.,350.);
+        const double duckRelease = runDuck ? pole(duckDepth > 0 ? releaseMs : 5.,sampleRate) : 0.;
         if (duckDepth == 0) duckEnvelope = 0;
         for (int n = 0; n < samples; ++n) {
             const float dryLeft=bass[0][n],dryRight=channels==2?bass[1][n]:0;

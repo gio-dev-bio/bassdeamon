@@ -102,6 +102,7 @@ int interactionTests(){
     ensure(p.undoEdit()&&std::abs(get("unmask.attenuation")-6)<.001,"Attenuation undo failed");
     ensure(p.redoEdit()&&std::abs(get("unmask.attenuation")-11.7f)<.001,"Attenuation redo failed");
     ensure(!editor->compareScopePre,"Scope should default to POST only");ensure(get("view.range")==0,"Spectrum must default 0-1000");
+    editor->scopeTab.onClick();
     ensure(editor->face.getComponentAt(editor->scopeCompareButton.getBounds().getCentre())==&editor->scopeCompareButton,"COMPARE PRE hit target covered");
     const auto stateBeforeScopeCompare=p.parameters.copyState().toXmlString();
     editor->scopeCompareButton.onClick();
@@ -109,6 +110,7 @@ int interactionTests(){
     editor->scopeCompareButton.onClick();
     ensure(!editor->compareScopePre&&!editor->scopeCompareButton.getToggleState(),"COMPARE PRE must restore POST only");
     ensure(p.parameters.copyState().toXmlString()==stateBeforeScopeCompare,"COMPARE PRE changed audio parameters");
+    editor->analyzerTab.onClick();
     ensure(editor->spectrumIsPost(),"Spectrum must default to POST");
     editor->analyzerRefresh.setValue(6.5,juce::sendNotificationAsync);
     visualTick();
@@ -130,14 +132,14 @@ int interactionTests(){
     const auto mainDeltaBounds=editor->unmaskDelta->getBounds();
     ensure(!editor->focusMin.isVisible()&&!editor->unmaskAttackKnob->isVisible(),
            "Advanced controls should be hidden on the main UNMASK page");
-    ensure(editor->unmaskChannel->isVisible()&&!editor->frequencyKnob->isVisible(),
-           "Main UNMASK page should show the channel and hide manual frequency in Auto Focus");
+    ensure(!editor->unmaskChannel->isVisible()&&!editor->frequencyKnob->isVisible(),
+           "Main UNMASK page should keep channel in Advanced and hide manual frequency in Auto Focus");
     showUnmaskAdvanced(true);
     ensure(editor->unmaskDelta->isVisible()&&editor->unmaskDelta->getBounds()!=mainDeltaBounds,
            "DELTA should remain accessible on the Advanced page");
     ensure(editor->focusMin.isVisible()&&editor->focusMax.isVisible()&&editor->unmaskAttackKnob->isVisible(),
            "Auto Focus range and attack are missing from Advanced");
-    ensure(!editor->attenuationKnob->isVisible()&&!editor->unmaskChannel->isVisible(),
+    ensure(!editor->attenuationKnob->isVisible()&&editor->unmaskChannel->isVisible(),
            "Main controls are still visible on Advanced");
     showUnmaskAdvanced(false);
     ensure(p.parameters.copyState().toXmlString()==unmaskPageState,"UNMASK page changed audio parameters");
@@ -177,9 +179,9 @@ int interactionTests(){
     editor->visualPost.fill(-120);editor->visualMaskPost.fill(0);
     ensure(redInSpectrum()==0,"POST collision bands incorrectly use PRE");
     BassDeamonEditor::UserToggle* added=nullptr;
-    for(auto& sw:editor->switches)if(sw->button.getButtonText()=="ADDED ONLY")added=&sw->button;
-    ensure(added!=nullptr,"Missing ADDED ONLY GUI control");
-    ensure(editor->face.getComponentAt(added->getBounds().getCentre())==added,"ADDED ONLY hit target covered");
+    for(auto& sw:editor->switches)if(sw->button.getComponentID()=="tube.audition")added=&sw->button;
+    ensure(added!=nullptr,"Missing Saturation Delta GUI control");
+    ensure(editor->face.getComponentAt(added->getBounds().getCentre())==added,"Saturation Delta hit target covered");
     // Merely opening the GUI must not make automation or state recall turn
     // Tube on, clear DELTA, or produce a different sound from a closed editor.
     set("tube.audition",1);
@@ -243,6 +245,7 @@ int interactionTests(){
     ensure(std::isfinite(p.cpuLoad.getLoadAsPercentage())&&p.cpuLoad.getLoadAsPercentage()>0,"Real callback CPU not measured");
     ensure(editor->cpuLabel.getText().contains("DSP CPU")&&editor->cpuLabel.getText().contains("ANALYZER"),"CPU display missing");
     ensure(output>1,"GUI audition path has no added audio");ensure(p.tubeAddedDb.load()>-50,"GUI added signal meter missing");
+    editor->scopeTab.onClick();
     const auto greenInScope=[&]{
         const auto image=editor->face.createComponentSnapshot({48,editor->scopeCompareButton.getY()+38,1104,75});
         int count=0;
@@ -256,6 +259,7 @@ int interactionTests(){
     ensure(greenInScope()>10,"COMPARE PRE hid the POST waveform");
     editor->scopeCompareButton.onClick();
     ensure(greenInScope()>10,"POST waveform disappeared after disabling the overlay");
+    editor->analyzerTab.onClick();
     const auto frozen=editor->spectrumDisplay.revision;
     editor->spectrumHold.setToggleState(true,juce::dontSendNotification);
     for(int b=0;b<70;++b){buffer.clear();p.processBlock(buffer,midi);visualTick();}
@@ -293,6 +297,7 @@ int interactionTests(){
     ensure(get("unmask.stereoMode")==2&&get("unmask.focusMinHz")==40&&get("unmask.focusMaxHz")==100,"UNMASK mode/range state recall failed");
     set("unmask.stereoMode",0);set("unmask.focusMinHz",30);set("unmask.focusMaxHz",250);
     set("glue.timing",0);set("unmask.delta",0);
+    editor->phaseAdvanced.onClick();
     ensure(editor->face.getComponentAt(editor->learn.getBounds().getCentre())==&editor->learn,"Learn hit target covered");
     const float delayBeforeLearn=get("phase.delay"),invertBeforeLearn=get("phase.invert");
     host.playing=false;

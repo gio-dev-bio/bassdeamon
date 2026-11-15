@@ -41,7 +41,14 @@ private:
     void addChoice(const char*,const juce::StringArray&,juce::Rectangle<int>);
     void paintConsole(juce::Graphics&);
     void paintSpectrum(juce::Graphics&);
+    void layoutMain();
     void layoutUnmask();
+    void refreshDisplayPage();
+    juce::Component* control(const char* id);
+    juce::TextButton analyzerTab{"ANALYZER"}, scopeTab{"SCOPE"};
+    juce::TextButton phaseAdvanced{"ADVANCED"}, duckAdvanced{"ADVANCED"};
+    bool showScope=false, showPhaseAdvanced=false, showDuckAdvanced=false;
+    std::array<juce::Component*,8> phaseControls{};
     void refreshUnmaskControls();
     int paintSpectrumPlot(juce::Graphics&, juce::Rectangle<float>, bool post);
     void paintWave(juce::Graphics&);

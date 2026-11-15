@@ -1,4 +1,4 @@
-BASSDEAMON 0.2.17 — VST3 macOS Universal (Intel e Apple Silicon)
+BASSDEAMON 1.0.0 — VST3 macOS Universal (Intel e Apple Silicon)
 
 1. Chiudi Cubase.
 2. Estrai lo ZIP e, dalla cartella estratta, esegui:
@@ -27,7 +27,7 @@ La GUI mostra:
 - intervallo libero in Hz con FROM / TO, modificabile trascinando o digitando i valori;
 - Scope in sync a 1/4 sulla somma visiva kick+basso POST, con Mono o Stereo, HOLD e COMPARE PRE. MONO CHECK misura il solo basso processato;
 - GLUE: AUTO, MS o SYNC; UNMASK: MS o SYNC. Attack sempre in ms; solo Release in note con SYNC.
-- Soft Tube opzionale prima di UNMASK, spento inizialmente, con oversampling fisso 4x;
+- Soft Tube opzionale prima di UNMASK, spento inizialmente, con oversampling selezionabile 2x o 4x;
 - VU della gain reduction GLUE;
 - AGC indipendente e Lock per ogni modulo;
 - AUTO FOCUS / HOLD FOCUS e focus manuale per UNMASK;

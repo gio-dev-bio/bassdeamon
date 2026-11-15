@@ -3,7 +3,7 @@
 #include <optional>
 
 namespace {
-constexpr std::array<const char*, 61> ids{
+constexpr std::array<const char*, 64> ids{
     "glue.on", "glue.amount", "glue.lock", "phase.on", "phase.invert", "phase.delay",
     "phase.rotate", "phase.frequency", "unmask.on", "unmask.amount", "unmask.delta",
     "glue.agc", "glue.agcLock", "phase.agc", "phase.agcLock", "unmask.agc", "unmask.agcLock",
@@ -12,7 +12,7 @@ constexpr std::array<const char*, 61> ids{
     "tube.on","tube.drive","tube.amount","tube.source","tube.colour","tube.agc","tube.agcLock","tube.audition",
     "glue.timing","glue.attackMs","glue.releaseMs","glue.attackNote","glue.releaseNote",
     "unmask.timing","unmask.attackNote","unmask.releaseNote","view.range","view.hold",
-    "view.spectrum","view.minHz","view.maxHz","unmask.attenuation","unmask.controlDb","unmask.stereoMode","unmask.focusMinHz","unmask.focusMaxHz","kickEq.on","kickEq.frequency","kickEq.cut","subMono.on","subMono.hz","duck.on","duck.amount","duck.attack","duck.release"};
+    "view.spectrum","view.minHz","view.maxHz","unmask.attenuation","unmask.controlDb","unmask.stereoMode","unmask.focusMinHz","unmask.focusMaxHz","kickEq.on","kickEq.frequency","kickEq.cut","subMono.on","subMono.hz","duck.on","duck.amount","duck.attack","duck.release","duck.timing","duck.releaseNote","tube.oversampling"};
 }
 
 BassDeamonProcessor::BassDeamonProcessor()
@@ -103,6 +103,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout BassDeamonProcessor::layout(
     continuous("duck.amount", "Duck amount (dB)", 0, 18, 3);
     continuous("duck.attack", "Duck attack (ms)", .25f, 20, 1.5f);
     continuous("duck.release", "Duck release (ms)", 20, 350, 65);
+    choice("duck.timing","Duck release timing",{"MS","SYNC"},0);
+    choice("duck.releaseNote","Duck release note",notes,2);
+    choice("tube.oversampling","Saturation oversampling",{"2X","4X"},1);
     return p;
 }
 
@@ -154,12 +157,13 @@ bassdeamon::Settings BassDeamonProcessor::readSettings(bool proposal) const noex
     s.subMono = value(55) > .5f; s.subMonoHz = value(56);
     s.duck = value(57) > .5f; s.duckAmountDb = value(58);
     s.duckAttackMs = value(59); s.duckReleaseMs = value(60);
+    s.duckSync=value(61)>.5f; s.duckReleaseNote=int(value(62));
     s.auditionDry = compareDry.load(std::memory_order_relaxed);
     s.matchEnabled = compareMatch.load(std::memory_order_relaxed);
     s.active=value(18)>.5f;
     s.tube.enabled=value(26)>.5f;s.tube.driveDb=value(27);s.tube.amount=value(28);
     s.tube.sourceHz=value(29);s.tube.colour=value(30);s.tube.autoGain=value(31)>.5f;
-    s.tube.gainLock=value(32)>.5f;s.tube.audition=value(33)>.5f;
+    s.tube.gainLock=value(32)>.5f;s.tube.audition=value(33)>.5f; s.tube.oversampling=value(63)>.5f?4:2;
     s.glueTiming=int(value(34));s.glueAttackMs=value(35);s.glueReleaseMs=value(36);
     s.glueAttackNote=int(value(37));s.glueReleaseNote=int(value(38));s.unmaskSync=value(39)>.5f;
     s.unmaskAttackNote=int(value(40));s.unmaskReleaseNote=int(value(41));

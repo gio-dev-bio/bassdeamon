@@ -1,7 +1,7 @@
 name: BassDeamon macOS Universal
 on:
   push:
-    branches: ['build/bassdeamon-0.2.17-universal']
+    branches: ['build/bassdeamon-1.0-universal']
   workflow_dispatch:
 permissions:
   contents: read
@@ -32,7 +32,7 @@ jobs:
       - name: Package Universal plugin
         if: matrix.runner == 'macos-26-intel'
         run: |
-          package="$PWD/BassDeamon-0.2.17-macOS-Universal.zip"
+          package="$PWD/BassDeamon-1.0.0-macOS-Universal.zip"
           (cd build/BassDeamon_artefacts/Release/VST3 && zip -Xqr "$package" BassDeamon.vst3)
           bash -n install.sh
           zip -Xj "$package" INSTALL.txt install.sh
@@ -53,8 +53,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: matrix.runner == 'macos-26-intel'
         with:
-          name: BassDeamon-0.2.17-macOS-Universal
+          name: BassDeamon-1.0.0-macOS-Universal
           path: |
-            BassDeamon-0.2.17-macOS-Universal.zip
+            BassDeamon-1.0.0-macOS-Universal.zip
             GUI-Preview.png
+            GUI-Raw.png
+            GUI-Duck-Raw.png
+            GUI-Phase-AB.png
+            GUI-ScopeComparePre.png
           if-no-files-found: error

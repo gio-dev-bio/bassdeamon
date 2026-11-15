@@ -102,13 +102,16 @@ int captureGui(const juce::File& output){
         gui->spectrumPre.setToggleState(!post,juce::dontSendNotification);
         gui->spectrumPost.setToggleState(post,juce::dontSendNotification);
     };
+    gui->analyzerTab.onClick();
     selectViewForCapture(false);
     if(!save(output.getSiblingFile("GUI-Pre.png")))return 1;
     selectViewForCapture(true);
+    gui->scopeTab.onClick();
     gui->scopeCompareButton.onClick();
     if(!gui->compareScopePre||!gui->scopeCompareButton.getToggleState())return 1;
     if(!save(output.getSiblingFile("GUI-ScopeComparePre.png")))return 1;
     gui->scopeCompareButton.onClick();
+    gui->analyzerTab.onClick();
     for(const char* id:{"glue.timing","unmask.timing"}){
         auto* parameter=p.parameters.getParameter(id);
         parameter->setValueNotifyingHost(1);

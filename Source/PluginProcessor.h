@@ -115,7 +115,7 @@ private:
     std::atomic<unsigned> kickEqGeneration{0};
     unsigned captureGeneration = 0; // published with CaptureState::ready
     float captureStartFrequency = 0;
-    std::array<std::atomic<float>*, 61> raw{};
+    std::array<std::atomic<float>*, 64> raw{};
     std::atomic<bool> learnRequested{false}, resultReady{false};
     std::atomic<float> resultDelay{0};
     std::atomic<bool> resultInvert{false};
@@ -124,7 +124,7 @@ private:
     void pushUnmaskResponse(const bassdeamon::UnmaskResponse&) noexcept;
     juce::AbstractFifo responseFifo{128};
     std::array<bassdeamon::UnmaskResponse, 128> responseFrames{};
-    std::atomic<bool> rawTheme{false};
+    std::atomic<bool> rawTheme{true};
     std::atomic<int> visualSpectrumView{1};
     std::atomic<float> visualAnalyzerHz{8};
     int abSlot = 0; // message-thread only; A/B survives editor close/reopen.
