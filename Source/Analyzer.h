@@ -202,7 +202,9 @@ private:
         return .35875-.48829*std::cos(phase)+.14128*std::cos(2*phase)-.01168*std::cos(3*phase);
     }
     void resetAnalysis() noexcept {
-        count=lastCount=lastFastCount=0;frames={};referenceDb=-120;
+        // Both FFTs read only samples written since count was reset.
+        // Leave the old ring slots alone to avoid a full-size stack temporary.
+        count=lastCount=lastFastCount=0;referenceDb=-120;
         pre.fill(-120);post.fill(-120);kick.fill(-120);maskPre.fill(0);maskPost.fill(0);
         recentPre.fill(0);recentPost.fill(0);
         for(auto& stream:channelLevels)for(auto& channel:stream)channel.fill(-120);
