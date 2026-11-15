@@ -87,7 +87,8 @@ private:
     bassdeamon::BeatScope visibleScope;
     juce::ComboBox scopeChannel;
     juce::TextButton phaseScopeButton{"PHASE A/B"};
-    juce::Slider phaseReference;
+    juce::Slider phaseReference, phaseAngle;
+    std::unique_ptr<State::SliderAttachment> phaseAngleAttachment;
     Knob* rotationKnob=nullptr;
     juce::TextButton scopeCompareButton{"COMPARE PRE"};
     juce::TextButton spectrumPre{"PRE"},spectrumPost{"POST"},spectrumHold{"HOLD"};

@@ -182,7 +182,7 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
     };
     rotationKnob->slider.updateText();
     addSwitch("phase.invert","POLARITY -",{438,654,150,28},"Invert both bass channels together.");
-    addSwitch("phase.rotate","ALL-PASS",{610,654,150,28},"Enable the manual all-pass stage.");
+    addSwitch("phase.rotate","LEGACY AP",{610,654,150,28},"Enable the manual all-pass stage.");
     learn.setBounds(438,688,150,28);face.addAndMakeVisible(learn);learn.onClick=[this]{processor.requestLearn();};
     learn.setTooltip("Analyse four seconds. A reliable result sets delay and polarity and enables PHASE. Uncertain results keep the current settings.");
     depthKnob=&addKnob("unmask.amount","DEPTH","",true,{},"Maximum spectral unmasking amount. The kick is never summed into the bass.");
@@ -389,7 +389,7 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
     phaseReference.setScrollWheelEnabled(false);
     phaseReference.setBounds(623,793,130,21);
     phaseReference.setValue(processor.phaseReferenceHz.load(),juce::dontSendNotification);
-    phaseReference.setTooltip("Reference frequency for rotation and the mono sum comparison. Changing REF alone leaves the filter unchanged.");
+    phaseReference.setTooltip("Reference frequency for the degree dial and the mono sum comparison.");
     phaseReference.onValueChange=[this] {
         processor.phaseReferenceHz.store(float(phaseReference.getValue()));
         rotationKnob->slider.updateText();
@@ -552,8 +552,19 @@ void BassDeamonEditor::layoutMain() {
     kickEqLearn.setBounds(230,461,73,25);kickEqFrequency.setBounds(310,461,85,25);
     kickEqCut.setBounds(402,461,84,25);dryCompare.setBounds(498,461,57,25);
     matchCompare.setBounds(562,461,96,25);
-    place("phase.on",{834,461,60,25});phaseScopeButton.setBounds(906,461,105,25);
-    phaseAdvanced.setBounds(1024,461,126,25);
+    place("phase.on",{812,461,53,25});
+    phaseAngle.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    phaseAngle.setTextBoxStyle(juce::Slider::TextBoxRight,false,64,24);
+    phaseAngle.setTextValueSuffix("°");
+    phaseAngle.setNumDecimalPlacesToDisplay(1);
+    phaseAngle.setDoubleClickReturnValue(true,0);
+    phaseAngle.setScrollWheelEnabled(false);
+    phaseAngle.setBounds(865,455,130,40);
+    phaseAngle.setTooltip("Phase rotation at the reference frequency. Double-click to return to 0°. Phase must be enabled.");
+    face.addAndMakeVisible(phaseAngle);
+    phaseAngleAttachment=std::make_unique<State::SliderAttachment>(processor.parameters,"phase.angle",phaseAngle);
+    phaseScopeButton.setBounds(998,461,74,25);
+    phaseAdvanced.setBounds(1077,461,89,25);
     phaseAdvanced.onClick=[this]{showPhaseAdvanced=!showPhaseAdvanced;refreshDisplayPage();face.repaint();};
     const auto compare=phaseScopeButton.onClick;
     phaseScopeButton.onClick=[this,compare]{
@@ -1069,7 +1080,8 @@ void BassDeamonEditor::paintWave(juce::Graphics& g){
     console::text(g,"OSCILLOSCOPE / KICK + BASS",{47,337,300,20},13,console::cream);
     const juce::Colour postColour(0xff95f4ab);
     const juce::Colour preColour(0xffe9ba78);
-    const bool phaseView=phaseScopeButton.getToggleState();
+    const bool phaseView=phaseScopeButton.getToggleState() &&
+        processor.parameters.getRawParameterValue("phase.on")->load()>.5f;
     const bool phaseMeasured=phaseView && visibleScope.phaseMeasured
         && std::abs(visibleScope.measuredPhaseHz-processor.phaseReferenceHz.load())<.05
         && processor.parameters.getRawParameterValue("phase.on")->load()>.5f
@@ -1079,7 +1091,7 @@ void BassDeamonEditor::paintWave(juce::Graphics& g){
 
     using Scope=bassdeamon::BeatScope;
     const bool mono=scopeChannel.getSelectedId()==2;
-    const juce::Rectangle<float> bezel(42,362,1116,86);
+    const juce::Rectangle<float> bezel(42,362,1116,216);
     const auto glass=bezel.reduced(5,4);
     const auto plot=glass.reduced(10,3).withTrimmedLeft(22);
     g.setColour(juce::Colours::black.withAlpha(.7f));
@@ -1139,7 +1151,10 @@ void BassDeamonEditor::paintWave(juce::Graphics& g){
             g.setColour(colour);
             g.strokePath(line,juce::PathStrokeType(1.3f));
         };
-        if (phaseView && !phaseMeasured) return;
+        if (phaseView && !phaseMeasured) {
+            trace(Scope::postMono,postColour.withAlpha(.65f));
+            return;
+        }
         if (phaseView || compareScopePre) trace(pre,preColour.withAlpha(.72f));
         trace(post,postColour);
     };
@@ -1153,20 +1168,20 @@ void BassDeamonEditor::paintWave(juce::Graphics& g){
         lane(plot.withTrimmedTop(laneHeight+4),"R",Scope::preRight,Scope::postRight);
     }
     if (phaseView && !phaseMeasured)
-        console::text(g,"ENABLE PHASE AND PLAY KICK + BASS",plot,12,postColour.withAlpha(.6f),juce::Justification::centred);
+        console::text(g,"PLAY KICK + BASS TO MEASURE PHASE A/B",plot,12,postColour.withAlpha(.6f),juce::Justification::centred);
     else if (visibleScope.completed==0)
         console::text(g,"WAITING FOR SIGNAL",plot,12,postColour.withAlpha(.55f),juce::Justification::centred);
     if (phaseView && phaseMeasured) {
         const double delta=visibleScope.phaseDelta;
         console::text(g,"MATCHED SUM  "+juce::String(delta>=0?"+":"")+juce::String(delta,1)+" dB @ "+
-            juce::String(processor.phaseReferenceHz.load(),1)+" Hz",{285,451,222,14},11,postColour);
+            juce::String(processor.phaseReferenceHz.load(),1)+" Hz",{285,581,222,14},11,postColour);
     }
     const bool host=processor.tempoFromHost.load();
     console::text(g,"1/4 NOTE / "+juce::String(visibleScope.milliseconds,1)+" ms / "+(host?"PROJECT ":"FALLBACK ")+
-        juce::String(processor.tempo.load(),1)+" BPM",{48,451,230,14},11,console::cream);
+        juce::String(processor.tempo.load(),1)+" BPM",{48,581,230,14},11,console::cream);
     const auto& sub=visibleScope.subMonoCheck;
     if (!phaseView) console::text(g,"SUB FOLD LOSS  "+(sub.active?juce::String(sub.foldLossDb,1)+" dB":juce::String("--")),
-                  {280,451,225,14},11,console::cream,juce::Justification::centredRight);
+                  {280,581,225,14},11,console::cream,juce::Justification::centredRight);
     const auto& check=visibleScope.monoCheck;
     juce::String monoStatus="BASS OUT MONO CHECK";
     const char* severity="NO SIGNAL";
@@ -1187,8 +1202,8 @@ void BassDeamonEditor::paintWave(juce::Graphics& g){
             accent=postColour;
         }
     }
-    console::text(g,monoStatus,{518,451,525,14},11,console::cream,juce::Justification::centredRight);
-    const juce::Rectangle<float> badge(1052,450,100,16);
+    console::text(g,monoStatus,{518,581,525,14},11,console::cream,juce::Justification::centredRight);
+    const juce::Rectangle<float> badge(1052,580,100,16);
     g.setColour(accent.withAlpha(.13f));
     g.fillRoundedRectangle(badge,3);
     g.setColour(accent.withAlpha(.65f));

@@ -48,6 +48,7 @@ struct Settings {
     bool unmaskSync=false;int unmaskAttackNote=0,unmaskReleaseNote=2;
     bool phase = false, invert = false, rotate = false;
     double delayMs = 0.0, rotationHz = 90.0;
+    double phaseAngle=0, phaseReference=60;
     bool unmask = true, delta = false;
     double unmaskAmount = 0.4, outputDb = 0.0;
     bool unmaskDirect=false;double unmaskAttenuationDb=6;
@@ -339,6 +340,7 @@ public:
         cachedRotationHz = -1; cachedAllpassA = 0;
         cutDb.fill(0); kickE.fill(0); bassE.fill(0);directCutDb=0;directMix=0;directFilters={};
         allpassX.fill(0); allpassY.fill(0);
+        angleX={};angleY={};angleMix=0;angleCoefficient=0;
         for (auto& d : delays) d.prepare(sampleRate);
         learner.prepare(sampleRate);tube.prepare(sampleRate);tubeAgc.prepare(sampleRate,5000);
         for (size_t b = 0; b < frequencies.size(); ++b) {
@@ -383,6 +385,7 @@ public:
         for (auto* bank : {&detectorsBass, &detectorsKick, &filters})
             for (auto& band : *bank) for (auto& f : band) f.z1 = f.z2 = 0;
         allpassX.fill(0); allpassY.fill(0);
+        angleX={};angleY={};angleMix=0;angleCoefficient=0;
         duckEnvelope = duckReduction = 0;
         meters.duckReductionDb = 0;
         duckBandMix.reset(0);
@@ -442,6 +445,18 @@ public:
         const double trimTarget = gain(std::clamp(s.outputDb, -24.0, 12.0));
         const double delayTarget = std::clamp(s.delayMs, 0.0, 5.0)*sampleRate/1000;
         const double rotationTarget = std::clamp(s.rotationHz, 20.0, 500.0);
+        const double degrees=std::clamp(s.phaseAngle,-180.,180.);
+        const bool useAngle=degrees!=0;
+        // Two first-order sections give a full circle of phase at the
+        // reference while retaining unity magnitude and no lookahead.
+        double angleTarget=angleCoefficient;
+        if (useAngle) {
+            const double lag=(degrees>0?360-degrees:-degrees)*pi/720;
+            const double t=std::tan(pi*std::clamp(s.phaseReference,30.,130.)/sampleRate)/
+                std::tan(lag);
+            angleTarget=std::clamp((t-1)/(t+1),-.999999,.999999);
+            if (angleMix==0) angleCoefficient=angleTarget;
+        }
         const double glueAmount = std::clamp(s.glueAmount, 0.0, 1.0);
         const double unmaskDepth = std::clamp(s.unmaskMaxCutDb, 3.0, 12.0)*std::clamp(s.unmaskAmount, 0.0, 1.0);
         const double widthOctaves = 0.25 + 1.25 * std::clamp(s.unmaskWidth, 0.0, 1.0);
@@ -651,6 +666,10 @@ public:
                 cachedAllpassA = (t-1)/(t+1); cachedRotationHz = rotationHz;
             }
             const double a = cachedAllpassA;
+            if (useAngle || angleMix>1e-9) {
+                angleMix=follow(angleMix,useAngle?1:0,smoothA);
+                angleCoefficient=follow(angleCoefficient,angleTarget,smoothA);
+            } else angleMix=0;
             if (phaseTap) phaseTap[n].before = float(channels == 2 ? (x[0]+x[1])*.5 : x[0]);
             double phaseReference = 0;
             for (int c = 0; c < channels; ++c) {
@@ -660,7 +679,18 @@ public:
                 phaseReference += ((1-phaseMix)*x[c]*x[c] + phaseMix*d*d) / channels;
                 const double rotated = a*d + allpassX[c] - a*allpassY[c];
                 allpassX[c] = d; allpassY[c] = std::abs(rotated) < 1e-25 ? 0 : rotated;
-                x[c] += phaseMix * ((d + rotationMix*(rotated-d))*polarity - x[c]);
+                double shifted=d+rotationMix*(rotated-d);
+                if (angleMix>0) {
+                    double angleSample=d;
+                    for (size_t stage=0;stage<angleX.size();++stage) {
+                        const double result=angleCoefficient*angleSample+angleX[stage][c]-angleCoefficient*angleY[stage][c];
+                        angleX[stage][c]=angleSample;
+                        angleY[stage][c]=std::abs(result)<1e-25?0:result;
+                        angleSample=result;
+                    }
+                    shifted+=angleMix*(angleSample-shifted);
+                }
+                x[c] += phaseMix * (shifted*polarity - x[c]);
             }
             const double phaseAgc = compensate(1, phaseReference, power(x, channels), phaseMix);
             for (auto& v : x) v *= phaseAgc;
@@ -865,6 +895,8 @@ private:
     SoftTube tube;AutoGain tubeAgc;
     Meters meters;
     std::array<double, 2> allpassX{}, allpassY{};
+    std::array<std::array<double,2>,2> angleX{},angleY{};
+    double angleMix=0,angleCoefficient=0;
     double sampleRate = 48000, bassEnergy = 0, envelope = 0, kickFast = 0, kickSlow = 0;
     double thresholdDb = -24, ratio = 2, attackMs = 20, releaseMs = 180, glueReduction = 0;
     double energyA = 0, rmsA = 0, smoothA = 0, bandA = 0, parameterA = 0;

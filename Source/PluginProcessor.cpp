@@ -3,7 +3,7 @@
 #include <optional>
 
 namespace {
-constexpr std::array<const char*, 68> ids{
+constexpr std::array<const char*, 69> ids{
     "glue.on", "glue.amount", "glue.lock", "phase.on", "phase.invert", "phase.delay",
     "phase.rotate", "phase.frequency", "unmask.on", "unmask.amount", "unmask.delta",
     "glue.agc", "glue.agcLock", "phase.agc", "phase.agcLock", "unmask.agc", "unmask.agcLock",
@@ -12,7 +12,7 @@ constexpr std::array<const char*, 68> ids{
     "tube.on","tube.drive","tube.amount","tube.source","tube.colour","tube.agc","tube.agcLock","tube.audition",
     "glue.timing","glue.attackMs","glue.releaseMs","glue.attackNote","glue.releaseNote",
     "unmask.timing","unmask.attackNote","unmask.releaseNote","view.range","view.hold",
-    "view.spectrum","view.minHz","view.maxHz","unmask.attenuation","unmask.controlDb","unmask.stereoMode","unmask.focusMinHz","unmask.focusMaxHz","kickEq.on","kickEq.frequency","kickEq.cut","subMono.on","subMono.hz","duck.on","duck.amount","duck.attack","duck.release","duck.timing","duck.releaseNote","tube.oversampling","duck.multiband","duck.body","duck.punch","duck.click"};
+    "view.spectrum","view.minHz","view.maxHz","unmask.attenuation","unmask.controlDb","unmask.stereoMode","unmask.focusMinHz","unmask.focusMaxHz","kickEq.on","kickEq.frequency","kickEq.cut","subMono.on","subMono.hz","duck.on","duck.amount","duck.attack","duck.release","duck.timing","duck.releaseNote","tube.oversampling","duck.multiband","duck.body","duck.punch","duck.click","phase.angle"};
 }
 
 BassDeamonProcessor::BassDeamonProcessor()
@@ -111,6 +111,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout BassDeamonProcessor::layout(
     continuous("duck.body","Duck Body amount",0,1,1);
     continuous("duck.punch","Duck Punch amount",0,1,.65f);
     continuous("duck.click","Duck Click amount",0,1,.35f);
+    continuous("phase.angle","Phase angle (degrees)",-180,180,0);
     return p;
 }
 
@@ -144,6 +145,7 @@ bassdeamon::Settings BassDeamonProcessor::readSettings(bool proposal) const noex
     s.glue = value(0) > 0.5f; s.glueAmount = value(1); s.glueLocked = value(2) > 0.5f;
     s.phase = value(3) > 0.5f; s.invert = value(4) > 0.5f; s.delayMs = value(5);
     s.rotate = value(6) > 0.5f; s.rotationHz = value(7);
+    s.phaseAngle=value(68); s.phaseReference=phaseReferenceHz.load(std::memory_order_relaxed);
     s.unmask = value(8) > 0.5f; s.unmaskAmount = value(9); s.delta = value(10) > 0.5f;
     for (size_t i = 0; i < 3; ++i) s.agc[i] = {value(11+2*i) > 0.5f, value(12+2*i) > 0.5f};
     // Canonicalise the declared 0.001 dB grid in double: JUCE's normalised

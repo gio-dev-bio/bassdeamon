@@ -247,7 +247,7 @@ int interactionTests(){
     ensure(output>1,"GUI audition path has no added audio");ensure(p.tubeAddedDb.load()>-50,"GUI added signal meter missing");
     editor->scopeTab.onClick();
     const auto greenInScope=[&]{
-        const auto image=editor->face.createComponentSnapshot({48,editor->scopeCompareButton.getY()+38,1104,75});
+        const auto image=editor->face.createComponentSnapshot({48,editor->scopeCompareButton.getY()+32,1104,201});
         int count=0;
         for(int y=0;y<image.getHeight();++y)for(int x=0;x<image.getWidth();++x){const auto c=image.getPixelAt(x,y);
             if(c.getGreen()>c.getRed()*1.4&&c.getGreen()>c.getBlue()*1.05)++count;

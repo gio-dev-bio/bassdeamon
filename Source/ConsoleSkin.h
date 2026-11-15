@@ -79,10 +79,10 @@ public:
         juce::Path edge;
         edge.addRoundedRectangle(r,6);
         g.reduceClipRegion(edge);
-        g.setGradientFill(juce::ColourGradient(juce::Colour(dark?0xff191712:0xff332921),0,r.getY(),
+        g.setGradientFill(juce::ColourGradient(juce::Colour(dark?0xff191712:0xff292322),0,r.getY(),
             juce::Colour(dark?0xff111210:0xff181615),0,r.getBottom(),false));
         g.fillRect(r);
-        g.setTiledImageFill(steel,juce::roundToInt(r.getX()+r.getWidth()*.17f),juce::roundToInt(r.getY()),dark?.32f:.92f);
+        g.setTiledImageFill(steel,juce::roundToInt(r.getX()+r.getWidth()*.17f),juce::roundToInt(r.getY()),dark?.27f:.86f);
         g.fillRect(r);
         g.setGradientFill(juce::ColourGradient(juce::Colours::white.withAlpha(dark?0.f:.09f),0,r.getY(),
             juce::Colours::black.withAlpha(dark?.38f:.17f),0,r.getBottom(),false));

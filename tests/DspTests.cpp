@@ -155,6 +155,22 @@ int main() {
         auto rotated = tone(96000, 80, 0.3); phase.prepare(48000); s.delayMs = 0; s.rotate = true;
         render(phase, rotated, nullptr, s);
         require(std::abs(rms(rotated,48000)-0.3/std::sqrt(2)) < 1e-5, "All-pass magnitude not unity");
+        for (double angle : {-180.,-90.,0.,45.,90.,180.}) {
+            Settings dial;
+            dial.glue=dial.unmask=false;
+            dial.phase=true;dial.phaseAngle=angle;dial.phaseReference=60;
+            Signal shifted(96000);
+            for (size_t n=0;n<shifted.size();++n) shifted[n]=float(.3*std::sin(2*pi*60*n/48000.));
+            Engine phaseDial;phaseDial.prepare(48000);render(phaseDial,shifted,nullptr,dial);
+            double i=0,q=0;
+            for (size_t n=48000;n<shifted.size();++n) {
+                const auto rad=2*pi*60*n/48000.;
+                i+=shifted[n]*std::sin(rad);q+=shifted[n]*std::cos(rad);
+            }
+            require(std::abs(std::remainder(std::atan2(q,i)*180/pi-angle,360.))<.1,
+                    "Phase dial angle differs from its reference");
+            require(std::abs(std::hypot(i,q)*2/48000-.3)<1e-5,"Phase dial did not preserve sine amplitude");
+        }
         std::cout << "PASS PHASE delay / polarity / all-pass response\n";
 
         // Learn searches a phrase and then stops: no dynamic tracking.
