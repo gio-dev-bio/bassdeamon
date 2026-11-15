@@ -114,8 +114,8 @@ public:
         const auto accent=enabled?amber:muted;
         g.setColour(juce::Colours::black.withAlpha(.7f));
         g.fillEllipse(disc(radius+2).translated(1.5f,3.5f));
-        g.setGradientFill(juce::ColourGradient(juce::Colour(0xffa48f6d),cx,cy-radius,
-            juce::Colour(0xff29221b),cx,cy+radius,false));
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xffb8bab9),cx,cy-radius,
+            juce::Colour(0xff343737),cx,cy+radius,false));
         g.fillEllipse(disc(radius));
         g.setColour(ink);
         g.fillEllipse(disc(radius*.91f));
@@ -138,8 +138,8 @@ public:
         }
 
         const float skirt=radius*.88f;
-        g.setGradientFill(juce::ColourGradient(juce::Colour(0xff63584a),cx,cy-skirt,
-            juce::Colour(0xff211e1a),cx,cy+skirt,false));
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xff7b7e7c),cx,cy-skirt,
+            juce::Colour(0xff2a2c2b),cx,cy+skirt,false));
         g.fillEllipse(disc(skirt));
         if (radius>=24.f) {
             for (int i=0;i<40;++i) {
@@ -154,16 +154,16 @@ public:
             juce::Path clip;
             clip.addEllipse(disc(cap));
             g.reduceClipRegion(clip);
-            g.setGradientFill(juce::ColourGradient(juce::Colour(0xff514b40),cx-cap*.7f,cy-cap,
-                juce::Colour(0xff201e1a),cx+cap*.3f,cy+cap,false));
+            g.setGradientFill(juce::ColourGradient(juce::Colour(0xff777a79),cx-cap*.7f,cy-cap,
+                juce::Colour(0xff3c3e3d),cx+cap*.3f,cy+cap,false));
             g.fillEllipse(disc(cap));
             if (knob.isValid()) {
                 g.setOpacity(enabled?1.f:.6f);
                 g.drawImage(knob,disc(cap));
                 g.setOpacity(1.f);
             }
-            g.setGradientFill(juce::ColourGradient(juce::Colour(0xffffe5bc).withAlpha(.72f),cx,cy-cap,
-                juce::Colour(0xff16110b).withAlpha(.83f),cx,cy+cap,false));
+            g.setGradientFill(juce::ColourGradient(juce::Colour(0xffe6e9e8).withAlpha(.72f),cx,cy-cap,
+                juce::Colour(0xff171919).withAlpha(.83f),cx,cy+cap,false));
             g.drawEllipse(disc(cap-1),1.35f);
         }
         const auto pointerBase=polar(angle,radius*.27f);
@@ -171,7 +171,7 @@ public:
         const float weight=radius>39?4.f:2.8f;
         g.setColour(ink);
         g.drawLine(juce::Line<float>{pointerBase.translated(0,1),pointerTip.translated(0,1)},weight+1.6f);
-        g.setColour(juce::Colour(enabled?0xff211910:0xff494036));
+        g.setColour(juce::Colour(enabled?0xff1c1e1d:0xff3e4240));
         g.drawLine(juce::Line<float>{pointerBase,pointerTip},weight);
     }
     void drawToggleButton(juce::Graphics& g,juce::ToggleButton& b,bool hover,bool down) override {metalToggle(g,b,hover,down);}
