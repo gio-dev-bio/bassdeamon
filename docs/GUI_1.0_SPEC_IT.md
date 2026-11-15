@@ -9,7 +9,7 @@ Decisioni approvate per la GUI e per il percorso audio della prossima versione. 
 - Il kick entra dal sidechain come riferimento di analisi e controllo. La somma Kick + Bass appartiene allo Scope.
 - Duck lavora sul basso già compresso e saturato. L'obiettivo è liberare attacco, punta e corpo del kick con un intervento naturale.
 - Unmask lavora per ultimo sulle sovrapposizioni residue. I processori di uscita eventualmente attivi appartengono alla sezione Output.
-- La riga **Signal Path** mostra l'ordine DSP. I pannelli principali sono disposti da sinistra a destra **Glue, Unmask, Duck**. I numeri dei moduli seguono l'ordine DSP.
+- La riga **Signal Path** mostra l'ordine DSP. I pannelli principali sono disposti da sinistra a destra **Glue, Duck, Unmask**. I numeri dei moduli seguono l'ordine DSP.
 - Verificare l'ordine eseguibile prima della build. Nel sorgente in lavorazione esaminato il guadagno Duck veniva applicato dopo Unmask.
 
 ## Vista principale

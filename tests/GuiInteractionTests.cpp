@@ -121,6 +121,17 @@ int interactionTests(){
     ensure(editor->analyzerRefresh.getValue()==8,"RATE recall did not update slider");
     for(auto* button:{&editor->spectrumPre,&editor->spectrumPost})
         ensure(editor->face.getComponentAt(button->getBounds().getCentre())==button,"Spectrum selector hit target covered");
+    const auto inColumn=[](const juce::Component& component,int x) {
+        const auto bounds=component.getBounds();
+        return bounds.getX()>=x && bounds.getRight()<=x+374;
+    };
+    ensure(inColumn(*editor->control("glue.amount"),24)&&
+           inColumn(*editor->control("duck.amount"),413)&&
+           inColumn(*editor->attenuationKnob,802),"Expected GLUE / DUCK / UNMASK");
+    editor->duckAdvanced.onClick();
+    ensure(editor->control("duck.release")->isVisible()&&
+           inColumn(*editor->control("duck.release"),413),"Advanced DUCK escaped the middle column");
+    editor->duckAdvanced.onClick();
     const auto showUnmaskAdvanced=[&](bool visible){
         editor->unmaskAdvanced.setToggleState(visible,juce::dontSendNotification);
         editor->unmaskAdvanced.onClick();
@@ -137,7 +148,8 @@ int interactionTests(){
     showUnmaskAdvanced(true);
     ensure(editor->unmaskDelta->isVisible()&&editor->unmaskDelta->getBounds()!=mainDeltaBounds,
            "DELTA should remain accessible on the Advanced page");
-    ensure(editor->focusMin.isVisible()&&editor->focusMax.isVisible()&&editor->unmaskAttackKnob->isVisible(),
+    ensure(editor->focusMin.isVisible()&&editor->focusMax.isVisible()&&editor->unmaskAttackKnob->isVisible()&&
+           inColumn(editor->focusMin,802)&&inColumn(*editor->unmaskAttackKnob,802),
            "Auto Focus range and attack are missing from Advanced");
     ensure(!editor->attenuationKnob->isVisible()&&editor->unmaskChannel->isVisible(),
            "Main controls are still visible on Advanced");

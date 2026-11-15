@@ -589,11 +589,11 @@ void BassDeamonEditor::layoutMain() {
     glueAttackSlider.setBounds(198,642,83,26);glueReleaseSlider.setBounds(288,642,82,26);
     place("glue.releaseNote",glueReleaseSlider.getBounds());
 
-    place("unmask.on",{699,511,56,25});
-    place("duck.on",{1084,511,58,25});duckAdvanced.setBounds(1022,733,131,27);
+    place("unmask.on",{1088,511,56,25});
+    place("duck.on",{695,511,58,25});duckAdvanced.setBounds(633,733,131,27);
     duckAdvanced.onClick=[this]{showDuckAdvanced=!showDuckAdvanced;refreshDisplayPage();face.repaint();};
-    place("duck.amount",{917,628,154,112});
-    place("duck.multiband",{808,733,105,27});
+    place("duck.amount",{528,628,154,112});
+    place("duck.multiband",{419,733,105,27});
     const auto duckField=[&](const char* id,juce::Rectangle<int> bounds) {
         auto* knob=static_cast<Knob*>(place(id,bounds));
         knob->label.setVisible(false);
@@ -601,10 +601,10 @@ void BassDeamonEditor::layoutMain() {
         knob->slider.setTextBoxStyle(juce::Slider::TextBoxLeft,false,bounds.getWidth(),24);
         knob->resized();
     };
-    duckField("duck.attack",{810,646,103,25});duckField("duck.release",{928,646,103,25});
-    place("duck.releaseNote",{928,646,103,25});place("duck.timing",{1046,646,105,25});
-    duckField("duck.body",{810,703,103,25});duckField("duck.punch",{928,703,103,25});
-    duckField("duck.click",{1046,703,105,25});
+    duckField("duck.attack",{421,646,103,25});duckField("duck.release",{539,646,103,25});
+    place("duck.releaseNote",{539,646,103,25});place("duck.timing",{657,646,105,25});
+    duckField("duck.body",{421,703,103,25});duckField("duck.punch",{539,703,103,25});
+    duckField("duck.click",{657,703,105,25});
 
     place("tube.on",{175,786,58,25});place("tube.audition",{241,786,65,25});
     const auto tubeField=[&](const char* id,int x,int width) {
@@ -651,7 +651,7 @@ void BassDeamonEditor::layoutUnmask() {
         child->setBounds(bounds);
         return child;
     };
-    unmaskAdvanced.setBounds(649,733,113,27);
+    unmaskAdvanced.setBounds(1038,733,113,27);
     unmaskAdvanced.setTooltip("Show UNMASK timing, focus limits and gain settings.");
     unmaskAdvanced.setClickingTogglesState(true);
     unmaskAdvanced.onClick=[this] {
@@ -662,30 +662,30 @@ void BassDeamonEditor::layoutUnmask() {
     };
     face.addAndMakeVisible(unmaskAdvanced);
 
-    attenuationKnob->setBounds(425,624,144,115);
+    attenuationKnob->setBounds(814,624,144,115);
     depthKnob->setBounds(attenuationKnob->getBounds());
-    unmaskWidthKnob->setBounds(600,624,144,115);
-    unmaskChannel=position("unmask.stereoMode",{648,603,100,25});
-    unmaskAutoFocus=position("unmask.track",{432,733,102,27});
+    unmaskWidthKnob->setBounds(989,624,144,115);
+    unmaskChannel=position("unmask.stereoMode",{1037,603,100,25});
+    unmaskAutoFocus=position("unmask.track",{821,733,102,27});
     frequencyKnob->slider.setSliderStyle(juce::Slider::LinearBar);
     frequencyKnob->slider.setTextBoxStyle(juce::Slider::TextBoxLeft,false,122,24);
     frequencyKnob->label.setVisible(false);
-    frequencyKnob->setBounds(548,539,122,24);
+    frequencyKnob->setBounds(937,539,122,24);
     frequencyKnob->slider.setTooltip("Manual focus frequency in Hz. Available when Auto Focus is off.");
 
-    unmaskDelta=position("unmask.delta",{540,733,102,27});
+    unmaskDelta=position("unmask.delta",{929,733,102,27});
     unmaskAdvancedControls={
-        position("unmask.agc",{429,569,103,26}),
-        position("unmask.agcLock",{540,569,101,26}),
-        position("unmask.timing",{428,632,92,26}),
-        position("unmask.controlDb",{429,669,115,26})
+        position("unmask.agc",{818,569,103,26}),
+        position("unmask.agcLock",{929,569,101,26}),
+        position("unmask.timing",{817,632,92,26}),
+        position("unmask.controlDb",{818,669,115,26})
     };
-    unmaskAttackKnob->setBounds(533,611,102,105);
-    unmaskReleaseKnob->setBounds(646,611,102,105);
-    unmaskReleaseNote=position("unmask.releaseNote",{646,666,102,29});
-    unmaskHoldFocus=position("unmask.hold",{647,569,94,26});
-    focusMin.setBounds(432,703,87,25);
-    focusMax.setBounds(528,703,87,25);
+    unmaskAttackKnob->setBounds(922,611,102,105);
+    unmaskReleaseKnob->setBounds(1035,611,102,105);
+    unmaskReleaseNote=position("unmask.releaseNote",{1035,666,102,29});
+    unmaskHoldFocus=position("unmask.hold",{1036,569,94,26});
+    focusMin.setBounds(821,703,87,25);
+    focusMax.setBounds(917,703,87,25);
     refreshUnmaskControls();
 }
 
@@ -703,7 +703,7 @@ void BassDeamonEditor::refreshUnmaskControls() {
     frequencyKnob->setVisible(!advanced && !autoFocus);
     unmaskAutoFocus->setVisible(!advanced);
     unmaskChannel->setVisible(advanced);
-    unmaskDelta->setTopLeftPosition(advanced?649:540,advanced?703:733);
+    unmaskDelta->setTopLeftPosition(advanced?1038:929,advanced?703:733);
     for (auto* control:unmaskAdvancedControls) control->setVisible(advanced);
     unmaskAttackKnob->setVisible(advanced);
     unmaskReleaseKnob->setVisible(advanced && !sync);
@@ -786,15 +786,15 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g) {
             :eq==2?juce::String("NO RELIABLE PEAK"):eq==4?juce::String("NO KICK SIDECHAIN"):juce::String("PRESS PLAY");
         console::text(g,status,{382,429,210,17},12,console::amber);
     }
-    constexpr std::array stages{Stage::glue,Stage::unmask,Stage::duck};
+    constexpr std::array stages{Stage::glue,Stage::duck,Stage::unmask};
     for (size_t index=0;index<stages.size();++index) {
         const float x=24+float(index)*389;
         stageTitle(g,stages[index],{x+18,509,152,27},20);
     }
     const bool raw=skin.isRaw();
     paintReductionMeter(g,203.5f,542,glueGr,20,raw);
-    if (!showUnmaskAdvanced) paintReductionMeter(g,592.5f,542,processor.unmaskReduction.load(),24,raw);
-    paintReductionMeter(g,981.5f,542,processor.duckReduction.load(),18,raw);
+    paintReductionMeter(g,592.5f,542,processor.duckReduction.load(),18,raw);
+    if (!showUnmaskAdvanced) paintReductionMeter(g,981.5f,542,processor.unmaskReduction.load(),24,raw);
     console::text(g,"ATTACK",{198,622,82,19},12,console::muted);
     console::text(g,"RELEASE",{288,622,82,19},12,console::muted);
     const int timing=int(processor.parameters.getRawParameterValue("glue.timing")->load());
@@ -803,14 +803,14 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g) {
         console::text(g,juce::String(processor.glueRelease.load(),1)+" ms",{288,642,82,26},15,console::amber);
     }
     if (showUnmaskAdvanced) {
-        console::text(g,"FOCUS RANGE",{432,684,178,18},12,console::muted);
+        console::text(g,"FOCUS RANGE",{821,684,178,18},12,console::muted);
     } else if (processor.parameters.getRawParameterValue("unmask.track")->load()>.5f) {
-        console::text(g,"FOCUS "+juce::String(focus,1)+" Hz",{566,512,125,22},12,console::muted);
+        console::text(g,"FOCUS "+juce::String(focus,1)+" Hz",{955,512,125,22},12,console::muted);
     }
     if (showDuckAdvanced) {
         constexpr std::array labels{"ATTACK","RELEASE","RELEASE MODE","BODY","PUNCH","CLICK"};
         for (size_t i=0;i<labels.size();++i)
-            console::text(g,labels[i],{810.f+118.f*float(i%3),i<3?625.f:681.f,105,20},12,console::muted);
+            console::text(g,labels[i],{421.f+118.f*float(i%3),i<3?625.f:681.f,105,20},12,console::muted);
     }
 
     stageTitle(g,Stage::softTube,{39,782,137,31},17);
