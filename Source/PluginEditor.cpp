@@ -36,21 +36,21 @@ void stageTitle(juce::Graphics& g, Stage stage, juce::Rectangle<float> area, flo
 
 void paintReductionMeter(juce::Graphics& g,float x,float y,float reduction,int fullScale,bool raw) {
     juce::Graphics::ScopedSaveState position(g);
-    const float width=raw?280.f:187.f;
-    const juce::Rectangle<float> meter(x-width*.5f,y,width,80);
+    const float width=raw?192.f:187.f;
+    const juce::Rectangle<float> meter(x-width*.5f,y,width,raw?68.f:80.f);
     if (raw) {
         const auto bezel=meter.expanded(4);
         g.setColour(juce::Colour(0xff110b08));
         g.fillRoundedRectangle(bezel,6);
-        g.setGradientFill(juce::ColourGradient(juce::Colour(0xffad7b4d),bezel.getX(),bezel.getY(),
-            juce::Colour(0xff482716),bezel.getRight(),bezel.getBottom(),false));
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xff75614e),bezel.getX(),bezel.getY(),
+            juce::Colour(0xff302720),bezel.getRight(),bezel.getBottom(),false));
         g.drawRoundedRectangle(bezel.reduced(1),5,2);
     }
     g.setColour(console::ink);
     g.fillRoundedRectangle(meter,4);
     const auto dial=meter.reduced(2);
-    const auto dialTop=juce::Colour(raw?0xfff9cb78:0xffedcb88);
-    const auto dialBottom=juce::Colour(raw?0xffad692d:0xffb8874d);
+    const auto dialTop=juce::Colour(raw?0xffeac98a:0xffedcb88);
+    const auto dialBottom=juce::Colour(raw?0xffac7948:0xffb8874d);
     g.setGradientFill(juce::ColourGradient(dialTop,0,dial.getY(),dialBottom,0,dial.getBottom(),false));
     g.fillRoundedRectangle(dial,3);
     juce::Graphics::ScopedSaveState meterClip(g);
@@ -86,8 +86,9 @@ void paintReductionMeter(juce::Graphics& g,float x,float y,float reduction,int f
     g.setColour(console::ink.withAlpha(.9f));
     g.fillEllipse(pivot.x-3.5f,pivot.y-3.5f,7.f,7.f);
     if (!raw) console::text(g,"GAIN REDUCTION",{meter.getX()+8,y+55,104,18},12,console::ink);
+    const float readoutY=y+(raw?46.f:55.f);
     const float displayedDb=reduction>=.05f?-reduction:0.f;
-    console::text(g,juce::String(displayedDb,1)+" dB",{meter.getRight()-70,y+55,61,18},12,console::ink,
+    console::text(g,juce::String(displayedDb,1)+" dB",{meter.getRight()-70,readoutY,61,18},12,console::ink,
                   juce::Justification::centredRight);
 }
 
@@ -571,6 +572,7 @@ void BassDeamonEditor::layoutMain() {
     phaseAngle.valueFromTextFunction=[](const juce::String& value){return value.getDoubleValue();};
     phaseAngle.updateText();
     phaseScopeButton.setBounds(985,461,72,25);
+    phaseAdvanced.setComponentID("view-mode");
     phaseAdvanced.setBounds(1063,461,advancedButtonWidth,advancedButtonHeight);
     phaseAdvanced.onClick=[this]{showPhaseAdvanced=!showPhaseAdvanced;refreshDisplayPage();face.repaint();};
     const auto compare=phaseScopeButton.onClick;
@@ -587,15 +589,16 @@ void BassDeamonEditor::layoutMain() {
     phaseReference.setBounds(855,219,133,26);learn.setBounds(855,255,175,29);
 
     place("glue.on",{313,511,55,25});place("glue.timing",{190,511,110,25});
-    place("glue.amount",{49,628,144,119});place("glue.agc",{194,713,85,24});
+    place("glue.amount",{93,628,144,112});place("glue.agc",{194,713,85,24});
     place("glue.agcLock",{284,713,85,24});place("glue.lock",{194,742,175,24});
-    glueAttackSlider.setBounds(198,642,83,26);glueReleaseSlider.setBounds(288,642,82,26);
+    glueAttackSlider.setBounds(266,597,100,26);glueReleaseSlider.setBounds(266,655,100,26);
     place("glue.releaseNote",glueReleaseSlider.getBounds());
 
     place("unmask.on",{1088,511,56,25});
     place("duck.on",{695,511,58,25});duckAdvanced.setBounds(660,733,advancedButtonWidth,advancedButtonHeight);
+    duckAdvanced.setComponentID("view-mode");
     duckAdvanced.onClick=[this]{showDuckAdvanced=!showDuckAdvanced;refreshDisplayPage();face.repaint();};
-    place("duck.amount",{528,628,154,112});
+    place("duck.amount",{520,628,144,112});
     place("duck.multiband",{419,733,105,27});
     const auto duckField=[&](const char* id,juce::Rectangle<int> bounds) {
         auto* knob=static_cast<Knob*>(place(id,bounds));
@@ -654,12 +657,13 @@ void BassDeamonEditor::layoutUnmask() {
         child->setBounds(bounds);
         return child;
     };
+    unmaskAdvanced.setComponentID("view-mode");
     unmaskAdvanced.setBounds(1047,733,advancedButtonWidth,advancedButtonHeight);
     unmaskAdvanced.setTooltip("Show UNMASK timing, focus limits and gain settings.");
     unmaskAdvanced.setClickingTogglesState(true);
     unmaskAdvanced.onClick=[this] {
         showUnmaskAdvanced=unmaskAdvanced.getToggleState();
-        unmaskAdvanced.setButtonText(showUnmaskAdvanced?"MAIN":"ADVANCED");
+        unmaskAdvanced.setButtonText(showUnmaskAdvanced?"Advanced view":"Main view");
         refreshUnmaskControls();
         face.repaint();
     };
@@ -795,23 +799,25 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g) {
         stageTitle(g,stages[index],{x+18,509,152,27},20);
     }
     const bool raw=skin.isRaw();
-    paintReductionMeter(g,203.5f,542,glueGr,20,raw);
+    paintReductionMeter(g,165.f,542,glueGr,20,raw);
     paintReductionMeter(g,592.5f,542,processor.duckReduction.load(),18,raw);
     if (!showUnmaskAdvanced) paintReductionMeter(g,981.5f,542,processor.unmaskReduction.load(),24,raw);
-    console::text(g,"ATTACK",{198,622,82,19},12,console::muted);
-    console::text(g,"RELEASE",{288,622,82,19},12,console::muted);
+    console::text(g,"ATTACK",{266,577,100,19},12,console::muted);
+    console::text(g,"RELEASE",{266,635,100,19},12,console::muted);
     const int timing=int(processor.parameters.getRawParameterValue("glue.timing")->load());
     if (timing==0) {
-        console::text(g,juce::String(processor.glueAttack.load(),1)+" ms",{198,642,82,26},15,console::amber);
-        console::text(g,juce::String(processor.glueRelease.load(),1)+" ms",{288,642,82,26},15,console::amber);
+        console::text(g,juce::String(processor.glueAttack.load(),1)+" ms",{266,597,100,26},15,console::amber);
+        console::text(g,juce::String(processor.glueRelease.load(),1)+" ms",{266,655,100,26},15,console::amber);
     }
     if (showUnmaskAdvanced) {
         console::text(g,"TIMING",{821,568,102,15},11,console::muted);
         console::text(g,"CHANNEL",{938,568,102,15},11,console::muted);
         if (processor.parameters.getRawParameterValue("unmask.timing")->load()>.5f)
             console::text(g,"RELEASE",{1001,680,120,23},13,console::cream,juce::Justification::centred);
-        if (processor.parameters.getRawParameterValue("unmask.track")->load()>.5f)
-            console::text(g,"FOCUS RANGE",{821,715,183,16},11,console::muted);
+        if (processor.parameters.getRawParameterValue("unmask.track")->load()>.5f) {
+            console::text(g,"FOCUS MIN",{821,715,87,16},11,console::muted);
+            console::text(g,"FOCUS MAX",{917,715,87,16},11,console::muted);
+        }
     } else if (processor.parameters.getRawParameterValue("unmask.track")->load()>.5f) {
         console::text(g,"FOCUS "+juce::String(focus,1)+" Hz",{955,512,125,22},12,console::muted);
     }

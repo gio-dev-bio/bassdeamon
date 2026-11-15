@@ -79,21 +79,21 @@ public:
         juce::Path edge;
         edge.addRoundedRectangle(r,6);
         g.reduceClipRegion(edge);
-        g.setGradientFill(juce::ColourGradient(juce::Colour(dark?0xff191712:0xff292322),0,r.getY(),
-            juce::Colour(dark?0xff111210:0xff181615),0,r.getBottom(),false));
+        g.setGradientFill(juce::ColourGradient(juce::Colour(dark?0xff191712:0xff474744),0,r.getY(),
+            juce::Colour(dark?0xff111210:0xff2d2e2d),0,r.getBottom(),false));
         g.fillRect(r);
-        g.setTiledImageFill(steel,juce::roundToInt(r.getX()+r.getWidth()*.17f),juce::roundToInt(r.getY()),dark?.27f:.86f);
+        g.setTiledImageFill(steel,juce::roundToInt(r.getX()+r.getWidth()*.17f),juce::roundToInt(r.getY()),dark?.27f:.32f);
         g.fillRect(r);
         g.setGradientFill(juce::ColourGradient(juce::Colours::white.withAlpha(dark?0.f:.09f),0,r.getY(),
             juce::Colours::black.withAlpha(dark?.38f:.17f),0,r.getBottom(),false));
         g.fillRect(r);
-        g.setGradientFill(juce::ColourGradient(juce::Colour(0xffa97446),r.getX(),r.getY(),
-            juce::Colour(0xff402619),r.getRight(),r.getBottom(),false));
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xff96958d),r.getX(),r.getY(),
+            juce::Colour(0xff414340),r.getRight(),r.getBottom(),false));
         g.drawRoundedRectangle(r.reduced(1),5,2);
         g.setColour(juce::Colours::black.withAlpha(.76f));
         g.drawRoundedRectangle(r.reduced(3),4,1);
         if (!dark) {
-            g.setColour(juce::Colour(0xffc88e55).withAlpha(.23f));
+            g.setColour(juce::Colour(0xffa9aaa1).withAlpha(.23f));
             g.drawHorizontalLine(juce::roundToInt(r.getY()+3),r.getX()+13,r.getRight()-13);
         }
         // Oxidation and chipped lacquer sit on the perimeter so labels
@@ -111,7 +111,7 @@ public:
                                            :juce::Point<float>(.7f*inward,width);
                 g.setColour(juce::Colour(0xff150c08).withAlpha(.38f+wear.nextFloat()*.30f));
                 g.drawLine(juce::Line<float>(start,start+delta),1.5f);
-                g.setColour(juce::Colour(0xffba8454).withAlpha(.17f+wear.nextFloat()*.52f));
+                g.setColour(juce::Colour(0xff9b8672).withAlpha(.17f+wear.nextFloat()*.52f));
                 const auto lip=horizontal?juce::Point<float>(0,1.f*inward):juce::Point<float>(1.f*inward,0);
                 g.drawLine(juce::Line<float>(start+lip,start+delta+lip),.7f);
             }
@@ -199,7 +199,10 @@ public:
         g.drawLine(juce::Line<float>{pointerBase,pointerTip},weight);
     }
     void drawToggleButton(juce::Graphics& g,juce::ToggleButton& b,bool hover,bool down) override {metalToggle(g,b,hover,down);}
-    void drawButtonBackground(juce::Graphics& g,juce::Button& b,const juce::Colour&,bool hover,bool down) override {button(g,b,hover,down,b.getToggleState());}
+    void drawButtonBackground(juce::Graphics& g,juce::Button& b,const juce::Colour&,bool hover,bool down) override {
+        if (b.getComponentID()=="view-mode") metalToggle(g,b,hover,down,true);
+        else button(g,b,hover,down,b.getToggleState());
+    }
     void drawButtonText(juce::Graphics&,juce::TextButton&,bool,bool) override {}
     void drawComboBox(juce::Graphics& g,int w,int h,bool,int,int,int,int,juce::ComboBox&) override {
         auto r=juce::Rectangle<float>(0,0,static_cast<float>(w),static_cast<float>(h)).reduced(1);
@@ -213,7 +216,7 @@ private:
     bool raw=false;
     juce::Image steel,knob;
     // Mechanical steel toggle: purely visual, JUCE ButtonAttachment and accessibility unchanged.
-    void metalToggle(juce::Graphics& g, juce::ToggleButton& b, bool hover, bool down) const {
+    void metalToggle(juce::Graphics& g, juce::Button& b, bool hover, bool down, bool viewMode=false) const {
         const auto r=b.getLocalBounds().toFloat().reduced(1.0f);
         if (r.getWidth()<33.0f || r.getHeight()<14.0f) {
             button(g,b,hover,down,b.getToggleState());
@@ -221,7 +224,7 @@ private:
         }
         const bool on=b.getToggleState();
         const float radius=juce::jlimit(5.0f,13.0f,r.getHeight()*0.38f);
-        const float cx=r.getRight()-radius-5.0f;
+        const float cx=viewMode?r.getCentreX():r.getRight()-radius-5.0f;
         const float cy=r.getCentreY();
         const float shaftLength=juce::jlimit(3.0f,8.0f,r.getHeight()*(raw?.34f:.25f));
         g.setColour(juce::Colours::black.withAlpha(0.66f));
@@ -241,17 +244,23 @@ private:
         g.setColour(juce::Colour(0xfff2e5cb));
         g.fillEllipse(sx-2.6f,sy-2.6f,5.2f,5.2f);
         const float lampX=cx-radius*1.8f;
-        if (r.getWidth()>62.0f) {
+        if (!viewMode && r.getWidth()>62.0f) {
             g.setColour(on?amber:juce::Colour(0xff40362c));
             g.fillEllipse(lampX-2.4f,cy-2.4f,4.8f,4.8f);
             if (on) {g.setColour(amber.withAlpha(.16f));g.fillEllipse(lampX-5,cy-5,10,10);}
         }
-        const auto labelArea=juce::Rectangle<float>(r.getX()+3,r.getY(),juce::jmax(1.0f,(r.getWidth()>62.f?lampX-9:cx-radius-3)-r.getX()),r.getHeight());
-        g.setColour(b.isEnabled()?cream:muted.withAlpha(.5f));
-        g.setFont(font(r.getHeight()<25?11.0f:12.5f,true));
-        const auto label=b.getButtonText()=="ON" || b.getButtonText()=="OFF"
-            ? juce::String(on?"ON":"OFF") : b.getButtonText();
-        g.drawFittedText(label,labelArea.toNearestInt(),juce::Justification::centred,1);
+        if (viewMode) {
+            const auto labelWidth=r.getWidth()*.5f-radius-3;
+            text(g,"MAIN",r.withWidth(labelWidth),11,on?muted:cream,juce::Justification::centred);
+            text(g,"ADV",r.withX(cx+radius+3).withWidth(labelWidth),11,on?cream:muted,juce::Justification::centred);
+        } else {
+            const auto labelArea=juce::Rectangle<float>(r.getX()+3,r.getY(),juce::jmax(1.0f,(r.getWidth()>62.f?lampX-9:cx-radius-3)-r.getX()),r.getHeight());
+            g.setColour(b.isEnabled()?cream:muted.withAlpha(.5f));
+            g.setFont(font(r.getHeight()<25?11.0f:12.5f,true));
+            const auto label=b.getButtonText()=="ON" || b.getButtonText()=="OFF"
+                ? juce::String(on?"ON":"OFF") : b.getButtonText();
+            g.drawFittedText(label,labelArea.toNearestInt(),juce::Justification::centred,1);
+        }
         if (hover && b.isEnabled()) {
             g.setColour(cream.withAlpha(.15f));
             g.drawEllipse(cx-radius-2,cy-radius-2,2*radius+4,2*radius+4,1.0f);
