@@ -16,9 +16,74 @@ struct AutoMixResult {
     std::vector<Change> changes;
     StereoPhaseReport mono;
     double dryGainDb = 0, wetGainDb = 0, overlapBefore = 0, overlapAfter = 0;
+    bool duckTimingAvailable = false;
     bool unsupportedLength = false, analysisFailed = false;
     bool hasKick = false, hasBass = false, reliableKick = false, reliablePhase = false, overlapValid = false;
 };
+
+struct DuckTiming {
+    double amountDb = 0, attackMs = 0, releaseMs = 0;
+};
+
+inline DuckTiming analyzeDuckTiming(const std::vector<AutoMixFrame>& audio, double rate) {
+    // Short RMS bins track the kick body and bass onsets without phase cancellation.
+    struct Energy { double bass = 0, kick = 0; };
+    const size_t hop = std::max<size_t>(1, size_t(std::round(rate*.004)));
+    const double binMs = 1000.*hop/rate;
+    std::vector<Energy> bins(audio.size()/hop);
+    double kickPeak = 0, bassPeak = 0;
+    for (size_t i=0; i<bins.size(); ++i) {
+        auto& energy=bins[i];
+        for (size_t n=i*hop; n<(i+1)*hop; ++n) {
+            const auto& f=audio[n];
+            energy.bass += double(f.left)*f.left + double(f.right)*f.right;
+            energy.kick += double(f.kickLeft)*f.kickLeft + double(f.kickRight)*f.kickRight;
+        }
+        energy.bass=std::sqrt(energy.bass/(2.*hop));
+        energy.kick=std::sqrt(energy.kick/(2.*hop));
+        bassPeak=std::max(bassPeak,energy.bass);
+        kickPeak=std::max(kickPeak,energy.kick);
+    }
+    const double kickGate=std::max(.008,kickPeak*.12), bassGate=std::max(.004,bassPeak*.10);
+    const size_t minHitGap=size_t(std::ceil(100/binMs));
+    const size_t maxBody=size_t(std::ceil(160/binMs));
+    const size_t maxSearch=size_t(std::ceil(300/binMs));
+    std::vector<double> releases, depths, attacks;
+    for (size_t start=2; start+maxSearch+2<bins.size(); ++start) {
+        if (bins[start].kick<kickGate || bins[start-1].kick>=kickGate || bins[start-2].kick>=kickGate) continue;
+        size_t last=start, peak=start;
+        for (size_t i=start; i<start+maxBody; ++i) {
+            if (i>last+2) break;
+            if (i>last && bins[i].kick>=kickGate) last=i;
+            if (bins[i].kick>bins[peak].kick) peak=i;
+        }
+        double activeBass=0;
+        size_t next=start+maxSearch;
+        for (size_t i=start; i<=last; ++i) activeBass=std::max(activeBass,bins[i].bass);
+        for (size_t i=start+3; i<start+maxSearch; ++i) {
+            if (i>last && bins[i].kick>=kickGate && bins[i-1].kick<kickGate) {next=i; break;}
+            // A sustained rise after a local dip indicates an audible new note.
+            const double prior=std::max({bins[i-1].bass,bins[i-2].bass,bins[i-3].bass});
+            if (bins[i].bass>=bassGate && bins[i+1].bass>=bassGate &&
+                std::min(bins[i].bass,bins[i+1].bass)>std::max(2.4*prior,bassPeak*.19)) {next=i; break;}
+        }
+        if (activeBass>=bassGate && last>start) {
+            const double body=(last-start+1)*binMs;
+            const double gap=(next-start)*binMs;
+            const double room=std::max(0.,gap-body-18.);
+            releases.push_back(std::round(std::clamp(std::min(30.+.8*body,room/1.5),20.,120.)));
+            depths.push_back(std::clamp(1.5+2.*activeBass/std::max(.02,bins[peak].kick),1.5,4.));
+            attacks.push_back(peak-start<=1?1.:1.5);
+        }
+        start=std::max(last,start+minHitGap-1);
+    }
+    if (releases.size()<2) return {};
+    const auto median=[](std::vector<double>& values) {
+        std::sort(values.begin(),values.end());
+        return values[(values.size()-1)/2];
+    };
+    return {std::round(median(depths)*10)/10,median(attacks),median(releases)};
+}
 
 inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, double rate,
                                    double bpm, int channels, Settings settings,
@@ -150,6 +215,19 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
         propose("tube.drive", settings.tube.driveDb, 3);
         propose("tube.amount", settings.tube.amount, .15);
         settings.tube.enabled = true; settings.tube.driveDb = 3; settings.tube.amount = .15;
+    }
+
+    const auto duck = analyzeDuckTiming(audio,rate);
+    result.duckTimingAvailable = duck.amountDb>0;
+    if (result.duckTimingAvailable) {
+        propose("duck.on", settings.duck, 1);
+        propose("duck.amount", settings.duckAmountDb, duck.amountDb);
+        propose("duck.attack", settings.duckAttackMs, duck.attackMs);
+        propose("duck.release", settings.duckReleaseMs, duck.releaseMs);
+        settings.duck=true;
+        settings.duckAmountDb=duck.amountDb;
+        settings.duckAttackMs=duck.attackMs;
+        settings.duckReleaseMs=duck.releaseMs;
     }
 
     settings.active = true;

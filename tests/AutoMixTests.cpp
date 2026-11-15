@@ -3,6 +3,7 @@
 #include "RealtimeAllocation.h"
 #include <iostream>
 #include <stdexcept>
+#include <string_view>
 
 using namespace bassdeamon;
 
@@ -25,6 +26,23 @@ int main() {
     require(!proposal.changes.empty() && proposal.overlapValid, "Missing Auto Mix proposal");
     require(proposal.overlapAfter < proposal.overlapBefore, "Proposal should reduce overlap");
     require(proposal.dryGainDb == 0 || proposal.wetGainDb == 0, "Match boosted the quieter version");
+    require(proposal.duckTimingAvailable, "Auto Mix did not include Duck");
+    for (const char* id : {"duck.on", "duck.attack", "duck.amount", "duck.release"})
+        require(std::any_of(proposal.changes.begin(),proposal.changes.end(),[id](const auto& change) {
+            return std::string_view(change.parameter)==id;
+        }), "A Duck parameter was missing from the proposal");
+    const double slowRelease = analyzeDuckTiming(audio,sr).releaseMs;
+    auto fastNotes=audio;
+    for (size_t n=0; n<fastNotes.size(); ++n) {
+        auto& f=fastNotes[n];
+        const double hit=std::fmod(n/sr,.5);
+        if (hit>=.088 && hit<.125) f.left=f.right=0;
+    }
+    const auto fastTiming=analyzeDuckTiming(fastNotes,sr);
+    require(fastTiming.releaseMs>=20 && fastTiming.releaseMs<slowRelease,
+            "Duck did not shorten release before an audible bass onset");
+    std::cout<<"PASS Auto Mix Duck release "<<slowRelease<<" ms for sustained bass, "
+             <<fastTiming.releaseMs<<" ms before the next note\n";
     for (auto& f : audio) { f.kickLeft = f.kickRight = 0; f.right = -f.left; }
     const auto missing = analyzeAutoMix(audio, sr, 120, 2, settings);
     require(missing.hasBass && !missing.hasKick && missing.changes.empty(), "Missing sidechain changed settings");

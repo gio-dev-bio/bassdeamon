@@ -1,0 +1,50 @@
+name: BassDeamon macOS Universal
+on:
+  push:
+    branches: ['build/bassdeamon-0.2.17-universal']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-26-intel, macos-26]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure Universal VST3
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release '-DCMAKE_OSX_ARCHITECTURES=x86_64;arm64' -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+      - run: cmake --build build --config Release --parallel 2
+      - run: ctest --test-dir build -C Release --output-on-failure
+      - name: Verify architectures and sign
+        run: |
+          bundle=build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3
+          lipo -archs "$bundle/Contents/MacOS/BassDeamon"
+          lipo -verify_arch x86_64 arm64 "$bundle/Contents/MacOS/BassDeamon"
+          codesign --force --sign - --timestamp=none "$bundle"
+          codesign --verify --strict --verbose=2 "$bundle"
+      - name: Capture the actual editor
+        if: matrix.runner == 'macos-26-intel'
+        run: build/plugin_tests_artefacts/Release/plugin_tests --capture "$PWD/GUI-Preview.png"
+      - name: Package Universal plugin
+        if: matrix.runner == 'macos-26-intel'
+        run: |
+          package="$PWD/BassDeamon-0.2.17-macOS-Universal.zip"
+          (cd build/BassDeamon_artefacts/Release/VST3 && zip -Xqr "$package" BassDeamon.vst3)
+          zip -Xj "$package" INSTALL.txt
+          unzip -t "$package"
+          unzip -q "$package" -d package-verification
+          bundle=package-verification/BassDeamon.vst3
+          lipo -verify_arch x86_64 arm64 "$bundle/Contents/MacOS/BassDeamon"
+          codesign --verify --strict --verbose=2 "$bundle"
+      - uses: actions/upload-artifact@v4
+        if: matrix.runner == 'macos-26-intel'
+        with:
+          name: BassDeamon-0.2.17-macOS-Universal
+          path: |
+            BassDeamon-0.2.17-macOS-Universal.zip
+            GUI-Preview.png
+          if-no-files-found: error

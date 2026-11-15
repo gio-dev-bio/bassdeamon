@@ -69,6 +69,7 @@ public:
     bassdeamon::AnalysisQueue analysisQueue;
     std::atomic<float> tubeGainDb{0},tubeAddedDb{-120},tempo{120},unmaskAttack{8},unmaskRelease{120},learnProgress{0};
     std::atomic<bool> tempoFromHost{false};
+    std::atomic<float> duckReduction{0};
     std::atomic<float> glueReduction{0}, unmaskReduction{0}, outputPeak{0};
     std::array<std::atomic<float>, 3> agcMeters{};
     std::array<std::atomic<float>, bassdeamon::bandCount> spectrumBass{}, spectrumKick{}, spectrumCut{};
@@ -97,8 +98,8 @@ private:
     std::vector<bassdeamon::AutoMixFrame> autoAudio;
     std::future<bassdeamon::AutoMixResult> autoWorker;
     bassdeamon::AutoMixResult autoResult;
-    std::array<std::atomic<float>, 57> autoParameters{};
-    std::array<float, 57> autoOriginal{};
+    std::array<std::atomic<float>, 61> autoParameters{};
+    std::array<float, 61> autoOriginal{};
     std::atomic<float> autoDryDb{0}, autoWetDb{0};
     bassdeamon::Settings autoBase;
     bassdeamon::Engine::RuntimeState autoRuntime{};
@@ -114,7 +115,7 @@ private:
     std::atomic<unsigned> kickEqGeneration{0};
     unsigned captureGeneration = 0; // published with CaptureState::ready
     float captureStartFrequency = 0;
-    std::array<std::atomic<float>*, 57> raw{};
+    std::array<std::atomic<float>*, 61> raw{};
     std::atomic<bool> learnRequested{false}, resultReady{false};
     std::atomic<float> resultDelay{0};
     std::atomic<bool> resultInvert{false};

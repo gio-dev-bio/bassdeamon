@@ -366,9 +366,9 @@ int interactionTests(){
         juce::Thread::sleep(2);
     }
     editor->refreshAutoMix();
-    ensure(editor->autoApply.isEnabled()&&get("kickEq.on")==0, "Auto Mix changed host parameters before Apply");
+    ensure(editor->autoApply.isEnabled()&&get("kickEq.on")==0&&get("duck.on")==0, "Auto Mix changed host parameters before Apply");
     if (const auto* path=std::getenv("BASSDEAMON_AUTO_MIX_PREVIEW")) {
-        editor->setSize(1200,1336);
+        editor->setSize(1200,1400);
         p.setRawTheme(true);editor->syncTheme();
         const auto image=editor->createComponentSnapshot(editor->getLocalBounds(),true,1.f);
         auto stream=juce::File(juce::String::fromUTF8(path)).createOutputStream();
@@ -382,7 +382,8 @@ int interactionTests(){
     ensure(p.autoAudition.load()==2, "Auto Mix proposal audition did not select B");
     editor->autoApply.onClick();
     ensure(get("kickEq.on")==1&&std::abs(get("kickEq.frequency")-60)<1, "Auto Mix did not commit proposed Kick EQ");
-    ensure(p.undoEdit()&&get("kickEq.on")==0&&get("kickEq.frequency")==0, "Auto Mix Undo did not restore original settings");
+    ensure(get("duck.on")==1&&get("duck.amount")>=1.5f, "Auto Mix did not commit proposed Duck");
+    ensure(p.undoEdit()&&get("kickEq.on")==0&&get("kickEq.frequency")==0&&get("duck.on")==0, "Auto Mix Undo did not restore original settings");
     set("subMono.on",1);set("subMono.hz",135);
     juce::MemoryBlock subState;
     p.getStateInformation(subState);

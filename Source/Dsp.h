@@ -31,6 +31,8 @@ enum class UnmaskStereoMode { stereo, mid, side };
 struct Settings {
     bool active = true;
     bool pausePhaseLearn = false;
+    bool duck = false;
+    double duckAmountDb = 3, duckAttackMs = 1.5, duckReleaseMs = 65;
     bool subMono = false;
     double subMonoHz = 120, auditionDryDb = 0, auditionWetDb = 0;
     bool kickEqEnabled = false, matchEnabled = false, auditionDry = false;
@@ -56,6 +58,7 @@ struct Settings {
 constexpr size_t bandCount = 12;
 inline constexpr std::array<double, bandCount> bandFrequencies{30, 38, 48, 60, 75, 94, 118, 148, 186, 234, 295, 370};
 struct Meters {
+    double duckReductionDb = 0;
     double matchGainDb = 0;
     double glueReductionDb = 0.0, unmaskReductionDb = 0.0;
     std::array<double, 3> agcDb{};
@@ -300,6 +303,8 @@ public:
         kickEqRetune.reset(1);
         kickEqHz = kickEqDb = 0;
         kickEqMix.reset(0);
+        duckEnvelope = duckReduction = 0;
+        duckDetectorRelease = pole(12, sampleRate);
         subMono = {}; subMonoMix.reset(0); subMonoCutoff = 0;
         monitorMix.reset(0);
         dryMonitorGain.reset(1);
@@ -360,6 +365,8 @@ public:
         for (auto* bank : {&detectorsBass, &detectorsKick, &filters})
             for (auto& band : *bank) for (auto& f : band) f.z1 = f.z2 = 0;
         allpassX.fill(0); allpassY.fill(0);
+        duckEnvelope = duckReduction = 0;
+        meters.duckReductionDb = 0;
         subMono.clear();
         bassE.fill(0); kickE.fill(0); bassEnergy = envelope = kickFast = kickSlow = 0;
         inputPowerMeter = outputPowerMeter = outputHeld = kickHeld = 0;
@@ -461,6 +468,12 @@ public:
         else if (subMonoCutoff == 0) subMonoCutoff = subMonoTarget;
         const bool monitor = match || !monitorMix.finished() || monitorMix.value() != 0 || !monitorGain.finished() || monitorGain.value() != 1 || !dryMonitorGain.finished();
         if (!match) wetPower = 0;
+        const bool duckEnabled = s.duck && s.active && normalMonitoring && !s.auditionDry && kick && kickChannels > 0;
+        const double duckDepth = duckEnabled ? std::clamp(s.duckAmountDb,0.,18.) : 0.;
+        const bool runDuck = duckDepth > 0 || duckReduction > 0;
+        const double duckAttack = runDuck ? pole(std::clamp(s.duckAttackMs,.25,20.),sampleRate) : 0.;
+        const double duckRelease = runDuck ? pole(duckDepth > 0 ? std::clamp(s.duckReleaseMs,20.,350.) : 5.,sampleRate) : 0.;
+        if (duckDepth == 0) duckEnvelope = 0;
         for (int n = 0; n < samples; ++n) {
             const float dryLeft=bass[0][n],dryRight=channels==2?bass[1][n]:0;
             const double activeMix=globalRamp.next();
@@ -630,6 +643,19 @@ public:
             const double tubeGain=1+tube.wetMix()*(learnedTubeGain-1);
             if(tubeGain!=1)for(auto& v:x)v*=tubeGain;
             meters.tubeAgcDb=db(tubeGain);budget-=std::max(0.0,meters.tubeAgcDb);
+            if (runDuck) {
+                if (duckDepth > 0)
+                    duckEnvelope = std::max(std::max(std::abs(k[0]),std::abs(k[1])),
+                                            duckEnvelope*duckDetectorRelease);
+                // Soft knee below roughly -24 dBFS. The peak hold bridges
+                // kick zero crossings, including the first low-frequency cycles.
+                const double weight = std::clamp((duckEnvelope-.004)/.059,0.,1.);
+                const double target = duckDepth * weight * weight * (3 - 2 * weight);
+                duckReduction = follow(duckReduction,target,target>duckReduction?duckAttack:duckRelease);
+                if (duckReduction < 1e-7) duckReduction = 0;
+                const double duckGain = gain(-duckReduction);
+                for (auto& channel : x) channel *= duckGain;
+            }
             const auto beforeUnmask = x;
             const auto selectedPower = [&](const std::array<double, 2>& signal) {
                 if (linked) return power(signal, channels);
@@ -739,6 +765,7 @@ public:
             meters.glueReductionDb = glueReduction * glueMix;
             meters.unmaskReductionDb = (s.unmaskDirect?-directCutDb:maxCut) * unmaskMix; // maximum individual band, not total cut
         }
+        meters.duckReductionDb = duckReduction;
         meters.matchGainDb = match ? db(monitorGain.value()) : 0;
         meters.tubeAddedDb=db(std::sqrt(tube.addedPower()));
         meters.peak = outputHeld; meters.kickPeak = kickHeld;
@@ -796,6 +823,7 @@ private:
     double directWeightDenominator = 1e-12;
     int controlCounter = 0;
     bool smoothed = false;
+    double duckEnvelope = 0, duckReduction = 0, duckDetectorRelease = 0;
     SubMono subMono;
     Ramp subMonoMix, dryMonitorGain;
     double subMonoCutoff = 0;

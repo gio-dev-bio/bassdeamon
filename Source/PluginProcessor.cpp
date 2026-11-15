@@ -3,7 +3,7 @@
 #include <optional>
 
 namespace {
-constexpr std::array<const char*, 57> ids{
+constexpr std::array<const char*, 61> ids{
     "glue.on", "glue.amount", "glue.lock", "phase.on", "phase.invert", "phase.delay",
     "phase.rotate", "phase.frequency", "unmask.on", "unmask.amount", "unmask.delta",
     "glue.agc", "glue.agcLock", "phase.agc", "phase.agcLock", "unmask.agc", "unmask.agcLock",
@@ -12,7 +12,7 @@ constexpr std::array<const char*, 57> ids{
     "tube.on","tube.drive","tube.amount","tube.source","tube.colour","tube.agc","tube.agcLock","tube.audition",
     "glue.timing","glue.attackMs","glue.releaseMs","glue.attackNote","glue.releaseNote",
     "unmask.timing","unmask.attackNote","unmask.releaseNote","view.range","view.hold",
-    "view.spectrum","view.minHz","view.maxHz","unmask.attenuation","unmask.controlDb","unmask.stereoMode","unmask.focusMinHz","unmask.focusMaxHz","kickEq.on","kickEq.frequency","kickEq.cut","subMono.on","subMono.hz"};
+    "view.spectrum","view.minHz","view.maxHz","unmask.attenuation","unmask.controlDb","unmask.stereoMode","unmask.focusMinHz","unmask.focusMaxHz","kickEq.on","kickEq.frequency","kickEq.cut","subMono.on","subMono.hz","duck.on","duck.amount","duck.attack","duck.release"};
 }
 
 BassDeamonProcessor::BassDeamonProcessor()
@@ -99,6 +99,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout BassDeamonProcessor::layout(
     continuous("kickEq.cut","Kick EQ cut (dB)",0,4,1.5f);
     boolean("subMono.on", "Sub Mono active", false);
     continuous("subMono.hz", "Sub Mono frequency (Hz)", 40, 250, 120);
+    boolean("duck.on", "Duck active", false);
+    continuous("duck.amount", "Duck amount (dB)", 0, 18, 3);
+    continuous("duck.attack", "Duck attack (ms)", .25f, 20, 1.5f);
+    continuous("duck.release", "Duck release (ms)", 20, 350, 65);
     return p;
 }
 
@@ -148,6 +152,8 @@ bassdeamon::Settings BassDeamonProcessor::readSettings(bool proposal) const noex
     s.kickEqFrequency = value(53);
     s.kickEqCut = value(54);
     s.subMono = value(55) > .5f; s.subMonoHz = value(56);
+    s.duck = value(57) > .5f; s.duckAmountDb = value(58);
+    s.duckAttackMs = value(59); s.duckReleaseMs = value(60);
     s.auditionDry = compareDry.load(std::memory_order_relaxed);
     s.matchEnabled = compareMatch.load(std::memory_order_relaxed);
     s.active=value(18)>.5f;
@@ -312,6 +318,7 @@ void BassDeamonProcessor::processBlockBypassed(juce::AudioBuffer<float>& buffer,
         kickEqCaptureState.store(CaptureState::idle, std::memory_order_release);
         kickEqStatus.store(0);
     }
+    duckReduction.store(0, std::memory_order_relaxed);
     midi.clear(); wasBypassed = true;
     // Matching main input/output layouts and zero algorithmic latency: leave bass untouched.
 }
@@ -333,6 +340,7 @@ void BassDeamonProcessor::publishMeters() noexcept {
     comparisonGainDb.store(float(m.matchGainDb), std::memory_order_relaxed);
     tubeAddedDb.store(float(m.tubeAddedDb));unmaskAttack.store(float(m.unmaskAttackMs));unmaskRelease.store(float(m.unmaskReleaseMs));
     tubeGainDb.store(static_cast<float>(m.tubeAgcDb));
+    duckReduction.store(static_cast<float>(m.duckReductionDb));
     glueReduction.store(static_cast<float>(m.glueReductionDb));
     unmaskReduction.store(static_cast<float>(m.unmaskReductionDb));
     outputPeak.store(static_cast<float>(m.peak));
@@ -557,7 +565,7 @@ void BassDeamonProcessor::applyAutoMix() {
 }
 
 void BassDeamonProcessor::getStateInformation(juce::MemoryBlock& dest) {
-    auto state = parameters.copyState(); state.setProperty("schemaVersion", 9, nullptr);
+    auto state = parameters.copyState(); state.setProperty("schemaVersion", 10, nullptr);
     state.setProperty("phaseReferenceHz",phaseReferenceHz.load(),nullptr);
     state.setProperty("visualRawTheme",usesRawTheme(),nullptr);
     state.setProperty("visualSpectrumView",spectrumView(),nullptr);
@@ -569,7 +577,7 @@ void BassDeamonProcessor::getStateInformation(juce::MemoryBlock& dest) {
 void BassDeamonProcessor::setStateInformation(const void* data, int bytes) {
     cancelAutoMix();
     if (auto xml = getXmlFromBinary(data, bytes)) {
-        if (xml->hasTagName(parameters.state.getType()) && xml->getIntAttribute("schemaVersion", 1) <= 9) {
+        if (xml->hasTagName(parameters.state.getType()) && xml->getIntAttribute("schemaVersion", 1) <= 10) {
             kickEqGeneration.fetch_add(1);
             kickEqLearnRequested.store(false);
             kickEqStatus.store(0);
@@ -602,6 +610,11 @@ void BassDeamonProcessor::setStateInformation(const void* data, int bytes) {
             // Merge known parameter values into the current schema: v0.1 sessions lack v0.2 IDs.
             if (xml->getIntAttribute("schemaVersion", 1) < 9)
                 for (size_t i = 55; i < ids.size(); ++i) {
+                    auto* param = parameters.getParameter(ids[i]);
+                    param->setValueNotifyingHost(param->getDefaultValue());
+                }
+            if (xml->getIntAttribute("schemaVersion", 1) < 10)
+                for (size_t i = 57; i < ids.size(); ++i) {
                     auto* param = parameters.getParameter(ids[i]);
                     param->setValueNotifyingHost(param->getDefaultValue());
                 }

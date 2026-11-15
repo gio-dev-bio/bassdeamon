@@ -9,7 +9,7 @@ int captureGui(const juce::File& output){
     auto layout=p.getBusesLayout();layout.inputBuses.set(1,juce::AudioChannelSet::mono());
     if(!p.setBusesLayout(layout))return 1;
     p.prepareToPlay(48000,256);juce::AudioBuffer<float> buffer(3,256);juce::MidiBuffer midi;
-    std::unique_ptr<juce::AudioProcessorEditor> editor(p.createEditor());editor->setSize(1200,1336);
+    std::unique_ptr<juce::AudioProcessorEditor> editor(p.createEditor());editor->setSize(1200,1400);
     auto* timedGui=static_cast<BassDeamonEditor*>(editor.get());timedGui->stopTimer();double visualClock=0;
     const auto visualTick=[&]{visualClock+=1000./30;timedGui->refreshVisuals(visualClock);};
     auto* tube=p.parameters.getParameter("tube.on");tube->setValueNotifyingHost(1);
@@ -54,6 +54,20 @@ int captureGui(const juce::File& output){
         auto* parameter=p.parameters.getParameter(id);
         parameter->setValueNotifyingHost(parameter->convertTo0to1(value));
     };
+    setPhase("duck.on",1);
+    for (int block=0; block<8; ++block) {
+        for (int n=0; n<256; ++n) {
+            const double t=(block*256+n)/48000.;
+            const float bass=float(.32*std::sin(2*bassdeamon::pi*75*t));
+            buffer.setSample(0,n,bass);
+            buffer.setSample(1,n,bass*.95f);
+            buffer.setSample(2,n,float(.7*std::exp(-t*22)*std::sin(2*bassdeamon::pi*60*t)));
+        }
+        p.processBlock(buffer,midi);
+        visualTick();
+    }
+    if (p.duckReduction.load()<1.f || !save(output.getSiblingFile("GUI-Duck-Raw.png"))) return 1;
+    setPhase("duck.on",0);
     setPhase("phase.on",1);
     setPhase("phase.rotate",1);
     setPhase("phase.frequency",float(bassdeamon::cornerForAllPassDegrees(-45,60,48000)));
@@ -187,7 +201,7 @@ int captureLoopGui(const juce::File& bassFile, const juce::File& kickFile, const
     } transport;
     processor.setPlayHead(&transport);
     std::unique_ptr<BassDeamonEditor> editor(static_cast<BassDeamonEditor*>(processor.createEditor()));
-    editor->setSize(1200,1336);
+    editor->setSize(1200,1400);
     editor->stopTimer();
     juce::AudioBuffer<float> buffer(4,256);
     juce::MidiBuffer midi;

@@ -212,6 +212,47 @@ int main() {
         }
         std::cout<<"PASS fixed-tap PHASE delay crossfade\n";
 
+        // A short high-frequency transient followed by a low kick body,
+        // over a bassline with 125 ms notes at 120 BPM.
+        {
+            constexpr double sr=48000.;
+            Signal bass(48000), kick(bass.size());
+            for (size_t n=0;n<bass.size();++n) {
+                const double t=n/sr;
+                const double hit=std::fmod(t,.5);
+                const double pitch=(n/6000)%2==0?55.:65.4;
+                bass[n]=float(.3*std::sin(2*pi*pitch*t));
+                if (hit<.055)
+                    kick[n]=float(.75*std::exp(-hit*65)*std::sin(2*pi*55*hit)
+                        +.35*std::exp(-hit*850)*std::sin(2*pi*2100*hit));
+            }
+            Settings duck;
+            duck.glue=duck.unmask=false;
+            Engine baseline, idle, active, otherBlocks, silentSidechain;
+            for (auto* e : {&baseline,&idle,&active,&otherBlocks,&silentSidechain}) e->prepare(sr);
+            auto dry=bass, noSide=bass, wet=bass, repartitioned=bass, noKick=bass;
+            const Signal silence(kick.size());
+            render(baseline,dry,&kick,duck);
+            duck.duck=true;
+            render(idle,noSide,nullptr,duck);
+            render(active,wet,&kick,duck);
+            render(otherBlocks,repartitioned,&kick,duck,63);
+            render(silentSidechain,noKick,&silence,duck);
+            require(wet==repartitioned,"Duck depends on host block size");
+            require(noKick==bass,"Silent sidechain changed the bass");
+            require(std::memcmp(bass.data(),dry.data(),bass.size()*sizeof(float))==0,"Duck OFF changed the audio");
+            require(std::memcmp(bass.data(),noSide.data(),bass.size()*sizeof(float))==0,"Duck attenuated with no kick bus");
+            const auto reduction=[&](int first,int end) {
+                double a=0,b=0;
+                for(int n=first;n<end;++n){a+=dry[size_t(n)]*dry[size_t(n)];b+=wet[size_t(n)]*wet[size_t(n)];}
+                return 10*std::log10(a/b);
+            };
+            const double transient=reduction(48,288), body=reduction(480,1680), next=reduction(6000,7440);
+            require(transient>1.5 && body>2.4 && body<=3.001 && next<.8,"Duck failed the transient/body/recovery checks");
+            std::cout<<"PASS Duck transient "<<transient<<" dB, kick body "<<body
+                     <<" dB, next note "<<next<<" dB / exact OFF and no-sidechain bypass\n";
+        }
+
         // Extreme legal settings stay finite at all supported rates.
         for (double sr : {8000.0, 44100.0, 96000.0, 192000.0}) {
             Engine e; e.prepare(sr); auto x = tone(20000, 40, 0.8, sr), k = tone(20000, 60, 0.8, sr);
