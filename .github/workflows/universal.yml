@@ -23,7 +23,7 @@ jobs:
         run: |
           bundle=build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3
           lipo -archs "$bundle/Contents/MacOS/BassDeamon"
-          lipo -verify_arch x86_64 arm64 "$bundle/Contents/MacOS/BassDeamon"
+          lipo "$bundle/Contents/MacOS/BassDeamon" -verify_arch x86_64 arm64
           codesign --force --sign - --timestamp=none "$bundle"
           codesign --verify --strict --verbose=2 "$bundle"
       - name: Capture the actual editor
@@ -38,7 +38,7 @@ jobs:
           unzip -t "$package"
           unzip -q "$package" -d package-verification
           bundle=package-verification/BassDeamon.vst3
-          lipo -verify_arch x86_64 arm64 "$bundle/Contents/MacOS/BassDeamon"
+          lipo "$bundle/Contents/MacOS/BassDeamon" -verify_arch x86_64 arm64
           codesign --verify --strict --verbose=2 "$bundle"
       - uses: actions/upload-artifact@v4
         if: matrix.runner == 'macos-26-intel'
