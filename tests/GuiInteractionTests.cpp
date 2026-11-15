@@ -277,7 +277,8 @@ int interactionTests(){
     p.processBlock(buffer,midi);visualTick();
     ensure(editor->visualBypassed && p.analysisQueue.pending()==0,"Power off sent audio to the display");
     set("global.on",1);
-    for (int b=0;b<120;++b) {
+    for (int b=0;b<260;++b) {
+        host.time=b*256/48000.;
         for (int n=0;n<256;++n) buffer.setSample(0,n,float(.3*std::sin(2*bassdeamon::pi*60*(b*256+n)/48000.)));
         p.processBlock(buffer,midi);
         if (b%6==0) visualTick();

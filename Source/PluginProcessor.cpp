@@ -320,6 +320,7 @@ void BassDeamonProcessor::processBlockBypassed(juce::AudioBuffer<float>&, juce::
         autoState.store(AutoMixState::idle,std::memory_order_release);
     learnRequested.store(false);
     kickEqLearnRequested.store(false);
+    kickEqGeneration.fetch_add(1);
     resultReady.store(false);
     learnStatus.store(0);
     if (kickEqCaptureState.load(std::memory_order_relaxed)==CaptureState::recording)
