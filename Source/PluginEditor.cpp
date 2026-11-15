@@ -32,22 +32,30 @@ void stageTitle(juce::Graphics& g, Stage stage, juce::Rectangle<float> area, flo
     console::text(g,stageNames[index],area.withTrimmedLeft(badgeWidth+8),fontSize,enabled?console::cream:console::muted);
 }
 
-void paintReductionMeter(juce::Graphics& g,float x,float y,float reduction,int fullScale,const char* label) {
+void paintReductionMeter(juce::Graphics& g,float x,float y,float reduction,int fullScale,bool raw) {
     juce::Graphics::ScopedSaveState position(g);
-    g.addTransform(juce::AffineTransform::translation(x-46,y-449));
-    const juce::Rectangle<float> meter(46,449,187,80);
+    const float width=raw?280.f:187.f;
+    const juce::Rectangle<float> meter(x-width*.5f,y,width,80);
+    if (raw) {
+        const auto bezel=meter.expanded(4);
+        g.setColour(juce::Colour(0xff110b08));
+        g.fillRoundedRectangle(bezel,6);
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xffad7b4d),bezel.getX(),bezel.getY(),
+            juce::Colour(0xff482716),bezel.getRight(),bezel.getBottom(),false));
+        g.drawRoundedRectangle(bezel.reduced(1),5,2);
+    }
     g.setColour(console::ink);
     g.fillRoundedRectangle(meter,4);
     const auto dial=meter.reduced(2);
-    const auto dialTop=juce::Colour(0xffedcb88);
-    const auto dialBottom=juce::Colour(0xffb8874d);
+    const auto dialTop=juce::Colour(raw?0xfff9cb78:0xffedcb88);
+    const auto dialBottom=juce::Colour(raw?0xffad692d:0xffb8874d);
     g.setGradientFill(juce::ColourGradient(dialTop,0,dial.getY(),dialBottom,0,dial.getBottom(),false));
     g.fillRoundedRectangle(dial,3);
     juce::Graphics::ScopedSaveState meterClip(g);
     g.reduceClipRegion(dial.toNearestInt());
-    const auto mark=[fullScale](float reduction) {
-        const float offset=68.f-136.f*std::sqrt(std::clamp(reduction/float(fullScale),0.f,1.f));
-        return juce::Point<float>(139.5f+offset,479.f+offset*offset*.0017f);
+    const auto mark=[fullScale,x,y,width,raw](float reduction) {
+        const float normal=1.f-2.f*std::sqrt(std::clamp(reduction/float(fullScale),0.f,1.f));
+        return juce::Point<float>(x+(raw?-1.f:1.f)*normal*width*.365f,y+30+normal*normal*8);
     };
     juce::Path scale;
     scale.startNewSubPath(mark(float(fullScale)));
@@ -60,6 +68,7 @@ void paintReductionMeter(juce::Graphics& g,float x,float y,float reduction,int f
         console::text(g,juce::String(tickDb),{tick.x-9,tick.y-11,18,10},9,console::ink,
                       juce::Justification::centred);
     }
+    if (raw) console::text(g,"GAIN REDUCTION",{meter.getX(),y+4,width,14},12,console::ink,juce::Justification::centred);
     const juce::Point<float> pivot(meter.getCentreX(),dial.getBottom()-8.f);
     const auto tip=mark(reduction);
     const auto direction=(tip-pivot)/tip.getDistanceFrom(pivot);
@@ -74,8 +83,8 @@ void paintReductionMeter(juce::Graphics& g,float x,float y,float reduction,int f
     g.fillPath(needle);
     g.setColour(console::ink.withAlpha(.9f));
     g.fillEllipse(pivot.x-3.5f,pivot.y-3.5f,7.f,7.f);
-    console::text(g,label,{56,504,100,18},12,console::ink);
-    console::text(g,juce::String(reduction,1)+" dB",{164,504,60,18},12,console::ink,
+    if (!raw) console::text(g,"GAIN REDUCTION",{meter.getX()+8,y+55,104,18},12,console::ink);
+    console::text(g,juce::String(reduction,1)+" dB",{meter.getRight()-70,y+55,61,18},12,console::ink,
                   juce::Justification::centredRight);
 }
 
@@ -747,20 +756,10 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g) {
         skin.paintPanel(g,{x,503,374,267});
         stageTitle(g,stages[index],{x+18,509,152,27},20);
     }
-    if (skin.isRaw()) {
-        for (float x : {110.f,499.f,888.f}) {
-            if (x==499.f && showUnmaskAdvanced) continue;
-            const juce::Rectangle<float> bezel(x-4,538,195,88);
-            g.setColour(juce::Colour(0xff110b08));
-            g.fillRoundedRectangle(bezel,6);
-            g.setGradientFill(juce::ColourGradient(juce::Colour(0xffad7b4d),x,538,
-                juce::Colour(0xff482716),x,626,false));
-            g.drawRoundedRectangle(bezel.reduced(1),5,2);
-        }
-    }
-    paintReductionMeter(g,110,542,glueGr,20,"GAIN REDUCTION");
-    if (!showUnmaskAdvanced) paintReductionMeter(g,499,542,processor.unmaskReduction.load(),24,"GAIN REDUCTION");
-    paintReductionMeter(g,888,542,processor.duckReduction.load(),18,"GAIN REDUCTION");
+    const bool raw=skin.isRaw();
+    paintReductionMeter(g,203.5f,542,glueGr,20,raw);
+    if (!showUnmaskAdvanced) paintReductionMeter(g,592.5f,542,processor.unmaskReduction.load(),24,raw);
+    paintReductionMeter(g,981.5f,542,processor.duckReduction.load(),18,raw);
     console::text(g,"ATTACK",{198,622,82,19},12,console::muted);
     console::text(g,"RELEASE",{288,622,82,19},12,console::muted);
     const int timing=int(processor.parameters.getRawParameterValue("glue.timing")->load());

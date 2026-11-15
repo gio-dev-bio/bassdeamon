@@ -82,7 +82,7 @@ public:
         g.setGradientFill(juce::ColourGradient(juce::Colour(dark?0xff191712:0xff332921),0,r.getY(),
             juce::Colour(dark?0xff111210:0xff181615),0,r.getBottom(),false));
         g.fillRect(r);
-        g.setTiledImageFill(steel,r.getX()+r.getWidth()*.17f,r.getY(),dark?.32f:.92f);
+        g.setTiledImageFill(steel,juce::roundToInt(r.getX()+r.getWidth()*.17f),juce::roundToInt(r.getY()),dark?.32f:.92f);
         g.fillRect(r);
         g.setGradientFill(juce::ColourGradient(juce::Colours::white.withAlpha(dark?0.f:.09f),0,r.getY(),
             juce::Colours::black.withAlpha(dark?.38f:.17f),0,r.getBottom(),false));
@@ -198,7 +198,7 @@ private:
         const float radius=juce::jlimit(5.0f,13.0f,r.getHeight()*0.38f);
         const float cx=r.getRight()-radius-5.0f;
         const float cy=r.getCentreY();
-        const float shaftLength=juce::jlimit(3.0f,8.0f,r.getHeight()*0.25f);
+        const float shaftLength=juce::jlimit(3.0f,8.0f,r.getHeight()*(raw?.34f:.25f));
         g.setColour(juce::Colours::black.withAlpha(0.66f));
         g.fillEllipse(cx-radius+1,cy-radius+2,radius*2,radius*2);
         g.setGradientFill(juce::ColourGradient(juce::Colour(0xffe2d7c0),cx-radius,cy-radius,
