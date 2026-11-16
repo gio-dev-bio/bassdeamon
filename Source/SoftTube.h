@@ -44,7 +44,8 @@ public:
         auditionTarget=s.audition?1:0;
         requestedRatio=s.oversampling==2?2:4;
         if(!initialised || (mix==0 && target==0)) ratio=requestedRatio;
-        const double next=s.enabled && ratio==requestedRatio?1:0;
+        enabled=s.enabled;
+        const double next=enabled && ratio==requestedRatio?1:0;
         if(!initialised){drive=desiredDrive;amount=desiredAmount;sourceHz=desiredHz;colour=desiredColour;initialised=true;}
         if(next!=target){target=next;remaining=fadeLength;step=(target-mix)/remaining;}
     }
@@ -56,6 +57,10 @@ public:
         if(mix==0&&target==0){
             residualPower=0;
             if(running){channels={};running=false;}
+            if(enabled && ratio!=requestedRatio){
+                ratio=requestedRatio;
+                target=1;remaining=fadeLength;step=1.0/fadeLength;
+            }
             return;
         }
         const size_t window=ratio==2?25:taps;
@@ -111,6 +116,6 @@ private:
     double drive=1,amount=0,sourceHz=180,colour=.45;
     double desiredDrive=1,desiredAmount=0,desiredHz=180,desiredColour=.45;
     double bias=.18,offset=0,normal=1,mix=0,target=0,step=0,auditionMix=0,auditionTarget=0;
-    int fadeLength=960,remaining=0;uint32_t counter=0;bool initialised=false,running=false;
+    int fadeLength=960,remaining=0;uint32_t counter=0;bool initialised=false,running=false,enabled=false;
 };
 }

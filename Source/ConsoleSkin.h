@@ -198,7 +198,7 @@ public:
         g.setColour(juce::Colour(enabled?0xff1c1e1d:0xff3e4240));
         g.drawLine(juce::Line<float>{pointerBase,pointerTip},weight);
     }
-    void drawToggleButton(juce::Graphics& g,juce::ToggleButton& b,bool hover,bool down) override {metalToggle(g,b,hover,down);}
+    void drawToggleButton(juce::Graphics& g,juce::ToggleButton& b,bool hover,bool down) override {metalToggle(g,b,hover,down,b.getComponentID()=="duck.multiband");}
     void drawButtonBackground(juce::Graphics& g,juce::Button& b,const juce::Colour&,bool hover,bool down) override {
         if (b.getComponentID()=="view-mode") metalToggle(g,b,hover,down,true);
         else button(g,b,hover,down,b.getToggleState());
@@ -251,8 +251,9 @@ private:
         }
         if (viewMode) {
             const auto labelWidth=r.getWidth()*.5f-radius-3;
-            text(g,"MAIN",r.withWidth(labelWidth),11,on?muted:cream,juce::Justification::centred);
-            text(g,"ADV",r.withX(cx+radius+3).withWidth(labelWidth),11,on?cream:muted,juce::Justification::centred);
+            const bool band=b.getComponentID()=="duck.multiband";
+            text(g,band?"FULL-BAND":"MAIN",r.withWidth(labelWidth),11,on?muted:cream,juce::Justification::centred);
+            text(g,band?"LOW-BAND":"ADV",r.withX(cx+radius+3).withWidth(labelWidth),11,on?cream:muted,juce::Justification::centred);
         } else {
             const auto labelArea=juce::Rectangle<float>(r.getX()+3,r.getY(),juce::jmax(1.0f,(r.getWidth()>62.f?lampX-9:cx-radius-3)-r.getX()),r.getHeight());
             g.setColour(b.isEnabled()?cream:muted.withAlpha(.5f));

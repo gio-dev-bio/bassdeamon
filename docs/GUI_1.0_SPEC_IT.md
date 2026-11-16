@@ -10,10 +10,12 @@ Decisioni approvate per la GUI e per il percorso audio della prossima versione. 
 - Duck lavora sul basso già compresso e saturato. L'obiettivo è liberare attacco, punta e corpo del kick con un intervento naturale.
 - Unmask lavora per ultimo sulle sovrapposizioni residue. I processori di uscita eventualmente attivi appartengono alla sezione Output.
 - La riga **Signal Path** mostra l'ordine DSP. I pannelli principali sono disposti da sinistra a destra **Glue, Duck, Unmask**. I numeri dei moduli seguono l'ordine DSP.
-- Verificare l'ordine eseguibile prima della build. Nel sorgente in lavorazione esaminato il guadagno Duck veniva applicato dopo Unmask.
+- Verificare l'ordine eseguibile prima della build. Il codice applica Duck prima di Unmask.
 
 ## Vista principale
 
+- Il riferimento visivo è [Pulsante Auto Mix vintage.png](https://chatgpt.com/library?file_id=libfile_0452b8fbfae48191b2b008c6b843b7d3&account_id=personal), la preview precedente al pulsante Auto Mix orizzontale. Il riferimento fissa palette, finiture, tipografia e stati dei controlli. Conservare queste impostazioni nelle release successive e limitare le variazioni grafiche a quelle approvate.
+- **Power** in alto a destra usa sempre una leva metallica **ON/OFF** in entrambe le skin. La spia ambra separata indica lo stato attivo.
 - Logo gotico **BASS ✝ DEAMON** in avorio con croce in rame e firma **Engineered by Guy_BioRg**. Etichette in inglese.
 - **Skin** sceglie fra **Classic** e **Raw**. Il tema Raw riprende una console analogica vissuta, con selettori metallici e meter a lancetta intera, dello stesso stile per Glue, Unmask e Duck.
 - Manopole in metallo spazzolato. I meter di riduzione partono da 0 dB a destra e si muovono verso sinistra per valori negativi.
@@ -34,18 +36,21 @@ Decisioni approvate per la GUI e per il percorso audio della prossima versione. 
 | 02 Glue | Auto/Manual, Amount, Attack, Release, Auto Gain e meter GR | Auto adatta i tempi. Auto Gain compensa il livello. Includere Lock Adaptation e mantenere accessibili i controlli timing. |
 | 03 Phase | On/Off, A/B locale, Advanced | Learn + Apply, delay, polarità, all-pass, frequenza di riferimento della rotazione e indicazione dell'intervento. Se il Learn è incerto, mantenere le impostazioni. |
 | 04 Saturation | On/Off accanto al numero, Drive, Mix, Delta, Oversampling e Auto Gain | Saturazione morbida. Delta consente l'ascolto della differenza introdotta dal modulo. |
-| 05 Duck | On/Off, Amount, meter GR, Advanced | Duck guidato dal kick. Controlli e analisi Click/Punch/Body previsti in Advanced e nella proposta Auto Mix. |
+| 05 Duck | On/Off, Amount, meter GR, Advanced | Duck guidato dal kick. Leva Full-Band / Low-Band. In Advanced si regolano frequenza Low-Band e modalità di Release. I progetti precedenti con multibanda attivo conservano il percorso legacy finché non impostano una frequenza Low-Band. |
 | 06 Unmask | On/Off, attenuazione impostabile in dB, Width, Auto Focus, Delta, meter GR, Advanced | Focus manuale/automatico, Stereo/Mid/Side e tempi. Auto Gain e Auto Focus attivi di default dove previsti. |
 
 **Convenzione per i tempi**. In Glue, Duck e Unmask l'Attack è sempre in millisecondi. Solo Release/Decay può passare da MS a SYNC, con divisione musicale e tempo del progetto. In Glue il selettore dei tempi sta nella vista principale. In Duck e Unmask sta in Advanced.
 
 ## Auto Mix
 
+- Aspetto approvato: pulsante rialzato con bordo ambra sottile, icona del demone sopra la scritta **AUTO MIX**. Icona e scritta appartengono alla stessa area cliccabile.
 - Pulsante con icona del demone. Analisi iniziale una tantum su 4, 8 o 16 battute, con 8 come valore iniziale, per preparare la proposta. Da includere anche i parametri Duck.
 - A/B a volume pareggiato, con riferimento kick invariato. Apply conferma la proposta in un'operazione Undo. Con dati insufficienti, mantenere le impostazioni interessate e indicarne il motivo.
 - Referto di compatibilità mono sul basso, full-range e sub, con frequenza sub configurabile e avvisi per gravità. Il referto è indipendente dal confronto A/B.
 - Per il flusso dettagliato di cattura, ascolto e applicazione vedere [Auto Mix](AUTO_MIX_SPEC_IT.md).
 
 ## Verifica prima della build
+
+Confrontare le schermate con il riferimento della skin e della vista corrispondenti, mantenendo gli stessi stati dei controlli. Verificare palette e finiture, disposizione dei tre meter, leva metallica Power e aspetto di Auto Mix.
 
 Controllare ordine DSP, Learn Kick EQ e Phase a 44,1 kHz con loop reali di kick e basso, risposta con arpeggi, confronto a volume pareggiato, collisioni residue PRE/POST, Scope Stereo/Mono, timing in Sync, Delta e Oversampling, Undo/Redo, CPU e latenza riportata a Cubase. Il mockup è il riferimento grafico. La verifica DSP richiede audio e misurazioni.

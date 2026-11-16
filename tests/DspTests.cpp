@@ -46,6 +46,25 @@ int main() {
         }
         std::cout << "PASS identity / sidechain isolation / sample rates\n";
 
+        for (double sr : {44100.0, 48000.0}) {
+            const auto kick = tone(24000, 55, 0.6, sr);
+            for (bool duck : {false, true}) {
+                Settings settings = bypass();
+                settings.duck = duck;
+                settings.unmask = !duck;
+                auto instant = tone(24000, 55, 0.5, sr), normal = instant;
+                Engine engine;
+                engine.prepare(sr);
+                render(engine, normal, &kick, settings);
+                settings.duckAttackMs = settings.unmaskAttackMs = 0;
+                engine.prepare(sr);
+                render(engine, instant, &kick, settings);
+                require(instant != normal, "Zero attack must change the applied envelope");
+                require(std::isfinite(rms(instant)), "Zero attack must produce finite output");
+            }
+        }
+        std::cout << "PASS zero attack for Duck and Unmask\n";
+
         // Same stream partitioned differently must produce identical DSP output.
         auto source = tone(96000, 75, 0.5), kick = tone(96000, 60, 0.4);
         for (int i = 0; i < 96000; ++i) kick[static_cast<size_t>(i)] *= (i % 24000 < 4000 ? 1.0f : 0.0f);

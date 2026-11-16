@@ -12,7 +12,7 @@ namespace bassdeamon {
 constexpr double pi = 3.14159265358979323846;
 inline double db(double x) noexcept { return 20.0 * std::log10(std::max(x, 1.0e-12)); }
 inline double gain(double d) noexcept { return d == 0 ? 1.0 : std::pow(10.0, d / 20.0); }
-inline double pole(double ms, double sr) noexcept { return std::exp(-1.0 / (0.001 * ms * sr)); }
+inline double pole(double ms, double sr) noexcept { return ms > 0 ? std::exp(-1.0 / (0.001 * ms * sr)) : 0.0; }
 inline double follow(double current, double target, double a) noexcept {
     return target + a * (current - target);
 }
@@ -35,6 +35,7 @@ struct Settings {
     int duckReleaseNote = 2;
     bool duckMultiband = false;
     std::array<double,3> duckBands{1,.65,.35}; // Body, Punch, Click
+    double duckLowHz = 0; // Zero retains the legacy three-band path.
     double duckAmountDb = 3, duckAttackMs = 1.5, duckReleaseMs = 65;
     bool subMono = false;
     double subMonoHz = 120, auditionDryDb = 0, auditionWetDb = 0;
@@ -438,7 +439,7 @@ public:
             directMix=s.unmaskDirect?1:0;
             smoothedFilterQ = 3.5 - 2.6 * std::clamp(s.unmaskWidth, 0.0, 1.0);
         }
-        meters.unmaskAttackMs=std::clamp(s.unmaskAttackMs,1.0,50.0);
+        meters.unmaskAttackMs=std::clamp(s.unmaskAttackMs,0.0,50.0);
         meters.unmaskReleaseMs=s.unmaskSync?noteMilliseconds(s.unmaskReleaseNote,bpm):std::clamp(s.unmaskReleaseMs,30.0,500.0);
         cutAttackA = pole(meters.unmaskAttackMs, sampleRate);
         cutReleaseA = pole(meters.unmaskReleaseMs, sampleRate);
@@ -504,12 +505,15 @@ public:
         else if (subMonoCutoff == 0) subMonoCutoff = subMonoTarget;
         const bool monitor = match || !monitorMix.finished() || monitorMix.value() != 0 || !monitorGain.finished() || monitorGain.value() != 1 || !dryMonitorGain.finished();
         if (!match) wetPower = 0;
-        const bool duckEnabled = s.duck && s.active && normalMonitoring && !s.auditionDry && kick && kickChannels > 0;
+        const bool duckEnabled = s.duck && s.active && !(s.tube.enabled && s.tube.audition) && kick && kickChannels > 0;
         const double duckDepth = duckEnabled ? std::clamp(s.duckAmountDb,0.,18.) : 0.;
         duckBandMix.set(s.duckMultiband?1:0,rampSamples);
+        const bool lowBand = s.duckLowHz > 0;
+        const double lowBandPole = s.duckMultiband && lowBand
+            ? std::exp(-2*pi*std::clamp(s.duckLowHz,60.,250.)/sampleRate) : duckBodyPole;
         const bool runDuck = duckDepth > 0 || duckReduction > 0
             || std::any_of(duckBandReduction.begin(),duckBandReduction.end(),[](double v){return v>0;});
-        const double duckAttack = runDuck ? pole(std::clamp(s.duckAttackMs,.25,20.),sampleRate) : 0.;
+        const double duckAttack = runDuck ? pole(std::clamp(s.duckAttackMs,0.,20.),sampleRate) : 0.;
         const double duckReleaseMs = s.duckSync ? noteMilliseconds(s.duckReleaseNote,bpm)
                                             : std::clamp(s.duckReleaseMs,20.,350.);
         const double duckRelease = runDuck ? pole(duckDepth > 0 ? duckReleaseMs : 5.,sampleRate) : 0.;
@@ -718,8 +722,14 @@ public:
                 if (duckReduction < 1e-7) duckReduction = 0;
                 const double bandMix=duckBandMix.next();
                 const double duckGain=gain(-duckReduction);
-                displayedDuckReduction=(1-bandMix)*duckReduction;
-                if (bandMix>0) {
+                displayedDuckReduction=(lowBand?1:1-bandMix)*duckReduction;
+                if (bandMix>0 && lowBand) {
+                    for (int c=0;c<channels;++c) {
+                        auto& low=duckBassBands.body[c];
+                        low=(1-lowBandPole)*x[c]+lowBandPole*low;
+                        x[c]+=(duckGain-1)*((1-bandMix)*x[c]+bandMix*low);
+                    }
+                } else if (bandMix>0) {
                     const auto left=duckKickBands.split(k[0],0,duckBodyPole,duckPunchPole);
                     const auto right=duckKickBands.split(k[1],1,duckBodyPole,duckPunchPole);
                     std::array<double,3> bandGain{};
@@ -832,6 +842,7 @@ public:
             const double listenGain = monitor ? monitorGain.next() : 1;
             const double dryGain = monitor ? dryMonitorGain.next() : 1;
             double wet = 0;
+            outputHeld *= peakA;
             for (int c = 0; c < channels; ++c) {
                 // Delta is removed bass BEFORE AGC/output trim; never includes kick.
                 const double normal = (linked ? x[c]*unmaskAgc : x[c])*outputGain;
@@ -844,7 +855,7 @@ public:
                     out = matched + listenDry * (reference * dryGain - matched);
                 }
                 bass[c][n] = activeMix==0?dry:static_cast<float>(activeMix==1?out:static_cast<double>(dry)+activeMix*(out-dry));
-                outputHeld = std::max(std::abs(static_cast<double>(bass[c][n])), outputHeld * peakA);
+                outputHeld = std::max(std::abs(static_cast<double>(bass[c][n])), outputHeld);
             }
             if (match) wetPower = follow(wetPower, wet / channels, energyA);
             outputPowerMeter = follow(outputPowerMeter,

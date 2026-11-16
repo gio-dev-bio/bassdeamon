@@ -195,7 +195,7 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
     attenuationKnob->slider.valueFromTextFunction=[](const juce::String& text){return std::abs(text.getDoubleValue());};attenuationKnob->slider.updateText();
     frequencyKnob=&addKnob("unmask.frequency","MANUAL FOCUS"," Hz",false,{},"Manual focus frequency, available when AUTO FOCUS is off.");
     unmaskWidthKnob=&addKnob("unmask.width","WIDTH","",true,{},"Width of the focus region and dynamic EQ bands.");
-    unmaskAttackKnob=&addKnob("unmask.attack","ATTACK"," ms",false,{},"Dynamic cut attack, 1 to 50 ms.");
+    unmaskAttackKnob=&addKnob("unmask.attack","ATTACK"," ms",false,{},"Dynamic cut attack, 0 to 50 ms.");
     unmaskReleaseKnob=&addKnob("unmask.release","RELEASE"," ms",false,{},"Dynamic cut recovery, 30 to 500 ms.");
     addSwitch("unmask.controlDb","dB CONTROL",{},"On: calibrated attenuation knob in dB. Off: previous DEPTH percentage algorithm, retained for existing sessions.");
     addSwitch("unmask.track","AUTO FOCUS",{},"Follow the strongest overlapping low-end resonance, with hysteresis and slow movement. This is not pitch/fundamental detection.");
@@ -409,12 +409,10 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
     face.addAndMakeVisible(phaseScopeButton);
     addSwitch("duck.on","OFF",{160,1289,62,27},"Duck the full bass signal from the existing kick sidechain.");
     addKnob("duck.amount","AMOUNT"," dB",false,{},"Maximum Duck attenuation.");
-    addKnob("duck.attack","ATTACK"," ms",false,{},"Duck attack in milliseconds.");
+    addKnob("duck.attack","ATTACK"," ms",false,{},"Duck attack, 0 to 20 ms.");
     addKnob("duck.release","RELEASE"," ms",false,{},"Duck release in milliseconds.");
-    addSwitch("duck.multiband","MULTIBAND",{},"Process Body, Punch and Click independently.");
-    addKnob("duck.body","","",true,{},"Depth for the kick body band.");
-    addKnob("duck.punch","","",true,{},"Depth for the kick punch band.");
-    addKnob("duck.click","","",true,{},"Depth for the kick click band.");
+    addSwitch("duck.multiband","LOW-BAND",{},"Switch between full-band and low-band ducking.");
+    addKnob("duck.lowHz","FREQUENCY"," Hz",false,{},"Low-band cutoff. Zero recalls the legacy multiband sound.");
     addChoice("duck.timing",{"MS","SYNC"},{});
     addChoice("duck.releaseNote",notes,{});
     addChoice("tube.oversampling",{"2X","4X"},{});
@@ -598,8 +596,8 @@ void BassDeamonEditor::layoutMain() {
     place("duck.on",{695,511,58,25});duckAdvanced.setBounds(660,733,advancedButtonWidth,advancedButtonHeight);
     duckAdvanced.setComponentID("view-mode");
     duckAdvanced.onClick=[this]{showDuckAdvanced=!showDuckAdvanced;refreshDisplayPage();face.repaint();};
-    place("duck.amount",{520,628,144,112});
-    place("duck.multiband",{419,733,105,27});
+    place("duck.amount",{482,628,144,112});
+    place("duck.multiband",{419,733,192,27});
     const auto duckField=[&](const char* id,juce::Rectangle<int> bounds) {
         auto* knob=static_cast<Knob*>(place(id,bounds));
         knob->label.setVisible(false);
@@ -607,10 +605,9 @@ void BassDeamonEditor::layoutMain() {
         knob->slider.setTextBoxStyle(juce::Slider::TextBoxLeft,false,bounds.getWidth(),24);
         knob->resized();
     };
-    duckField("duck.attack",{421,646,103,25});duckField("duck.release",{539,646,103,25});
-    place("duck.releaseNote",{539,646,103,25});place("duck.timing",{657,646,105,25});
-    duckField("duck.body",{421,703,103,25});duckField("duck.punch",{539,703,103,25});
-    duckField("duck.click",{657,703,105,25});
+    duckField("duck.attack",{655,597,100,26});duckField("duck.release",{655,655,100,26});
+    place("duck.releaseNote",{655,655,100,26});place("duck.timing",{490,688,128,25});
+    duckField("duck.lowHz",{490,622,128,25});
 
     place("tube.on",{175,786,58,25});place("tube.audition",{241,786,65,25});
     const auto tubeField=[&](const char* id,int x,int width) {
@@ -643,12 +640,12 @@ void BassDeamonEditor::refreshDisplayPage() {
     for (auto* item : phaseControls) item->setVisible(showPhaseAdvanced);
     duckAdvanced.setToggleState(showDuckAdvanced,juce::dontSendNotification);
     control("duck.amount")->setVisible(!showDuckAdvanced);
-    for (const char* id : {"duck.attack","duck.multiband","duck.body","duck.punch","duck.click"})
-        control(id)->setVisible(showDuckAdvanced);
+    control("duck.lowHz")->setVisible(showDuckAdvanced);
+
     control("duck.timing")->setVisible(showDuckAdvanced);
     const bool sync=processor.parameters.getRawParameterValue("duck.timing")->load()>.5f;
-    control("duck.release")->setVisible(showDuckAdvanced && !sync);
-    control("duck.releaseNote")->setVisible(showDuckAdvanced && sync);
+    control("duck.release")->setVisible(!sync);
+    control("duck.releaseNote")->setVisible(sync);
 }
 
 void BassDeamonEditor::layoutUnmask() {
@@ -687,9 +684,14 @@ void BassDeamonEditor::layoutUnmask() {
         position("unmask.timing",{821,583,102,25}),
         position("unmask.controlDb",{1047,583,104,25})
     };
-    unmaskAttackKnob->setBounds(862,610,120,93);
-    unmaskReleaseKnob->setBounds(1001,610,120,93);
-    unmaskReleaseNote=position("unmask.releaseNote",{1001,649,120,26});
+    unmaskAttackKnob->setBounds(1001,609,120,52);
+    unmaskReleaseKnob->setBounds(1001,667,120,52);
+    for (auto* field : {unmaskAttackKnob,unmaskReleaseKnob}) {
+        field->slider.setSliderStyle(juce::Slider::LinearBar);
+        field->slider.setTextBoxStyle(juce::Slider::TextBoxLeft,false,120,24);
+        field->resized();
+    }
+    unmaskReleaseNote=position("unmask.releaseNote",{1001,683,120,26});
     unmaskHoldFocus=position("unmask.hold",{1047,543,104,25});
     focusMin.setBounds(821,733,87,25);
     focusMax.setBounds(917,733,87,25);
@@ -763,6 +765,14 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g) {
     };
     meter("IN RMS",inputDb,193);meter("OUT RMS",outputDb,449);
 
+    const auto autoMixFace=autoMixButton.getBounds().toFloat().reduced(1);
+    g.setColour(juce::Colours::black.withAlpha(.28f));
+    g.fillRoundedRectangle(autoMixFace.translated(0,2),5);
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff37332f),0,autoMixFace.getY(),
+                                           juce::Colour(0xff24211e),0,autoMixFace.getBottom(),false));
+    g.fillRoundedRectangle(autoMixFace,5);
+    g.setColour(console::amber.withAlpha(.55f));
+    g.drawRoundedRectangle(autoMixFace,5,1.f);
     paintSignalPath(g,processor);
     if (g.clipRegionIntersects({24,128,1152,320})) {
         if (visualBypassed) {
@@ -799,7 +809,7 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g) {
         stageTitle(g,stages[index],{x+18,509,152,27},20);
     }
     const bool raw=skin.isRaw();
-    paintReductionMeter(g,165.f,542,glueGr,20,raw);
+    paintReductionMeter(g,203.5f,542,glueGr,20,raw);
     paintReductionMeter(g,592.5f,542,processor.duckReduction.load(),18,raw);
     if (!showUnmaskAdvanced) paintReductionMeter(g,981.5f,542,processor.unmaskReduction.load(),24,raw);
     console::text(g,"ATTACK",{266,577,100,19},12,console::muted);
@@ -821,11 +831,13 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g) {
     } else if (processor.parameters.getRawParameterValue("unmask.track")->load()>.5f) {
         console::text(g,"FOCUS "+juce::String(focus,1)+" Hz",{955,512,125,22},12,console::muted);
     }
+    console::text(g,"ATTACK",{655,577,100,19},12,console::muted);
+    console::text(g,"RELEASE",{655,635,100,19},12,console::muted);
     if (showDuckAdvanced) {
-        constexpr std::array labels{"ATTACK","RELEASE","RELEASE MODE","BODY","PUNCH","CLICK"};
-        for (size_t i=0;i<labels.size();++i)
-            console::text(g,labels[i],{421.f+118.f*float(i%3),i<3?625.f:681.f,105,20},12,console::muted);
+        console::text(g,"LOW-BAND FREQUENCY",{490,601,145,19},12,console::muted);
+        console::text(g,"RELEASE MODE",{490,667,128,19},12,console::muted);
     }
+
 
     stageTitle(g,Stage::softTube,{39,782,137,31},17);
     for (const auto& caption : std::array<std::pair<const char*,float>,5>{{

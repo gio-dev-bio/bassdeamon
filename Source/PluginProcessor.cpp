@@ -3,7 +3,7 @@
 #include <optional>
 
 namespace {
-constexpr std::array<const char*, 69> ids{
+constexpr std::array<const char*, 70> ids{
     "glue.on", "glue.amount", "glue.lock", "phase.on", "phase.invert", "phase.delay",
     "phase.rotate", "phase.frequency", "unmask.on", "unmask.amount", "unmask.delta",
     "glue.agc", "glue.agcLock", "phase.agc", "phase.agcLock", "unmask.agc", "unmask.agcLock",
@@ -12,7 +12,7 @@ constexpr std::array<const char*, 69> ids{
     "tube.on","tube.drive","tube.amount","tube.source","tube.colour","tube.agc","tube.agcLock","tube.audition",
     "glue.timing","glue.attackMs","glue.releaseMs","glue.attackNote","glue.releaseNote",
     "unmask.timing","unmask.attackNote","unmask.releaseNote","view.range","view.hold",
-    "view.spectrum","view.minHz","view.maxHz","unmask.attenuation","unmask.controlDb","unmask.stereoMode","unmask.focusMinHz","unmask.focusMaxHz","kickEq.on","kickEq.frequency","kickEq.cut","subMono.on","subMono.hz","duck.on","duck.amount","duck.attack","duck.release","duck.timing","duck.releaseNote","tube.oversampling","duck.multiband","duck.body","duck.punch","duck.click","phase.angle"};
+    "view.spectrum","view.minHz","view.maxHz","unmask.attenuation","unmask.controlDb","unmask.stereoMode","unmask.focusMinHz","unmask.focusMaxHz","kickEq.on","kickEq.frequency","kickEq.cut","subMono.on","subMono.hz","duck.on","duck.amount","duck.attack","duck.release","duck.timing","duck.releaseNote","tube.oversampling","duck.multiband","duck.body","duck.punch","duck.click","phase.angle","duck.lowHz"};
 }
 
 BassDeamonProcessor::BassDeamonProcessor()
@@ -63,7 +63,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout BassDeamonProcessor::layout(
     boolean("unmask.hold", "UNMASK hold focus", false);
     continuous("unmask.frequency", "UNMASK manual focus (Hz)", 30, 250, 75);
     continuous("unmask.width", "UNMASK width", 0, 1, 0.55f);
-    continuous("unmask.attack", "UNMASK attack (ms)", 1, 50, 8);
+    continuous("unmask.attack", "UNMASK attack (ms)", 0, 50, 8);
     continuous("unmask.release", "UNMASK release (ms)", 30, 500, 120);
     p.add(std::make_unique<juce::AudioParameterChoice>(juce::ParameterID{"unmask.maxCut", 1},
         "UNMASK cut ceiling", juce::StringArray{"3 dB", "6 dB", "9 dB", "12 dB"}, 2));
@@ -102,16 +102,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout BassDeamonProcessor::layout(
     continuous("subMono.hz", "Sub Mono frequency (Hz)", 40, 250, 120);
     boolean("duck.on", "Duck active", false);
     continuous("duck.amount", "Duck amount (dB)", 0, 18, 3);
-    continuous("duck.attack", "Duck attack (ms)", .25f, 20, 1.5f);
+    continuous("duck.attack", "Duck attack (ms)", 0, 20, 1.5f);
     continuous("duck.release", "Duck release (ms)", 20, 350, 65);
     choice("duck.timing","Duck release timing",{"MS","SYNC"},0);
     choice("duck.releaseNote","Duck release note",notes,2);
     choice("tube.oversampling","Saturation oversampling",{"2X","4X"},1);
-    boolean("duck.multiband","Duck multiband",false);
+    boolean("duck.multiband","Duck Low-Band",false);
     continuous("duck.body","Duck Body amount",0,1,1);
     continuous("duck.punch","Duck Punch amount",0,1,.65f);
     continuous("duck.click","Duck Click amount",0,1,.35f);
     continuous("phase.angle","Phase angle (degrees)",-180,180,0);
+    continuous("duck.lowHz","Duck Low-Band cutoff (Hz)",0,250,110);
     return p;
 }
 
@@ -166,7 +167,7 @@ bassdeamon::Settings BassDeamonProcessor::readSettings(bool proposal) const noex
     s.duck = value(57) > .5f; s.duckAmountDb = value(58);
     s.duckAttackMs = value(59); s.duckReleaseMs = value(60);
     s.duckSync=value(61)>.5f; s.duckReleaseNote=int(value(62));
-    s.duckMultiband=value(64)>.5f; s.duckBands={value(65),value(66),value(67)};
+    s.duckMultiband=value(64)>.5f; s.duckLowHz=value(69); s.duckBands={value(65),value(66),value(67)};
     s.auditionDry = compareDry.load(std::memory_order_relaxed);
     s.matchEnabled = compareMatch.load(std::memory_order_relaxed);
     s.active=value(18)>.5f;
@@ -576,7 +577,7 @@ void BassDeamonProcessor::applyAutoMix() {
 }
 
 void BassDeamonProcessor::getStateInformation(juce::MemoryBlock& dest) {
-    auto state = parameters.copyState(); state.setProperty("schemaVersion", 10, nullptr);
+    auto state = parameters.copyState(); state.setProperty("schemaVersion", 11, nullptr);
     state.setProperty("phaseReferenceHz",phaseReferenceHz.load(),nullptr);
     state.setProperty("visualRawTheme",usesRawTheme(),nullptr);
     state.setProperty("visualSpectrumView",spectrumView(),nullptr);
@@ -588,7 +589,7 @@ void BassDeamonProcessor::getStateInformation(juce::MemoryBlock& dest) {
 void BassDeamonProcessor::setStateInformation(const void* data, int bytes) {
     cancelAutoMix();
     if (auto xml = getXmlFromBinary(data, bytes)) {
-        if (xml->hasTagName(parameters.state.getType()) && xml->getIntAttribute("schemaVersion", 1) <= 10) {
+        if (xml->hasTagName(parameters.state.getType()) && xml->getIntAttribute("schemaVersion", 1) <= 11) {
             kickEqGeneration.fetch_add(1);
             kickEqLearnRequested.store(false);
             kickEqStatus.store(0);
@@ -636,6 +637,11 @@ void BassDeamonProcessor::setStateInformation(const void* data, int bytes) {
                     const float value = static_cast<float>(child.getProperty("value"));
                     if (std::isfinite(value)) parameter->setValueNotifyingHost(parameter->convertTo0to1(value));
                 }
+            }
+            if(xml->getIntAttribute("schemaVersion",1)<11) {
+                auto* cutoff=parameters.getParameter("duck.lowHz");
+                const bool legacy=parameters.getRawParameterValue("duck.multiband")->load()>.5f;
+                cutoff->setValueNotifyingHost(legacy?0.f:cutoff->getDefaultValue());
             }
             if(xml->getIntAttribute("schemaVersion",1)<5){
                 auto* limit=parameters.getParameter("view.maxHz");
