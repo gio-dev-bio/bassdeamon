@@ -1,23 +1,19 @@
-name: BassDeamon macOS Universal
+name: BassDeamon macOS Universal (Intel packaging)
 on:
   push:
-    branches: ['build/bassdeamon-1.0.5-universal']
+    branches: ['build/bassdeamon-1.0.5-intel-packaging']
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   macos:
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [macos-26-intel, macos-26]
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-26-intel
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Configure Universal VST3
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release '-DCMAKE_OSX_ARCHITECTURES=x86_64;arm64' -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
-      - run: cmake --build build --config Release --parallel 2
+      - run: cmake --build build --config Release --parallel 3
       - run: ctest --test-dir build -C Release --output-on-failure
       - name: Verify architectures and sign
         run: |
@@ -27,10 +23,8 @@ jobs:
           codesign --force --sign - --timestamp=none "$bundle"
           codesign --verify --strict --verbose=2 "$bundle"
       - name: Capture the actual editor
-        if: matrix.runner == 'macos-26'
         run: build/plugin_tests_artefacts/Release/plugin_tests --capture "$PWD/GUI-Preview.png"
       - name: Package Universal plugin
-        if: matrix.runner == 'macos-26'
         run: |
           package="$PWD/BassDeamon-1.0.5-macOS-Universal.zip"
           (cd build/BassDeamon_artefacts/Release/VST3 && zip -Xqr "$package" BassDeamon.vst3)
@@ -42,7 +36,6 @@ jobs:
           lipo "$bundle/Contents/MacOS/BassDeamon" -verify_arch x86_64 arm64
           codesign --verify --strict --verbose=2 "$bundle"
       - name: Test installation and replacement from the extracted ZIP
-        if: matrix.runner == 'macos-26'
         run: |
           export HOME="$(mktemp -d)"
           bash package-verification/install.sh
@@ -51,7 +44,6 @@ jobs:
           test -x "$installed/Contents/MacOS/BassDeamon"
           codesign --verify --strict "$installed"
       - uses: actions/upload-artifact@v4
-        if: matrix.runner == 'macos-26'
         with:
           name: BassDeamon-1.0.5-macOS-Universal
           path: |
