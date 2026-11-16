@@ -589,7 +589,7 @@ void BassDeamonEditor::layoutMain() {
     place("glue.on",{313,511,55,25});place("glue.timing",{190,511,110,25});
     place("glue.amount",{93,628,144,112});place("glue.agc",{194,713,85,24});
     place("glue.agcLock",{284,713,85,24});place("glue.lock",{194,742,175,24});
-    glueAttackSlider.setBounds(266,597,100,26);glueReleaseSlider.setBounds(266,655,100,26);
+    glueAttackSlider.setBounds(266,635,100,26);glueReleaseSlider.setBounds(266,683,100,26);
     place("glue.releaseNote",glueReleaseSlider.getBounds());
 
     place("unmask.on",{1088,511,56,25});
