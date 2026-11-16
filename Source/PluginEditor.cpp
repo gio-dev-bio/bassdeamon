@@ -605,8 +605,8 @@ void BassDeamonEditor::layoutMain() {
         knob->slider.setTextBoxStyle(juce::Slider::TextBoxLeft,false,bounds.getWidth(),24);
         knob->resized();
     };
-    duckField("duck.attack",{655,597,100,26});duckField("duck.release",{655,655,100,26});
-    place("duck.releaseNote",{655,655,100,26});place("duck.timing",{490,688,128,25});
+    duckField("duck.attack",{655,635,100,26});duckField("duck.release",{655,683,100,26});
+    place("duck.releaseNote",{655,683,100,26});place("duck.timing",{490,688,128,25});
     duckField("duck.lowHz",{490,622,128,25});
 
     place("tube.on",{175,786,58,25});place("tube.audition",{241,786,65,25});
@@ -812,12 +812,12 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g) {
     paintReductionMeter(g,203.5f,542,glueGr,20,raw);
     paintReductionMeter(g,592.5f,542,processor.duckReduction.load(),18,raw);
     if (!showUnmaskAdvanced) paintReductionMeter(g,981.5f,542,processor.unmaskReduction.load(),24,raw);
-    console::text(g,"ATTACK",{266,577,100,19},12,console::muted);
-    console::text(g,"RELEASE",{266,635,100,19},12,console::muted);
+    console::text(g,"ATTACK",{266,616,100,19},12,console::muted);
+    console::text(g,"RELEASE",{266,664,100,19},12,console::muted);
     const int timing=int(processor.parameters.getRawParameterValue("glue.timing")->load());
     if (timing==0) {
-        console::text(g,juce::String(processor.glueAttack.load(),1)+" ms",{266,597,100,26},15,console::amber);
-        console::text(g,juce::String(processor.glueRelease.load(),1)+" ms",{266,655,100,26},15,console::amber);
+        console::text(g,juce::String(processor.glueAttack.load(),1)+" ms",{266,635,100,26},15,console::amber);
+        console::text(g,juce::String(processor.glueRelease.load(),1)+" ms",{266,683,100,26},15,console::amber);
     }
     if (showUnmaskAdvanced) {
         console::text(g,"TIMING",{821,568,102,15},11,console::muted);
@@ -831,8 +831,8 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g) {
     } else if (processor.parameters.getRawParameterValue("unmask.track")->load()>.5f) {
         console::text(g,"FOCUS "+juce::String(focus,1)+" Hz",{955,512,125,22},12,console::muted);
     }
-    console::text(g,"ATTACK",{655,577,100,19},12,console::muted);
-    console::text(g,"RELEASE",{655,635,100,19},12,console::muted);
+    console::text(g,"ATTACK",{655,616,100,19},12,console::muted);
+    console::text(g,"RELEASE",{655,664,100,19},12,console::muted);
     if (showDuckAdvanced) {
         console::text(g,"LOW-BAND FREQUENCY",{490,601,145,19},12,console::muted);
         console::text(g,"RELEASE MODE",{490,667,128,19},12,console::muted);
