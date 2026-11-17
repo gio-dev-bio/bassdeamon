@@ -1,7 +1,7 @@
 name: BassDeamon macOS Universal
 on:
   push:
-    branches: ['build/bassdeamon-1.0.6-universal']
+    branches: ['build/bassdeamon-1.0.7-universal']
   workflow_dispatch:
 permissions:
   contents: read
@@ -26,7 +26,7 @@ jobs:
         run: build/plugin_tests_artefacts/Release/plugin_tests --capture "$PWD/GUI-Preview.png"
       - name: Package Universal plugin
         run: |
-          package="$PWD/BassDeamon-1.0.6-macOS-Universal.zip"
+          package="$PWD/BassDeamon-1.0.7-macOS-Universal.zip"
           (cd build/BassDeamon_artefacts/Release/VST3 && zip -Xqr "$package" BassDeamon.vst3)
           bash -n install.sh
           zip -Xj "$package" INSTALL.txt install.sh
@@ -45,9 +45,9 @@ jobs:
           codesign --verify --strict "$installed"
       - uses: actions/upload-artifact@v4
         with:
-          name: BassDeamon-1.0.6-macOS-Universal
+          name: BassDeamon-1.0.7-macOS-Universal
           path: |
-            BassDeamon-1.0.6-macOS-Universal.zip
+            BassDeamon-1.0.7-macOS-Universal.zip
             GUI-Preview.png
             GUI-Raw.png
             GUI-Raw-Advanced.png

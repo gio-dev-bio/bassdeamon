@@ -54,3 +54,8 @@ Decisioni approvate per la GUI e per il percorso audio della prossima versione. 
 Confrontare le schermate con il riferimento della skin e della vista corrispondenti, mantenendo gli stessi stati dei controlli. Verificare palette e finiture, disposizione dei tre meter, leva metallica Power e aspetto di Auto Mix.
 
 Controllare ordine DSP, Learn Kick EQ e Phase a 44,1 kHz con loop reali di kick e basso, risposta con arpeggi, confronto a volume pareggiato, collisioni residue PRE/POST, Scope Stereo/Mono, timing in Sync, Delta e Oversampling, Undo/Redo, CPU e latenza riportata a Cubase. Il mockup è il riferimento grafico. La verifica DSP richiede audio e misurazioni.
+
+
+## Correzione dopo confronto con Cubase 1.0.6
+
+La cattura 1.0.6 conserva scheggiature marcate, ghiere dentate e meter più stretti del riferimento. Per riprodurre il RAW approvato usare cornici continue in acciaio brunito, grana tenue, manopole a calotta metallica larga e meter RAW da 224 px logici. Confrontare le catture Main e Advanced con il mockup prima della consegna. La sola verifica dei rettangoli non certifica la corrispondenza visiva.

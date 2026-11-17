@@ -68,6 +68,20 @@ public:
 
     bool setRaw(bool useRaw);
 
+    void drawLinearSlider(juce::Graphics& g,int x,int y,int width,int height,
+                          float position,float minimum,float maximum,
+                          juce::Slider::SliderStyle style,juce::Slider& slider) override {
+        if (!raw || style!=juce::Slider::LinearBar) {
+            juce::LookAndFeel_V4::drawLinearSlider(g,x,y,width,height,position,minimum,maximum,style,slider);
+            return;
+        }
+        const auto area=slider.getLocalBounds().toFloat().reduced(1);
+        g.setColour(ink);
+        g.fillRoundedRectangle(area,2);
+        g.setColour(juce::Colour(0xff797b79));
+        g.drawRoundedRectangle(area,2,1);
+    }
+
     void paintPanel(juce::Graphics& g, juce::Rectangle<float> r, bool dark=false) const {
         if (!raw || !steel.isValid()) {
             panel(g,r,dark);
@@ -82,44 +96,22 @@ public:
         g.setGradientFill(juce::ColourGradient(juce::Colour(dark?0xff191712:0xff484a4d),0,r.getY(),
             juce::Colour(dark?0xff111210:0xff35373a),0,r.getBottom(),false));
         g.fillRect(r);
-        g.setTiledImageFill(steel,juce::roundToInt(r.getX()+r.getWidth()*.17f),juce::roundToInt(r.getY()),dark?.27f:.24f);
+        g.setTiledImageFill(steel,juce::roundToInt(r.getX()+r.getWidth()*.17f),juce::roundToInt(r.getY()),dark?.10f:.12f);
         g.fillRect(r);
         g.setGradientFill(juce::ColourGradient(juce::Colours::white.withAlpha(dark?0.f:.09f),0,r.getY(),
             juce::Colours::black.withAlpha(dark?.38f:.17f),0,r.getBottom(),false));
         g.fillRect(r);
         g.setGradientFill(juce::ColourGradient(juce::Colour(0xff808287),r.getX(),r.getY(),
             juce::Colour(0xff45474a),r.getRight(),r.getBottom(),false));
-        g.drawRoundedRectangle(r.reduced(1.5f),5,2.5f);
+        g.drawRoundedRectangle(r.reduced(2),5,4.f);
+        g.setColour(juce::Colour(0xffb0b2b4).withAlpha(.35f));
+        g.drawRoundedRectangle(r.reduced(3.5f),4,1.f);
         g.setColour(juce::Colours::black.withAlpha(.76f));
         g.drawRoundedRectangle(r.reduced(3),4,1);
         if (!dark) {
             g.setColour(juce::Colour(0xffa9aaa1).withAlpha(.23f));
             g.drawHorizontalLine(juce::roundToInt(r.getY()+3),r.getX()+13,r.getRight()-13);
         }
-        // Oxidation and chipped lacquer sit on the perimeter so labels
-        // remain on a dark, even face. The editor caches this background.
-        juce::Random wear(juce::roundToInt(r.getX()*73+r.getY()*131+r.getWidth()));
-        const auto wornEdge=[&](juce::Point<float> origin, bool horizontal, float inward, float length) {
-            const int marks=juce::roundToInt(length/(dark?10.f:5.f));
-            for (int i=0;i<marks;++i) {
-                const float along=8.f+wear.nextFloat()*(length-16.f);
-                const float depth=1.f+wear.nextFloat()*wear.nextFloat()*(dark?4.f:9.f);
-                const float width=1.f+wear.nextFloat()*wear.nextFloat()*8.f;
-                const auto start=origin+(horizontal?juce::Point<float>(along,depth*inward)
-                                                   :juce::Point<float>(depth*inward,along));
-                const auto delta=horizontal?juce::Point<float>(width,.7f*inward)
-                                           :juce::Point<float>(.7f*inward,width);
-                g.setColour(juce::Colour(0xff150c08).withAlpha(.38f+wear.nextFloat()*.30f));
-                g.drawLine(juce::Line<float>(start,start+delta),1.5f);
-                g.setColour(juce::Colour(0xff9b8672).withAlpha(.17f+wear.nextFloat()*.52f));
-                const auto lip=horizontal?juce::Point<float>(0,1.f*inward):juce::Point<float>(1.f*inward,0);
-                g.drawLine(juce::Line<float>(start+lip,start+delta+lip),.7f);
-            }
-        };
-        wornEdge(r.getTopLeft(),true,1,r.getWidth());
-        wornEdge(r.getBottomLeft(),true,-1,r.getWidth());
-        wornEdge(r.getTopLeft(),false,1,r.getHeight());
-        wornEdge(r.getTopRight(),false,-1,r.getHeight());
         for (float x:{r.getX()+10,r.getRight()-10})
             for (float y:{r.getY()+10,r.getBottom()-10}) screw(g,x,y);
     }
@@ -128,7 +120,7 @@ public:
         juce::Graphics::ScopedSaveState state(g);
         const float cx=static_cast<float>(x)+static_cast<float>(w)*.5f;
         const float cy=static_cast<float>(y)+static_cast<float>(h)*.5f;
-        const float radius=std::max(1.f,static_cast<float>(std::min(w,h))*.5f-(raw?7.f:10.f));
+        const float radius=std::max(1.f,static_cast<float>(std::min(w,h))*.5f-(raw?3.f:10.f));
         const float angle=start+position*(end-start);
         const auto polar=[&](float theta,float distance) {
             return juce::Point<float>{cx+std::sin(theta)*distance,cy-std::cos(theta)*distance};
@@ -165,14 +157,14 @@ public:
         g.setGradientFill(juce::ColourGradient(juce::Colour(0xff7b7e7c),cx,cy-skirt,
             juce::Colour(0xff2a2c2b),cx,cy+skirt,false));
         g.fillEllipse(disc(skirt));
-        if (radius>=24.f) {
+        if (!raw && radius>=24.f) {
             for (int i=0;i<40;++i) {
                 const float a=angle+static_cast<float>(i)*juce::MathConstants<float>::twoPi/40.f;
                 g.setColour(juce::Colours::black.withAlpha(.68f));
                 g.drawLine(juce::Line<float>{polar(a,radius*.76f),polar(a,skirt)},2.f);
             }
         }
-        const float cap=radius*.80f;
+        const float cap=radius*(raw?.91f:.80f);
         {
             juce::Graphics::ScopedSaveState capState(g);
             juce::Path clip;
@@ -182,7 +174,7 @@ public:
                 juce::Colour(0xff3c3e3d),cx+cap*.3f,cy+cap,false));
             g.fillEllipse(disc(cap));
             if (knob.isValid()) {
-                g.setOpacity(enabled?1.f:.6f);
+                g.setOpacity(enabled?.75f:.5f);
                 g.drawImage(knob,disc(cap));
                 g.setOpacity(1.f);
             }

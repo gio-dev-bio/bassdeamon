@@ -39,7 +39,7 @@ void stageTitle(juce::Graphics& g, Stage stage, juce::Rectangle<float> area, flo
 
 void paintReductionMeter(juce::Graphics& g,float x,float y,float reduction,int fullScale,bool raw) {
     juce::Graphics::ScopedSaveState position(g);
-    const float width=raw?192.f:187.f;
+    const float width=raw?224.f:187.f;
     const juce::Rectangle<float> meter(x-width*.5f,y,width,68.f);
     if (raw) {
         const auto bezel=meter.expanded(4);
