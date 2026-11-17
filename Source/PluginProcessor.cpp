@@ -3,7 +3,7 @@
 #include <optional>
 
 namespace {
-constexpr std::array<const char*, 70> ids{
+constexpr std::array<const char*, 74> ids{
     "glue.on", "glue.amount", "glue.lock", "phase.on", "phase.invert", "phase.delay",
     "phase.rotate", "phase.frequency", "unmask.on", "unmask.amount", "unmask.delta",
     "glue.agc", "glue.agcLock", "phase.agc", "phase.agcLock", "unmask.agc", "unmask.agcLock",
@@ -12,7 +12,7 @@ constexpr std::array<const char*, 70> ids{
     "tube.on","tube.drive","tube.amount","tube.source","tube.colour","tube.agc","tube.agcLock","tube.audition",
     "glue.timing","glue.attackMs","glue.releaseMs","glue.attackNote","glue.releaseNote",
     "unmask.timing","unmask.attackNote","unmask.releaseNote","view.range","view.hold",
-    "view.spectrum","view.minHz","view.maxHz","unmask.attenuation","unmask.controlDb","unmask.stereoMode","unmask.focusMinHz","unmask.focusMaxHz","kickEq.on","kickEq.frequency","kickEq.cut","subMono.on","subMono.hz","duck.on","duck.amount","duck.attack","duck.release","duck.timing","duck.releaseNote","tube.oversampling","duck.multiband","duck.body","duck.punch","duck.click","phase.angle","duck.lowHz"};
+    "view.spectrum","view.minHz","view.maxHz","unmask.attenuation","unmask.controlDb","unmask.stereoMode","unmask.focusMinHz","unmask.focusMaxHz","kickEq.on","kickEq.frequency","kickEq.cut","subMono.on","subMono.hz","duck.on","duck.amount","duck.attack","duck.release","duck.timing","duck.releaseNote","tube.oversampling","duck.multiband","duck.body","duck.punch","duck.click","phase.angle","duck.lowHz","balance.trim","balance.lowHz","balance.splitHz","balance.highHz"};
 }
 
 BassDeamonProcessor::BassDeamonProcessor()
@@ -113,6 +113,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout BassDeamonProcessor::layout(
     continuous("duck.click","Duck Click amount",0,1,.35f);
     continuous("phase.angle","Phase angle (degrees)",-180,180,0);
     continuous("duck.lowHz","Duck Low-Band cutoff (Hz)",0,250,110);
+    continuous("balance.trim","Balance trim (dB)",-12,12,0);
+    continuous("balance.lowHz","Balance low edge (Hz)",20,100,30);
+    continuous("balance.splitHz","Balance split (Hz)",40,150,70);
+    continuous("balance.highHz","Balance high edge (Hz)",80,300,150);
     return p;
 }
 
@@ -146,7 +150,7 @@ bassdeamon::Settings BassDeamonProcessor::readSettings(bool proposal) const noex
     s.glue = value(0) > 0.5f; s.glueAmount = value(1); s.glueLocked = value(2) > 0.5f;
     s.phase = value(3) > 0.5f; s.invert = value(4) > 0.5f; s.delayMs = value(5);
     s.rotate = value(6) > 0.5f; s.rotationHz = value(7);
-    s.phaseAngle=value(68); s.phaseReference=phaseReferenceHz.load(std::memory_order_relaxed);
+    s.phaseAngle=value(68); s.phaseReference=phaseProcessingReferenceHz.load(std::memory_order_relaxed); s.kickReferenceHz=detectedKickHz.load(std::memory_order_relaxed);
     s.unmask = value(8) > 0.5f; s.unmaskAmount = value(9); s.delta = value(10) > 0.5f;
     for (size_t i = 0; i < 3; ++i) s.agc[i] = {value(11+2*i) > 0.5f, value(12+2*i) > 0.5f};
     // Canonicalise the declared 0.001 dB grid in double: JUCE's normalised
@@ -167,7 +171,7 @@ bassdeamon::Settings BassDeamonProcessor::readSettings(bool proposal) const noex
     s.duck = value(57) > .5f; s.duckAmountDb = value(58);
     s.duckAttackMs = value(59); s.duckReleaseMs = value(60);
     s.duckSync=value(61)>.5f; s.duckReleaseNote=int(value(62));
-    s.duckMultiband=value(64)>.5f; s.duckLowHz=value(69); s.duckBands={value(65),value(66),value(67)};
+    s.balanceTrimDb=value(70); s.duckMultiband=value(64)>.5f; s.duckLowHz=value(69); s.duckBands={value(65),value(66),value(67)};
     s.auditionDry = compareDry.load(std::memory_order_relaxed);
     s.matchEnabled = compareMatch.load(std::memory_order_relaxed);
     s.active=value(18)>.5f;
@@ -262,6 +266,10 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     }
     captureAutoMix(bass, side, transportAllowsLearn, bpm, beatsPerBar, settings);
     settings = auditionSettings(settings);
+    if(balancePreviewActive.load()) {
+        settings.balanceTrimDb=balancePreviewDb.load();settings.matchEnabled=false;settings.auditionDry=false;
+        settings.delta=false;settings.tube.audition=false;
+    }
     const bool collectVisuals=settings.active && analysisQueue.enabled.load(std::memory_order_relaxed);
     if(!collectVisuals){
         engine.process(bass.getArrayOfWritePointers(),bass.getNumChannels(),
@@ -343,7 +351,7 @@ bassdeamon::UnmaskResponse BassDeamonProcessor::consumeUnmaskResponse() noexcept
     bassdeamon::UnmaskResponse strongest;
     read.forEach([&](int index) {
         const auto& candidate = responseFrames[size_t(index)];
-        if (candidate.activity >= strongest.activity) strongest = candidate;
+        if (candidate.activity >= strongest.activity || (candidate.centreHz>0 && std::abs(candidate.centreHz-strongest.centreHz)>candidate.centreHz*.05)) strongest = candidate;
     });
     return strongest;
 }
@@ -383,6 +391,7 @@ void BassDeamonProcessor::timerCallback() {
                 parameter->setValueNotifyingHost(parameter->convertTo0to1(value));
                 parameter->endChangeGesture();
             };
+            acceptKickReference(hz);
             set("kickEq.frequency", float(hz));
             set("kickEq.on", 1);
             parameters.copyState();
@@ -428,6 +437,7 @@ void BassDeamonProcessor::startAutoMix(int bars) {
 }
 
 void BassDeamonProcessor::cancelAutoMix() noexcept {
+    balancePreviewActive.store(false);
     autoCancelled.store(true, std::memory_order_release);
     autoAudition.store(0, std::memory_order_release);
 }
@@ -499,10 +509,11 @@ void BassDeamonProcessor::updateAutoMix() {
             return;
         }
         autoAudio.resize(autoCount);
+        const std::array<double,3> balanceEdges{raw[71]->load(),raw[72]->load(),raw[73]->load()};
         try {
             autoWorker = std::async(std::launch::async,
-            [audio = std::move(autoAudio), rate = autoRate, bpm = autoBpm, channels = autoChannels, settings = autoBase, runtime = autoRuntime] {
-                return bassdeamon::analyzeAutoMix(audio, rate, bpm, channels, settings, runtime);
+            [audio = std::move(autoAudio), rate = autoRate, bpm = autoBpm, channels = autoChannels, settings = autoBase, runtime = autoRuntime, balanceEdges] {
+                return bassdeamon::analyzeAutoMix(audio, rate, bpm, channels, settings, runtime, balanceEdges);
             });
         } catch (const std::exception&) {
             autoResult.analysisFailed = true;
@@ -524,6 +535,7 @@ void BassDeamonProcessor::updateAutoMix() {
         autoState.store(AutoMixState::idle, std::memory_order_release);
         return;
     }
+    if(autoResult.reliableKick)acceptKickReference(autoResult.kickRootHz);
     for (size_t i = 0; i < ids.size(); ++i) autoParameters[i].store(autoOriginal[i]);
     for (const auto& change : autoResult.changes) {
         const auto found = std::find_if(ids.begin(), ids.end(), [&](const char* id) {
@@ -577,8 +589,15 @@ void BassDeamonProcessor::applyAutoMix() {
 }
 
 void BassDeamonProcessor::getStateInformation(juce::MemoryBlock& dest) {
-    auto state = parameters.copyState(); state.setProperty("schemaVersion", 11, nullptr);
+    auto state = parameters.copyState(); state.setProperty("schemaVersion", 12, nullptr);
     state.setProperty("phaseReferenceHz",phaseReferenceHz.load(),nullptr);
+    state.setProperty("phaseProcessingReferenceHz",phaseProcessingReferenceHz.load(),nullptr);
+    state.setProperty("phaseReferenceAutomatic",phaseReferenceAutomatic.load(),nullptr);
+    state.setProperty("detectedKickHz",detectedKickHz.load(),nullptr);
+    state.setProperty("balanceTargetValid",balanceTargetValid.load(),nullptr);
+    state.setProperty("balanceTargetSub",balanceTargetSub.load(),nullptr);
+    state.setProperty("balanceTargetBody",balanceTargetBody.load(),nullptr);
+    for(size_t i=0;i<3;++i)state.setProperty("balanceTargetEdge"+juce::String(int(i)),balanceTargetEdges[i].load(),nullptr);
     state.setProperty("visualRawTheme",usesRawTheme(),nullptr);
     state.setProperty("visualSpectrumView",spectrumView(),nullptr);
     state.setProperty("visualAnalyzerHz",analyzerRefreshHz(),nullptr);
@@ -589,7 +608,7 @@ void BassDeamonProcessor::getStateInformation(juce::MemoryBlock& dest) {
 void BassDeamonProcessor::setStateInformation(const void* data, int bytes) {
     cancelAutoMix();
     if (auto xml = getXmlFromBinary(data, bytes)) {
-        if (xml->hasTagName(parameters.state.getType()) && xml->getIntAttribute("schemaVersion", 1) <= 11) {
+        if (xml->hasTagName(parameters.state.getType()) && xml->getIntAttribute("schemaVersion", 1) <= 12) {
             kickEqGeneration.fetch_add(1);
             kickEqLearnRequested.store(false);
             kickEqStatus.store(0);
@@ -652,12 +671,22 @@ void BassDeamonProcessor::setStateInformation(const void* data, int bytes) {
                 auto* mode=parameters.getParameter("unmask.controlDb");mode->setValueNotifyingHost(0);
                 auto* amount=parameters.getParameter("unmask.attenuation");amount->setValueNotifyingHost(amount->convertTo0to1(6));
             }
+            if(xml->getIntAttribute("schemaVersion",1)<12)
+                for(size_t i=70;i<ids.size();++i){auto* p=parameters.getParameter(ids[i]);p->setValueNotifyingHost(p->getDefaultValue());}
             constexpr std::array<double,6> previousRates{30,15,8,4,2,1};
             const auto oldRate = size_t(std::clamp(xml->getIntAttribute("visualAnalyzerRate",2),0,5));
             const double reference=xml->getDoubleAttribute("phaseReferenceHz",60.);
             phaseReferenceHz.store(float(std::isfinite(reference)?std::clamp(reference,30.,130.):60.));
             // States predating the skin selector inherit the approved default.
             // An explicit Classic selection remains authoritative.
+            const double processingRef=xml->getDoubleAttribute("phaseProcessingReferenceHz",reference);
+            phaseProcessingReferenceHz.store(float(std::isfinite(processingRef)?std::clamp(processingRef,30.,130.):60.));
+            phaseReferenceAutomatic.store(xml->getBoolAttribute("phaseReferenceAutomatic",reference==60.));
+            detectedKickHz.store(float(std::clamp(xml->getDoubleAttribute("detectedKickHz",0),0.,130.)));
+            for(size_t i=0;i<3;++i)balanceTargetEdges[i].store(float(xml->getDoubleAttribute("balanceTargetEdge"+juce::String(int(i)),std::array<double,3>{30,70,150}[i])));
+            balanceTargetValid.store(xml->getBoolAttribute("balanceTargetValid",false));
+            balanceTargetSub.store(float(std::clamp(xml->getDoubleAttribute("balanceTargetSub",0),-120.,120.)));
+            balanceTargetBody.store(float(std::clamp(xml->getDoubleAttribute("balanceTargetBody",0),-120.,120.)));
             setRawTheme(xml->getBoolAttribute("visualRawTheme",true));
             setAnalyzerRefreshHz(xml->getDoubleAttribute("visualAnalyzerHz",previousRates[oldRate]));
             setSpectrumView(xml->getIntAttribute("visualSpectrumView",int(parameters.getRawParameterValue("view.spectrum")->load())));
@@ -724,4 +753,16 @@ void BassDeamonProcessor::parameterGestureChanged(int,bool starting){
     auto* messages=juce::MessageManager::getInstanceWithoutCreating();
     if(!starting&&messages!=nullptr&&messages->isThisTheMessageThread())
         refreshHistory();
+}
+
+void BassDeamonProcessor::applyBalanceTrim(float db) {
+    cancelAutoMix();refreshHistory();undoManager.beginNewTransaction("Apply balance trim");
+    auto* p=parameters.getParameter("balance.trim");
+    p->beginChangeGesture();p->setValueNotifyingHost(p->convertTo0to1(std::clamp(db,-12.f,12.f)));p->endChangeGesture();
+    parameters.copyState();undoManager.beginNewTransaction();
+}
+void BassDeamonProcessor::saveBalanceReference() {
+    if(autoMixState()!=AutoMixState::ready||!autoResult.balanceValid)return;
+    balanceTargetSub.store(float(autoResult.balanceSubDb));balanceTargetBody.store(float(autoResult.balanceBodyDb));balanceTargetValid.store(true);
+    for(size_t i=0;i<3;++i)balanceTargetEdges[i].store(float(autoResult.balanceEdges[i]));
 }

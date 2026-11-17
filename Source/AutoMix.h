@@ -16,6 +16,9 @@ struct AutoMixResult {
     std::vector<Change> changes;
     StereoPhaseReport mono;
     double dryGainDb = 0, wetGainDb = 0, overlapBefore = 0, overlapAfter = 0;
+    double kickRootHz=0,balanceSubDb=0,balanceBodyDb=0,sumPeakDb=-120,balanceBaseTrimDb=0;
+    bool balanceValid=false;
+    std::array<double,3> balanceEdges{30,70,150};
     bool duckTimingAvailable = false;
     bool unsupportedLength = false, analysisFailed = false;
     bool hasKick = false, hasBass = false, reliableKick = false, reliablePhase = false, overlapValid = false;
@@ -87,10 +90,12 @@ inline DuckTiming analyzeDuckTiming(const std::vector<AutoMixFrame>& audio, doub
 
 inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, double rate,
                                    double bpm, int channels, Settings settings,
-                                   const Engine::RuntimeState& runtime = {-24,2,20,180,0,0,0,75,0}) {
+                                   const Engine::RuntimeState& runtime = {-24,2,20,180,0,0,0,75,0},
+                                   std::array<double,3> balanceEdges={30,70,150}) {
     AutoMixResult result;
     if (audio.empty()) return result;
 
+    const Settings originalSettings=settings;
     StereoPhaseAnalysis stereo;
     stereo.prepare(rate, settings.subMonoHz);
     KickEqCapture kick;
@@ -165,6 +170,7 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
         return std::abs(hz - root) <= root * .06;
     });
     result.reliableKick = agreeing > 0 && 2 * agreeing > kickWindows;
+    if(result.reliableKick){result.kickRootHz=root;settings.kickReferenceHz=root;}
     if (result.reliableKick && *strongest > bassEnergy * .005) {
         propose("kickEq.on", settings.kickEqEnabled, 1);
         propose("kickEq.frequency", settings.kickEqFrequency, root);
@@ -300,6 +306,34 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
         result.overlapBefore = 100 * before / kickEnergy;
         result.overlapAfter = 100 * after / kickEnergy;
     }
+    // Measure the CURRENT processed bass, independently from the Auto Mix
+    // proposal. Stereo channel energies never cancel into a mono average.
+    std::sort(balanceEdges.begin(),balanceEdges.end());
+    balanceEdges[0]=std::clamp(balanceEdges[0],20.,100.);
+    balanceEdges[1]=std::clamp(balanceEdges[1],balanceEdges[0]+5.,150.);
+    balanceEdges[2]=std::clamp(balanceEdges[2],balanceEdges[1]+5.,300.);
+    result.balanceEdges=balanceEdges;result.balanceBaseTrimDb=originalSettings.balanceTrimDb;
+    Engine baseline;baseline.prepare(rate);baseline.restoreRuntime(runtime);
+    std::array<std::array<std::array<Biquad,2>,2>,2> filters{};
+    for(size_t band=0;band<2;++band)for(size_t source=0;source<2;++source)for(auto& filter:filters[band][source]) {
+        const double lo=balanceEdges[band],hi=balanceEdges[band+1],centre=std::sqrt(lo*hi);
+        filter.bandpass(centre,centre/(hi-lo),rate);
+    }
+    std::array<std::array<double,2>,2> energy{};double sumPeak=0;
+    std::array<float,256> l{},r{},kl{},kr{};
+    for(size_t start=0;start<audio.size();start+=256) {
+        const size_t count=std::min(size_t(256),audio.size()-start);
+        for(size_t n=0;n<count;++n){const auto& f=audio[start+n];l[n]=f.left;r[n]=f.right;kl[n]=f.kickLeft;kr[n]=f.kickRight;}
+        float* outputs[]{l.data(),r.data()};const float* kicks[]{kl.data(),kr.data()};
+        baseline.process(outputs,channels,kicks,2,int(count),originalSettings,bpm);
+        for(size_t n=0;n<count;++n)for(size_t c=0;c<size_t(channels);++c) {
+            const double b=c==0?l[n]:r[n],k=c==0?kl[n]:kr[n];sumPeak=std::max(sumPeak,std::abs(b+k));
+            for(size_t band=0;band<2;++band){const double bv=filters[band][0][c].tick(b),kv=filters[band][1][c].tick(k);energy[band][0]+=bv*bv;energy[band][1]+=kv*kv;}
+        }
+    }
+    result.balanceValid=std::all_of(energy.begin(),energy.end(),[](const auto& band){return band[0]>1e-8&&band[1]>1e-8;});
+    if(result.balanceValid){result.balanceSubDb=10*std::log10(energy[0][0]/energy[0][1]);result.balanceBodyDb=10*std::log10(energy[1][0]/energy[1][1]);}
+    result.sumPeakDb=db(sumPeak);
     return result;
 }
 

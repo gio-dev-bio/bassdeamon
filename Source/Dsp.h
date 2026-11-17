@@ -28,6 +28,15 @@ inline double noteMilliseconds(int note,double bpm) noexcept {
 struct AgcSettings { bool enabled = false, locked = false; };
 enum class UnmaskStereoMode { stereo, mid, side };
 
+inline double phaseDegreesAtReference(double degrees,double fromHz,double toHz,double sr) noexcept {
+    if(std::abs(degrees)<1e-9)return 0;
+    const double lag=(degrees>0?360-degrees:-degrees)*pi/720;
+    const double corner=std::tan(pi*std::clamp(fromHz,30.,130.)/sr)/std::tan(lag);
+    double result=-720/pi*std::atan(std::tan(pi*std::clamp(toHz,30.,130.)/sr)/corner);
+    while(result < -180)result+=360;
+    while(result > 180)result-=360;
+    return result;
+}
 struct Settings {
     bool active = true;
     bool pausePhaseLearn = false;
@@ -49,9 +58,9 @@ struct Settings {
     bool unmaskSync=false;int unmaskAttackNote=0,unmaskReleaseNote=2;
     bool phase = false, invert = false, rotate = false;
     double delayMs = 0.0, rotationHz = 90.0;
-    double phaseAngle=0, phaseReference=60;
+    double phaseAngle=0, phaseReference=60, kickReferenceHz=0;
     bool unmask = true, delta = false;
-    double unmaskAmount = 0.4, outputDb = 0.0;
+    double unmaskAmount = 0.4, outputDb = 0.0, balanceTrimDb=0;
     bool unmaskDirect=false;double unmaskAttenuationDb=6;
     std::array<AgcSettings, 3> agc{};
     UnmaskStereoMode unmaskStereoMode = UnmaskStereoMode::stereo;
@@ -111,7 +120,7 @@ inline double allPassDegrees(double hz, double corner, double rate) noexcept {
 struct UnmaskResponse {
     std::array<Biquad, bandCount> distributed{};
     Biquad bell;
-    double wet = 0, direct = 0, activity = 0;
+    double wet = 0, direct = 0, activity = 0, centreHz=0;
     UnmaskStereoMode mode = UnmaskStereoMode::stereo;
 
     double gainDb(double frequency, double sampleRate) const noexcept {
@@ -337,7 +346,7 @@ public:
         directWeightDenominator = std::max(1e-12, *std::max_element(focusWeights.begin(),focusWeights.end()));
         globalInitialised=globalPaused=false;globalRamp.reset(1);delayFade.reset(1);polarityRamp.reset(1);
         inputPowerMeter = outputPowerMeter = outputHeld = kickHeld = 0;
-        focusHz = 75; trackedFocusHz = 75;
+        focusHz = 75; trackedFocusHz = 75; focusCandidate=-1;focusCandidateSamples=0;focusCandidateOnset=0;focusAcquisitions=0;focusReferenceSeen=0;
         cachedRotationHz = -1; cachedAllpassA = 0;
         cutDb.fill(0); kickE.fill(0); bassE.fill(0);directCutDb=0;directMix=0;directFilters={};
         allpassX.fill(0); allpassY.fill(0);
@@ -433,7 +442,7 @@ public:
             glueMix = s.glue ? 1 : 0; phaseMix = s.phase ? 1 : 0;
             unmaskMix = s.unmask ? 1 : 0; delaySamples = s.delayMs * sampleRate / 1000;
             polarity = s.invert ? -1 : 1; rotationMix = s.rotate ? 1 : 0;
-            rotationHz = s.rotationHz; outputGain = gain(s.outputDb); smoothed = true;
+            rotationHz = s.rotationHz; outputGain = gain(s.outputDb); balanceRamp.reset(gain(std::clamp(s.balanceTrimDb,-12.,12.))); smoothed = true;
             previousDelaySamples=delaySamples;delayFade.reset(1);polarityRamp.reset(polarity);
             deltaMix = s.delta && s.unmask && !(s.tube.enabled&&s.tube.audition) ? 1 : 0;
             directMix=s.unmaskDirect?1:0;
@@ -491,6 +500,7 @@ public:
                 kickEqRetune.reset(1);
             }
         }
+        balanceRamp.set(gain(std::clamp(s.balanceTrimDb,-12.,12.)),rampSamples);
         const bool normalMonitoring = !s.delta && !(s.tube.enabled && s.tube.audition);
         monitorMix.set(s.auditionDry && normalMonitoring ? 1 : 0, rampSamples);
         const bool match = s.matchEnabled && normalMonitoring;
@@ -592,18 +602,40 @@ public:
                 // Track the strongest overlapping low-end band, not an asserted musical fundamental.
                 // Hysteresis prevents bouncing between adjacent resonances on each kick.
                 if (s.unmaskTrack && !s.unmaskHold) {
-                    size_t best = 0, current = 0;
-                    double score = 0, nearest = 1e9;
-                    for (size_t b = 0; b < frequencies.size(); ++b) {
-                        if (frequencies[b] < focusLow || frequencies[b] > focusHigh) continue;
-                        const double overlap = std::min(bassE[b], kickE[b]);
-                        if (overlap > score) { score = overlap; best = b; }
-                        const double distance = std::abs(std::log(frequencies[b] / trackedFocusHz));
-                        if (distance < nearest) { nearest = distance; current = b; }
+                    size_t best=0,current=0;double score=0,currentScore=0,nearest=1e9;
+                    const double root=s.kickReferenceHz;
+                    if(std::abs(root-focusReferenceSeen)>.5) {
+                        focusReferenceSeen=root;focusAcquisitions=0;focusCandidate=-1;focusCandidateSamples=0;
                     }
-                    if (score > 1e-8 && (score > std::min(bassE[current], kickE[current]) * 1.6
-                        || std::min(bassE[current], kickE[current]) < 1e-9))
-                        trackedFocusHz = frequencies[best];
+                    const auto priority=[&](size_t b) {
+                        const double energy=std::min(bassE[b],kickE[b]);
+                        if(root<30||root>130)return energy;
+                        const double octaves=std::log2(frequencies[b]/root)/.45;
+                        return energy*std::exp(-.5*octaves*octaves);
+                    };
+                    for(size_t b=0;b<frequencies.size();++b) {
+                        if(frequencies[b]<focusLow||frequencies[b]>focusHigh)continue;
+                        const double value=priority(b);
+                        if(value>score){score=value;best=b;}
+                        const double distance=std::abs(std::log(frequencies[b]/trackedFocusHz));
+                        if(distance<nearest){nearest=distance;current=b;}
+                    }
+                    currentScore=priority(current);
+                    if(score>1e-8 && best!=current && (score>currentScore*(focusAcquisitions==0?1.05:2.0)||currentScore<1e-9)) {
+                        if(focusCandidate!=int(best)) {
+                            focusCandidate=int(best);focusCandidateSamples=0;focusCandidateOnset=lastOnset;
+                        }
+                        focusCandidateSamples+=32;
+                        // First acquisition is quick. Later changes need sustained
+                        // evidence and a second kick, or 600 ms of continuous material.
+                        const bool first=focusAcquisitions==0;
+                        if(focusCandidateSamples>=sampleRate*(first?.10:.20) &&
+                           (first||lastOnset!=focusCandidateOnset||focusCandidateSamples>=sampleRate*.60)) {
+                            trackedFocusHz=frequencies[best];++focusAcquisitions;
+                            focusCandidate=-1;focusCandidateSamples=0;
+                        }
+                    } else {focusCandidate=-1;focusCandidateSamples=0;}
+
                 }
                 const double targetFocus = s.unmaskTrack ? std::clamp(trackedFocusHz, focusLow, focusHigh) : std::clamp(s.unmaskFrequency, 30.0, 250.0);
                 if (!s.unmaskHold || !s.unmaskTrack) {
@@ -842,6 +874,7 @@ public:
             const double listenDry = monitor ? monitorMix.next() : 0;
             const double listenGain = monitor ? monitorGain.next() : 1;
             const double dryGain = monitor ? dryMonitorGain.next() : 1;
+            const double finalBalance=balanceRamp.next();
             double wet = 0;
             outputHeld *= peakA;
             for (int c = 0; c < channels; ++c) {
@@ -855,6 +888,7 @@ public:
                     const double matched = out * listenGain;
                     out = matched + listenDry * (reference * dryGain - matched);
                 }
+                if(normalMonitoring)out*=finalBalance;
                 bass[c][n] = activeMix==0?dry:static_cast<float>(activeMix==1?out:static_cast<double>(dry)+activeMix*(out-dry));
                 outputHeld = std::max(std::abs(static_cast<double>(bass[c][n])), outputHeld);
             }
@@ -881,6 +915,7 @@ public:
         UnmaskResponse response;
         if (settings.auditionDry || settings.delta || (settings.tube.enabled && settings.tube.audition))
             return response;
+        response.centreHz=focusHz;
         response.mode = settings.unmaskStereoMode;
         const double projection = response.mode == UnmaskStereoMode::side
             ? (channels == 2 ? sideMix.value() : 0.) : midMix.value();
@@ -896,7 +931,7 @@ public:
     }
 private:
     std::array<Biquad, 2> kickEqFilters{}, nextKickEqFilters{};
-    Ramp kickEqMix, kickEqRetune, monitorMix, monitorGain;
+    Ramp kickEqMix, kickEqRetune, monitorMix, monitorGain, balanceRamp;
     double kickEqHz = 0, kickEqDb = 0, wetPower = 0;
     static constexpr auto frequencies = bandFrequencies;
     std::array<std::array<Biquad, 2>, bandCount> detectorsBass{}, detectorsKick{}, filters{};
@@ -920,6 +955,7 @@ private:
     double cachedRotationHz = -1, cachedAllpassA = 0;
     double smoothedFilterQ = 2, filterParameterA = 0;
     double inputPowerMeter = 0, outputPowerMeter = 0, outputHeld = 0, kickHeld = 0;
+    int focusCandidate=-1,focusAcquisitions=0;double focusCandidateSamples=0,focusReferenceSeen=0;uint64_t focusCandidateOnset=0;
     double focusHz = 75, trackedFocusHz = 75, focusA = 0, peakA = 0;
     std::uint64_t onsetClock = 0, lastOnset = 0;
     double directWeightDenominator = 1e-12;

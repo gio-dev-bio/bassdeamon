@@ -41,7 +41,19 @@ public:
     void setRawTheme(bool useRaw) noexcept { rawTheme.store(useRaw,std::memory_order_relaxed); }
     int spectrumView() const noexcept { return visualSpectrumView.load(std::memory_order_relaxed); }
     void setSpectrumView(int view) noexcept { visualSpectrumView.store(view == 0 ? 0 : 1,std::memory_order_relaxed); }
-    std::atomic<float> phaseReferenceHz{60};
+    std::atomic<float> phaseReferenceHz{60},phaseProcessingReferenceHz{60},detectedKickHz{0};
+    std::atomic<bool> phaseReferenceAutomatic{true},balancePreviewActive{false};
+    std::atomic<float> balancePreviewDb{0};
+    std::atomic<bool> balanceTargetValid{false};
+    std::atomic<float> balanceTargetSub{0},balanceTargetBody{0};
+    std::array<std::atomic<float>,3> balanceTargetEdges{{30,70,150}};
+    void acceptKickReference(double hz) noexcept {
+        if(!std::isfinite(hz)||hz<30||hz>130)return;
+        detectedKickHz.store(float(hz));
+        if(phaseReferenceAutomatic.load())phaseReferenceHz.store(float(hz));
+    }
+    void applyBalanceTrim(float db);
+    void saveBalanceReference();
     std::atomic<bool> phaseScopeEnabled{false};
     int selectedAB() const noexcept { return abSlot; }
     void requestKickEqLearn() noexcept { kickEqProgress.store(0); kickEqStatus.store(5); kickEqLearnRequested.store(true); }
@@ -101,7 +113,7 @@ private:
     std::vector<bassdeamon::AutoMixFrame> autoAudio;
     std::future<bassdeamon::AutoMixResult> autoWorker;
     bassdeamon::AutoMixResult autoResult;
-    static constexpr size_t parameterCount=70;
+    static constexpr size_t parameterCount=74;
     std::array<std::atomic<float>,parameterCount> autoParameters{};
     std::array<float,parameterCount> autoOriginal{};
     std::atomic<bool> hostBypassed{false};

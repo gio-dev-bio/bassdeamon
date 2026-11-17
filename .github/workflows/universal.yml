@@ -1,7 +1,7 @@
 name: BassDeamon macOS Universal
 on:
   push:
-    branches: ['build/bassdeamon-1.0.8-universal', 'fix/gui-regression']
+    branches: ['build/bassdeamon-1.0.9-universal', 'fix/gui-regression']
   workflow_dispatch:
 permissions:
   contents: read
@@ -17,11 +17,15 @@ jobs:
         with:
           path: build
           key: macos-universal-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
-          restore-keys: macos-universal-${{ hashFiles('CMakeLists.txt') }}-
+          restore-keys: |
+            macos-universal-${{ hashFiles('CMakeLists.txt') }}-
+            macos-universal-
       - name: Configure Universal VST3
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release '-DCMAKE_OSX_ARCHITECTURES=x86_64;arm64' -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
       - run: cmake --build build --config Release --parallel 3
       - run: ctest --test-dir build -C Release --parallel 2 --output-on-failure
+        env:
+          BASSDEAMON_AUTO_MIX_PREVIEW: ${{ github.workspace }}/GUI-AutoMix.png
       - name: Verify architectures and sign
         run: |
           bundle=build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3
@@ -40,10 +44,12 @@ jobs:
           shasum -a 256 GUI-Preview.png GUI-Raw.png GUI-Raw-Advanced.png GUI-Duck-Raw.png build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3/Contents/MacOS/BassDeamon > BUILD-SHA256.txt
       - name: Package Universal plugin
         run: |
-          package="$PWD/BassDeamon-1.0.8-macOS-Universal.zip"
+          package="$PWD/BassDeamon-1.0.9-macOS-Universal.zip"
           (cd build/BassDeamon_artefacts/Release/VST3 && zip -Xqr "$package" BassDeamon.vst3)
           bash -n install.sh
-          zip -Xj "$package" INSTALL.txt install.sh BUILD-COMMIT.txt BUILD-SHA256.txt GUI-Preview.png GUI-Raw.png GUI-Raw-Advanced.png GUI-Duck-Raw.png
+          bash -n Installa_Aggiorna.command
+          chmod +x Installa_Aggiorna.command
+          zip -Xj "$package" INSTALL.txt install.sh Installa_Aggiorna.command BUILD-COMMIT.txt BUILD-SHA256.txt GUI-Preview.png GUI-Raw.png GUI-Raw-Advanced.png GUI-Duck-Raw.png GUI-AutoMix.png
           unzip -t "$package"
           unzip -q "$package" -d package-verification
           bundle=package-verification/BassDeamon.vst3
@@ -54,14 +60,22 @@ jobs:
           test_home="$(mktemp -d)"
           env HOME="$test_home" bash package-verification/install.sh
           env HOME="$test_home" bash package-verification/install.sh
+          printf '\n' | env HOME="$test_home" bash package-verification/Installa_Aggiorna.command
           installed="$test_home/Library/Audio/Plug-Ins/VST3/BassDeamon.vst3"
           test -x "$installed/Contents/MacOS/BassDeamon"
           codesign --verify --strict "$installed"
+          before="$(shasum -a 256 "$installed/Contents/MacOS/BassDeamon")"
+          cp -R package-verification invalid-package
+          printf 'broken' >> invalid-package/BassDeamon.vst3/Contents/MacOS/BassDeamon
+          if env HOME="$test_home" bash invalid-package/install.sh; then exit 1; fi
+          test "$before" = "$(shasum -a 256 "$installed/Contents/MacOS/BassDeamon")"
+          codesign --verify --strict "$installed"
       - uses: actions/upload-artifact@v4
         with:
-          name: BassDeamon-1.0.8-macOS-Universal
+          name: BassDeamon-1.0.9-macOS-Universal
           path: |
-            BassDeamon-1.0.8-macOS-Universal.zip
+            BassDeamon-1.0.9-macOS-Universal.zip
+            GUI-AutoMix.png
             GUI-Preview.png
             GUI-Raw.png
             GUI-Raw-Advanced.png

@@ -1,8 +1,8 @@
-BASSDEAMON 1.0.8 — VST3 macOS Universal (Intel e Apple Silicon)
+BASSDEAMON 1.0.9 — VST3 macOS Universal (Intel e Apple Silicon)
 
 1. Chiudi Cubase.
-2. Estrai lo ZIP e, dalla cartella estratta, esegui:
-   bash install.sh
+2. Estrai tutto lo ZIP e fai doppio clic su Installa_Aggiorna.command.
+   In alternativa, dalla cartella estratta esegui: bash install.sh
    Installa in ~/Library/Audio/Plug-Ins/VST3 senza sudo.
    Per aggiornare una copia in /Library/Audio/Plug-Ins/VST3, esegui:
    bash install.sh --system

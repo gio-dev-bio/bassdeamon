@@ -409,10 +409,20 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
     phaseReference.setValue(processor.phaseReferenceHz.load(),juce::dontSendNotification);
     phaseReference.setTooltip("Reference frequency for the degree dial and the mono sum comparison.");
     phaseReference.onValueChange=[this] {
+        processor.phaseReferenceAutomatic.store(false);
         processor.phaseReferenceHz.store(float(phaseReference.getValue()));
+        processor.phaseProcessingReferenceHz.store(float(phaseReference.getValue()));
         rotationKnob->slider.updateText();
     };
     face.addAndMakeVisible(phaseReference);
+    phaseAutoReference.setToggleState(processor.phaseReferenceAutomatic.load(),juce::dontSendNotification);
+    phaseAutoReference.onClick=[this]{
+        processor.phaseReferenceAutomatic.store(phaseAutoReference.getToggleState());
+        if(phaseAutoReference.getToggleState())processor.acceptKickReference(processor.detectedKickHz.load());
+        phaseAngle.updateText();
+    };
+    phaseAutoReference.setTooltip("Use the stable kick frequency after analysis for Scope. Does not retune the Phase processor.");
+    face.addAndMakeVisible(phaseAutoReference);
     phaseScopeButton.setBounds(620,468,140,26);
     phaseScopeButton.setClickingTogglesState(true);
     phaseScopeButton.setTooltip("Show mono kick + bass at the Phase input and output. The dB comparison matches bass energy in the selected band.");
@@ -454,12 +464,13 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
     presets.setBounds(628,33,260,38);
     face.addAndMakeVisible(autoMixButton);
     autoMixButton.onClick=[this] {
+        if(processor.autoMixState()==BassDeamonProcessor::AutoMixState::idle){balanceTrim.setValue(processor.parameters.getRawParameterValue("balance.trim")->load(),juce::dontSendNotification);balanceInitialized=false;}
         autoPanel.setVisible(true);
         autoPanel.toFront(false);
         refreshAutoMix();
     };
     face.addChildComponent(autoPanel);
-    autoPanel.setBounds(228,170,744,528);
+    autoPanel.setBounds(228,125,744,620);
     autoTitle.setText("AUTO MIX",juce::dontSendNotification);
     autoTitle.setFont(console::font(25,true));
     autoTitle.setColour(juce::Label::textColourId,console::cream);
@@ -478,7 +489,7 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
     autoReport.setScrollbarsShown(true);
     autoReport.setCaretVisible(false);
     autoReport.setFont(console::font(17));
-    autoReport.setBounds(28,115,688,330);
+    autoReport.setBounds(28,115,688,300);
     autoDry.setBounds(28,466,90,36);
     autoWet.setBounds(125,466,133,36);
     autoMatch.setBounds(265,466,165,36);
@@ -487,18 +498,41 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
     for (auto* component : std::array<juce::Component*,10>{
             &autoTitle,&autoBars,&autoScan,&autoStatus,&autoReport,&autoDry,&autoWet,&autoMatch,&autoApply,&autoCancel})
         autoPanel.addAndMakeVisible(*component);
+    balanceCaption.setText("BALANCE / optional bass trim",juce::dontSendNotification);
+    balanceCaption.setBounds(28,420,420,22);autoPanel.addAndMakeVisible(balanceCaption);
+    balanceTrim.setRange(-12,12,.1);balanceTrim.setSliderStyle(juce::Slider::LinearBar);
+    balanceTrim.setTextBoxStyle(juce::Slider::TextBoxLeft,false,100,26);balanceTrim.setTextValueSuffix(" dB");
+    balanceTrim.setBounds(28,446,100,28);autoPanel.addAndMakeVisible(balanceTrim);
+    balanceListen.setBounds(140,446,123,28);balanceListen.setClickingTogglesState(true);
+    balanceApply.setBounds(270,446,123,28);balanceSave.setBounds(402,446,140,28);balanceReset.setBounds(550,446,165,28);
+    for(auto* b:{&balanceListen,&balanceApply,&balanceSave,&balanceReset})autoPanel.addAndMakeVisible(*b);
+    const std::array<const char*,3> ids{"balance.lowHz","balance.splitHz","balance.highHz"};
+    const std::array<juce::Slider*,3> sliders{&balanceLow,&balanceSplit,&balanceHigh};
+    for(size_t i=0;i<3;++i){auto* slider=sliders[i];slider->setSliderStyle(juce::Slider::LinearBar);slider->setTextBoxStyle(juce::Slider::TextBoxLeft,false,100,24);slider->setTextValueSuffix(" Hz");slider->setBounds(28+int(i)*115,486,105,26);autoPanel.addAndMakeVisible(*slider);balanceBandAttachments[i]=std::make_unique<State::SliderAttachment>(processor.parameters,ids[i],*slider);slider->setTooltip(i==0?"Lower measurement edge":i==1?"Sub/body crossover":"Upper measurement edge");}
+    balanceBandLabel.setText("BAND EDGES: LOW / SPLIT / HIGH",juce::dontSendNotification);
+    balanceBandLabel.setBounds(382,486,330,26);autoPanel.addAndMakeVisible(balanceBandLabel);
+    balanceTrim.onValueChange=[this]{if(processor.balancePreviewActive.load())processor.balancePreviewDb.store(float(balanceTrim.getValue()));};
+    balanceListen.onClick=[this]{
+        processor.auditionAutoMix(0,false);autoSide=0;
+        processor.balancePreviewDb.store(float(balanceTrim.getValue()));processor.balancePreviewActive.store(balanceListen.getToggleState());
+    };
+    balanceApply.onClick=[this]{processor.applyBalanceTrim(float(balanceTrim.getValue()));balanceListen.setToggleState(false,juce::dontSendNotification);};
+    balanceReset.onClick=[this]{balanceTrim.setValue(0);processor.applyBalanceTrim(0);balanceListen.setToggleState(false,juce::dontSendNotification);};
+    balanceSave.setTooltip("Analyze your preferred balance, then save the measured target. Temporary auditions are excluded.");
+    balanceSave.onClick=[this]{processor.saveBalanceReference();balanceInitialized=false;autoResultShown=false;refreshAutoMix();};
+    autoDry.setTopLeftPosition(28,560);autoWet.setTopLeftPosition(125,560);autoMatch.setTopLeftPosition(265,560);autoApply.setTopLeftPosition(503,560);autoCancel.setTopLeftPosition(612,560);
     autoMatch.setClickingTogglesState(true);
     autoMatch.setToggleState(true,juce::dontSendNotification);
     autoScan.onClick=[this] {
         const int bars=autoBars.getSelectedId()==1?4:autoBars.getSelectedId()==3?16:8;
-        autoResultShown=false;
+        autoResultShown=false;balanceInitialized=false;
         autoSide=0;
         autoReport.clear();
         processor.startAutoMix(bars);
         refreshAutoMix();
     };
-    autoDry.onClick=[this]{autoSide=1;refreshAutoMix();};
-    autoWet.onClick=[this]{autoSide=2;refreshAutoMix();};
+    autoDry.onClick=[this]{processor.balancePreviewActive.store(false);balanceListen.setToggleState(false,juce::dontSendNotification);autoSide=1;refreshAutoMix();};
+    autoWet.onClick=[this]{processor.balancePreviewActive.store(false);balanceListen.setToggleState(false,juce::dontSendNotification);autoSide=2;refreshAutoMix();};
     autoMatch.onClick=[this]{refreshAutoMix();};
     autoApply.onClick=[this]{processor.applyAutoMix();autoPanel.setVisible(false);};
     autoCancel.onClick=[this]{processor.cancelAutoMix();autoPanel.setVisible(false);};
@@ -578,10 +612,10 @@ void BassDeamonEditor::layoutMain() {
     phaseAngle.setTooltip("Phase rotation at the reference frequency. Double-click to reset to zero. Phase must be enabled.");
     face.addAndMakeVisible(phaseAngle);
     phaseAngleAttachment=std::make_unique<State::SliderAttachment>(processor.parameters,"phase.angle",phaseAngle);
-    phaseAngle.textFromValueFunction=[](double value){
-        return juce::String(value,1)+juce::String::charToString(0x00b0);
+    phaseAngle.textFromValueFunction=[this](double value){
+        return juce::String(bassdeamon::phaseDegreesAtReference(value,processor.phaseProcessingReferenceHz.load(),processor.phaseReferenceHz.load(),phaseRate()),1)+juce::String::charToString(0x00b0);
     };
-    phaseAngle.valueFromTextFunction=[](const juce::String& value){return value.getDoubleValue();};
+    phaseAngle.valueFromTextFunction=[this](const juce::String& value){return bassdeamon::phaseDegreesAtReference(value.getDoubleValue(),processor.phaseReferenceHz.load(),processor.phaseProcessingReferenceHz.load(),phaseRate());};
     phaseAngle.updateText();
     phaseScopeButton.setBounds(985,461,72,25);
     phaseAdvanced.setComponentID("view-mode");
@@ -598,7 +632,7 @@ void BassDeamonEditor::layoutMain() {
         place("phase.invert",{546,219,126,26}),place("phase.rotate",{546,253,126,26}),
         place("phase.agc",{699,219,126,26}),place("phase.agcLock",{699,253,126,26}),
         &phaseReference,&learn};
-    phaseReference.setBounds(855,219,133,26);learn.setBounds(855,255,175,29);
+    phaseReference.setBounds(855,219,133,26);phaseAutoReference.setBounds(1000,219,144,26);learn.setBounds(855,255,175,29);
 
     place("glue.on",{313,511,58,25});place("glue.timing",{190,511,110,25});
     place("glue.amount",{93,620,144,112});
@@ -654,6 +688,7 @@ void BassDeamonEditor::refreshDisplayPage() {
     for (auto* item : std::array<juce::Component*,3>{&scopeChannel,&scopeCompareButton,control("view.hold")})
         item->setVisible(scopePage);
     for (auto* item : phaseControls) item->setVisible(showPhaseAdvanced);
+    phaseAutoReference.setVisible(showPhaseAdvanced);
     duckAdvanced.setToggleState(showDuckAdvanced,juce::dontSendNotification);
     control("duck.amount")->setVisible(!showDuckAdvanced);
     control("duck.lowHz")->setVisible(showDuckAdvanced);
@@ -796,7 +831,7 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g) {
             console::text(g,"BYPASSED",{70,200,1060,154},20,console::muted,juce::Justification::centred);
         } else if (showPhaseAdvanced) {
             console::text(g,"PHASE / ADVANCED",{52,177,175,24},14,console::cream);
-            console::text(g,"REFERENCE",{855,193,133,24},12,console::muted);
+            console::text(g,processor.phaseReferenceAutomatic.load()?(processor.detectedKickHz.load()>0?"KICK REFERENCE":"AUTO / WAITING"):"MANUAL REFERENCE",{855,193,280,24},12,console::muted);
             const int state=processor.learnStatus.load();
             const auto status=state==1?"LEARNING "+juce::String(int(processor.learnProgress.load()*100))+"%"
                 :state==5?"APPLIED / r "+juce::String(processor.learnCorrelation.load(),2)
@@ -1111,12 +1146,12 @@ int BassDeamonEditor::paintSpectrumPlot(juce::Graphics& g,juce::Rectangle<float>
             const auto delta=pre>-110 && after>-110 ? formatDb(after-pre) : juce::String("--");
             const float boxX=plot.getX()+float(i)*(width+4);
             const bool resolved=region.strength==0;
-            const auto accent=resolved?juce::Colour(0xffa8bdb0):red.withAlpha(.45f+.55f*region.strength);
+            const auto accent=resolved?juce::Colour(0xffa8bdb0):(region.strength>=.65f?red:console::amber).withAlpha(.45f+.55f*region.strength);
             juce::Rectangle<float> label(boxX,374,width,50);
             g.setColour(console::muted.withAlpha(.25f));g.drawHorizontalLine(374,label.getX(),label.getRight());
             console::text(g,resolved?"BELOW THRESHOLD":"MAIN COLLISION",label.withWidth(190).withHeight(17),12,console::muted);
             console::text(g,juce::String(region.hz,1)+" Hz",label.withWidth(190).withTrimmedTop(17),skin.isRaw()?24.f:21.f,accent);
-            console::text(g,"BASS - KICK",{boxX+width*.33f,374,185,17},12,console::muted);
+            console::text(g,post?"BASS POST - KICK":"BASS PRE - KICK",{boxX+width*.33f,374,185,17},12,console::muted);
             console::text(g,relation,{boxX+width*.33f,391,185,29},skin.isRaw()?22.f:20.f,console::cream);
             if(post){
                 console::text(g,"POST - PRE",{boxX+width*.66f,374,185,17},12,console::muted);
@@ -1375,7 +1410,7 @@ void BassDeamonEditor::refreshVisuals(double clockMilliseconds) {
                 }
                 const auto response=processor.consumeUnmaskResponse();
                 if (!spectrumHold.getToggleState()) {
-                    if (response.activity>=pendingUnmaskResponse.activity) pendingUnmaskResponse=response;
+                    if (response.activity>=pendingUnmaskResponse.activity || (response.centreHz>0 && std::abs(response.centreHz-pendingUnmaskResponse.centreHz)>response.centreHz*.05)) pendingUnmaskResponse=response;
                     spectrumDisplay.pushAtRate(analyzer,received?1:0,clockMilliseconds*.001,currentRate);
                 }
             }
@@ -1420,8 +1455,9 @@ void BassDeamonEditor::refreshVisuals(double clockMilliseconds) {
     const double reference=processor.phaseReferenceHz.load();
     if (std::abs(phaseReference.getValue()-reference)>.051) {
         phaseReference.setValue(reference,juce::dontSendNotification);
-        rotationKnob->slider.updateText();
+        rotationKnob->slider.updateText();phaseAngle.updateText();
     }
+    phaseAutoReference.setToggleState(processor.phaseReferenceAutomatic.load(),juce::dontSendNotification);
     if (bypassed) {
         inputDb=outputDb=peak=-120;
         glueGr=sidePeak=0;
@@ -1450,7 +1486,7 @@ void BassDeamonEditor::refreshAutoMix() {
     autoMatch.setEnabled(audition);
     const bool match=autoMatch.getToggleState();
     if (audition && autoSide == 0) autoSide=2;
-    if (audition) processor.auditionAutoMix(autoSide, match);
+    if (audition && !processor.balancePreviewActive.load()) processor.auditionAutoMix(autoSide, match);
     autoDry.setToggleState(audition && autoSide==1,juce::dontSendNotification);
     autoWet.setToggleState(audition && autoSide==2,juce::dontSendNotification);
     const auto message=status==Status::armed?"PRESS PLAY":status==Status::recording?
@@ -1463,6 +1499,18 @@ void BassDeamonEditor::refreshAutoMix() {
     const double trim=dryTrim?result.dryGainDb:result.wetGainDb;
     autoMatch.setButtonText(usable && match && trim < -.05 ?
         juce::String(dryTrim?"A  ":"B  ")+juce::String(trim,1)+" dB / MATCH":"LEVEL MATCH");
+    for(auto* button:{&balanceListen,&balanceApply,&balanceSave})button->setEnabled(usable && result.balanceValid);
+    balanceReset.setEnabled(true);
+    balanceListen.setToggleState(processor.balancePreviewActive.load(),juce::dontSendNotification);
+    bool target=processor.balanceTargetValid.load();
+    for(size_t i=0;i<3;++i)if(std::abs(result.balanceEdges[i]-processor.balanceTargetEdges[i].load())>.5)target=false;
+    for(auto* slider:{&balanceLow,&balanceSplit,&balanceHigh})slider->setEnabled(status==Status::idle);
+    if(usable && result.balanceValid && !balanceInitialized) {
+        const double current=result.balanceBaseTrimDb;
+        const double delta=target?std::clamp(.5*((processor.balanceTargetSub.load()-result.balanceSubDb)+(processor.balanceTargetBody.load()-result.balanceBodyDb)),-3.,3.):0;
+        balanceTrim.setValue(std::clamp(current+delta,-12.,12.),juce::dontSendNotification);balanceInitialized=true;
+    }
+    balanceCaption.setText(processor.balancePreviewActive.load()?"BALANCE TRIM AUDITION / kick unchanged":target?"BALANCE / suggestion relative to saved target":"BALANCE / no target: manual listening trial",juce::dontSendNotification);
     if (!ready || autoResultShown) return;
     autoResultShown=true;
     juce::String report;
@@ -1477,6 +1525,12 @@ void BassDeamonEditor::refreshAutoMix() {
     if (!result.hasBass) report+="No usable bass captured.\n";
     if (!result.hasKick) report+="No usable kick sidechain captured.\n";
     if (usable) {
+        if(result.balanceValid) {
+            report+="BALANCE CAPTURED BASS OUT / KICK\n";
+            report+=juce::String(result.balanceEdges[0],0)+"-"+juce::String(result.balanceEdges[1],0)+" Hz  "+juce::String(result.balanceSubDb,1)+" dB / "+juce::String(result.balanceEdges[1],0)+"-"+juce::String(result.balanceEdges[2],0)+" Hz  "+juce::String(result.balanceBodyDb,1)+" dB\n";
+            report+="Virtual K+B peak  "+juce::String(result.sumPeakDb,1)+" dBFS\n";
+            report+=target?"Trim suggestion uses your saved target.\n":"No universal target. Save a preferred balance to obtain advice.\n";
+        }
         for (const auto& change : result.changes) {
             if (auto* parameter=processor.parameters.getParameter(change.parameter))
                 report+=parameter->getName(64)+"   "+parameter->getText(parameter->convertTo0to1(change.value),48)+"\n";

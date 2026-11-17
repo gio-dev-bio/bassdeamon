@@ -174,10 +174,12 @@ public:
             wavePre[i]=peak(0);wavePost[i]=peak(1);waveKick[i]=peak(2);sumPre[i]=peak(3);sumPost[i]=peak(4);
         }
     }
-    // Shared energy remains a conflict at unequal levels; a loud kick can
-    // mask a much quieter bass. This helper is only an absolute activity gate.
+    // Significant interference with the kick, not a claim of psychoacoustic masking.
+    // One common absolute/relative scale is used in PRE and POST.
     static float mask(float bass,float reference,float=-120,float=-120) noexcept {
-        return std::clamp((std::min(bass,reference)+110.f)/12.f,0.f,1.f);
+        const float level=std::clamp((std::min(bass,reference)+90.f)/24.f,0.f,1.f);
+        const float relative=std::clamp((bass-reference+24.f)/24.f,0.f,1.f);
+        return level*relative*relative*(3.f-2.f*relative);
     }
     double sampleRate() const noexcept{return rate;}
     bool ready() const noexcept{return count>=fftSize;}
@@ -247,7 +249,7 @@ private:
         const float decay=float(std::exp(-elapsed/.16)); // readable recent events, ~340 ms to -17 dB
         for(size_t b=0;b<fastBins;++b)for(size_t t=0;t<2;++t){float shared=0,event=0;
             for(size_t c=0;c<2;++c){const float common=std::sqrt(fastSupport[t][c][b]*fastSupport[2][c][b]);
-                shared=std::max(shared,common);event=std::max(event,common*coincidence[t][c]);}
+                shared=std::max(shared,common);event=std::max(event,common*coincidence[t][c]*mask(fastLevels[t][c][b],fastLevels[2][c][b]));}
             auto& recent=t==0?recentPre[b]:recentPost[b];
             // A continuing bass has changed note (or panning): discard obsolete
             // frequency support. A finished short kick may retain its recent hit.
@@ -264,21 +266,7 @@ private:
                 for(size_t c=0;c<2;++c)fine=std::max(fine,std::sqrt(fineSupport[t][c][b]*fineSupport[2][c][b]));
                 const auto& recent=t==0?recentPre:recentPost;
                 const float event=recent[lo]+fraction*(recent[hi]-recent[lo]);
-                float residual=1;
-                if(t==1){
-                    // One common PRE reference: independently normalising POST
-                    // made 20 dB of actual attenuation look unchanged. Newly
-                    // generated partials without a PRE counterpart remain visible.
-                    float weighted=0,weight=0;
-                    for(size_t c=0;c<2;++c){
-                        const float postSupport=std::sqrt(fineSupport[1][c][b]*fineSupport[2][c][b]);
-                        const float preSupport=std::sqrt(fineSupport[0][c][b]*fineSupport[2][c][b]);
-                        const float ratio=preSupport>=.12f?float(std::min(1.0,std::pow(10.0,(channelLevels[1][c][b]-channelLevels[0][c][b])/20.0))):1.f;
-                        weighted=std::max(weighted,postSupport*ratio);weight=std::max(weight,postSupport);
-                    }
-                    residual=weight>0?weighted/weight:0;
-                }
-                (t==0?maskPre[b]:maskPost[b])=std::min(fine,event)*residual;
+                (t==0?maskPre[b]:maskPost[b])=std::min(fine,event);
             }
         }
     }
@@ -286,10 +274,23 @@ private:
         powers.fill(0);
         const size_t length=fast?fastSize:fftSize,valid=std::min(count,length),numBins=length/2+1;
         const double sum=fast?fastWindowSum:windowSum;
+        std::array<float,fastSize> gate{};
+        if(fast) {
+            constexpr size_t slices=32;
+            std::array<double,slices> energy{};double peak=0;
+            for(size_t i=0;i<fastSize;++i) {
+                const auto& f=frames[(count-fastSize+i)%fftSize];
+                energy[std::min(slices-1,i*slices/fastSize)]+=.5*(double(f.kick[0])*f.kick[0]+double(f.kick[1])*f.kick[1]);
+            }
+            for(double v:energy)peak=std::max(peak,v);
+            for(size_t i=0;i<fastSize;++i)
+                gate[i]=peak>1e-16 && energy[std::min(slices-1,i*slices/fastSize)]>=peak*.01?1.f:0.f;
+        }
         for(size_t channel=0;channel<2;++channel){
             bool nonzero=false;
             for(size_t i=0;i<length;++i){double sample=0;if(i>=length-valid){const auto& f=frames[(count-valid+i-(length-valid))%fftSize];
                 sample=stream==0?f.pre[channel]:stream==1?f.post[channel]:f.kick[channel];}
+                if(fast)sample*=gate[i];
                 nonzero|=sample!=0;work[i]=sample*(fast?fastWindow[i]:window[i]);}
             if(nonzero){
                 for(size_t i=1,j=0;i<length;++i){size_t bit=length>>1;for(;j&bit;bit>>=1)j^=bit;j^=bit;if(i<j)std::swap(work[i],work[j]);}

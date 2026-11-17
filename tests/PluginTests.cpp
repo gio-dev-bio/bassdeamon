@@ -19,6 +19,7 @@ int captureGui(const juce::File&);
 int captureLoopGui(const juce::File&,const juce::File&,const juce::File&,int);
 int interactionTests();
 void guiVisualContracts();
+void revision109Tests();
 int pluginSignalTests(const std::string&);
 int main(int argc, char** argv) {
     juce::ScopedJuceInitialiser_GUI init;
@@ -28,6 +29,7 @@ int main(int argc, char** argv) {
         if ((argc==5||argc==6) && juce::String(argv[1])=="--real-loop")
             return captureLoopGui(juce::File(argv[2]),juce::File(argv[3]),juce::File(argv[4]),argc==6?juce::String(argv[5]).getIntValue():48000);
         guiVisualContracts();
+        revision109Tests();
         interactionTests();
         BassDeamonProcessor p;
         auto layout = p.getBusesLayout();

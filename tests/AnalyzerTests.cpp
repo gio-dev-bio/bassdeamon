@@ -26,6 +26,8 @@ int main(){try{
         check(flagged(separate->maskPre)==0,"different notes falsely collide through FFT leakage");
         auto unequal=render(sr,[&](size_t n){AnalysisFrame f;const float bass=tone(hz,n,sr),kick=bass*.0316228f;f.pre={bass,bass};f.post=f.pre;f.kick={kick,kick};return f;});
         check(flagged(unequal->maskPre)>0,"30 dB imbalance hid shared frequency");
+        auto quietBass=render(sr,[&](size_t n){AnalysisFrame f;const float k=tone(hz,n,sr);f.pre={k*.01f,k*.01f};f.post=f.pre;f.kick={k,k};return f;});
+        check(flagged(quietBass->maskPost)==0,"Bass 40 dB below kick reported as significant residual interference");
         auto noiseFloor=render(sr,[&](size_t n){AnalysisFrame f;const float quiet=tone(300,n,sr,.0001f),bass=tone(75,n,sr)+quiet,kick=tone(150,n,sr)+quiet;f.pre={bass,bass};f.post=f.pre;f.kick={kick,kick};return f;});
         check(flagged(noiseFloor->maskPre)==0,"shared quiet residue or leakage marked as collision");
         auto harmonic=render(sr,[&](size_t n){AnalysisFrame f;const float bass=tone(75,n,sr)+tone(150,n,sr,.15f),kick=tone(75,n,sr)+tone(300,n,sr,.15f);f.pre={bass,bass};f.post=f.pre;f.kick={kick,kick};return f;});

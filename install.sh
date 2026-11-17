@@ -11,7 +11,12 @@ user_dir="$HOME/Library/Audio/Plug-Ins/VST3"
 plugin=BassDeamon.vst3
 
 case "${1:-}" in
-    "") destination="$user_dir"; opposite="$system_dir"; system_install=false ;;
+    "")
+        if [[ -e "$system_dir/$plugin" && ! -e "$user_dir/$plugin" ]]; then
+            destination="$system_dir"; opposite="$user_dir"; system_install=true
+        else
+            destination="$user_dir"; opposite="$system_dir"; system_install=false
+        fi ;;
     --system) destination="$system_dir"; opposite="$user_dir"; system_install=true ;;
     *) echo "Usage: bash install.sh [--system]" >&2; exit 2 ;;
 esac
@@ -25,7 +30,7 @@ run() {
 }
 
 if [[ -e "$opposite/$plugin" || -L "$opposite/$plugin" ]]; then
-    printf 'An installation already exists at %s. Choose that destination to update it.\n' "$opposite/$plugin" >&2
+    printf 'Trovate copie in entrambe le cartelle VST3. Rimuovi la duplicata prima di aggiornare: %s\n' "$opposite/$plugin" >&2
     exit 1
 fi
 
@@ -56,9 +61,15 @@ trap 'exit 143' TERM
 run /usr/bin/ditto "$source_bundle" "$stage/$plugin"
 run /bin/chmod -R a+rX,go-w "$stage/$plugin"
 run /bin/chmod a+rx "$stage/$plugin/Contents/MacOS/BassDeamon"
+run /usr/bin/xattr -r -d com.apple.quarantine "$stage/$plugin" 2>/dev/null || true
 run /usr/bin/codesign --verify --strict "$stage/$plugin"
 if [[ -e "$target" || -L "$target" ]]; then
     run /bin/mv "$target" "$stage/previous"
 fi
 run /bin/mv "$stage/$plugin" "$target"
+if ! run /usr/bin/codesign --verify --strict "$target"; then
+    run /bin/rm -rf "$target"
+    printf 'Verifica fallita: ripristino della versione precedente.\n' >&2
+    exit 1
+fi
 printf 'Installed %s\n' "$target"

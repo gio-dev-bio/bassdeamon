@@ -27,6 +27,8 @@ void contracts(){
         for(int block:{17,128,511}){
             bassdeamon::Engine now;bassdeamon022::Engine old;now.prepare(sr);old.prepare(sr);
             bassdeamon::Settings s;bassdeamon022::Settings previous;
+            // Compare unchanged audio modules at an identical MANUAL focus; Auto Focus is intentionally redesigned.
+            s.unmaskTrack=previous.unmaskTrack=false;
             s.phase=previous.phase=true;s.delayMs=previous.delayMs=1.25;s.rotate=previous.rotate=true;
             for(int b=0;b<80;++b){std::array<float,511> a{},ar{},c{},cr{},k{};
                 for(int i=0;i<block;++i){const double t=(b*block+i)/sr;a[size_t(i)]=c[size_t(i)]=float(.3*std::sin(2*bassdeamon::pi*73*t));

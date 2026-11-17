@@ -20,7 +20,9 @@ int main(){try{
         a->consume(*q);display->push(*a,a->consumedFrames-last,1.7,mode);
         const float pre=near(display->shown[3],75,sr),post=near(display->shown[4],75,sr);
         require(pre>.8f,"PRE collision missing in response test");
-        const float expected=float(std::pow(10.,-reduction/20));
+        // Policy: relative levels 0/-6/-12/-20/-24 dB map to
+        // significant overlap scores 1/.844/.5/.074/0, independently of PRE normalisation.
+        const float expected=reduction==0?1.f:reduction==6?.84375f:reduction==12?.5f:reduction==20?.074074f:0.f;
         if(std::abs(post/pre-expected)>.025f){std::cerr<<sr<<" mode "<<mode<<" cut "<<reduction<<" scores "<<pre<<" "<<post<<" expected "<<expected<<'\n';return 1;}
         if(reduction>=20)require(post<.12f,"20+ dB actual cut still displays same red collision");
         const size_t peakBin=size_t(std::round(75*RelationAnalyzer::fftSize/sr));

@@ -18,7 +18,9 @@ int main(int argc,char** argv){try{
         auto analyzer=std::make_unique<A>();auto queue=std::make_unique<AnalysisQueue>();analyzer->prepare(sr);
         const int levelIndex=(profile+int(gui*1000))%3;const double level=levelIndex==0?-12:levelIndex==1?-30:-48;
         const double amplitude=std::pow(10.,level/20),kickAmplitude=amplitude*std::pow(10.,balance/20);
-        const bool positive=profile<4;const double target=profile==2?100:75;
+        const bool positive=profile<4;
+        const bool expectedPositive=positive && level+std::min(0.,balance)>=-60.;
+        const double target=profile==2?100:75;
         bool hits[2]{};float maxPre=0,maxPost=0;int falseInCase=0;double nextGui=gui;
         const auto inspect=[&](double time){analyzer->consume(*queue);if(!analyzer->ready())return;
             const float preScore=near(analyzer->maskPre,target,sr),postScore=near(analyzer->maskPost,target,sr);
@@ -49,19 +51,19 @@ int main(int argc,char** argv){try{
             if(t>=nextGui){inspect(t);nextGui+=gui;}
         }
         inspect(1.35);const int found=int(hits[0])+int(hits[1]);
-        if(positive){expected+=2;detected+=found;}
-        const bool fail=(positive&&found<2)||falseInCase>0;
+        if(expectedPositive){expected+=2;detected+=found;}
+        const bool fail=(expectedPositive&&found<2)||falseInCase>0;
         if(fail){++failures;if(failures<24)std::cerr<<"FAIL "<<names[profile]<<" sr "<<sr<<" gui "<<gui<<" balance "<<balance<<" level "<<level<<" hits "<<found<<" false "<<falseInCase<<" max "<<maxPre<<'\n';}
-        csv<<sr<<','<<gui*1000<<','<<balance<<','<<names[profile]<<','<<level<<','<<(positive?2:0)<<','<<found<<','<<falseInCase<<','<<maxPre<<','<<maxPost<<'\n';++cases;
+        csv<<sr<<','<<gui*1000<<','<<balance<<','<<names[profile]<<','<<level<<','<<(expectedPositive?2:0)<<','<<found<<','<<falseInCase<<','<<maxPre<<','<<maxPost<<'\n';++cases;
     }
     // REAL nonlinear processor: a 50 Hz input acquires a shared 100 Hz partial
     // after Soft Tube. PRE must stay clear there and POST must detect it.
-    for(double sr:{44100.,48000.,96000.}){
+    for(double sr:{44100.,48000.,96000.})for(double kickAmplitude:{.2,.005}){
     Engine engine;engine.prepare(sr);Settings settings;settings.glue=settings.phase=settings.unmask=false;
     settings.tube.enabled=true;settings.tube.driveDb=18;settings.tube.amount=1;settings.tube.sourceHz=200;
     auto q=std::make_unique<AnalysisQueue>();auto a=std::make_unique<A>();a->prepare(sr);
     std::array<float,256> dry{},wet{},kick{};float* out[]{wet.data()};const float* side[]{kick.data()};
-    for(int block=0;block<240;++block){for(int n=0;n<256;++n){const double t=(block*256+n)/sr;dry[size_t(n)]=wet[size_t(n)]=float(.4*std::sin(2*pi*50*t));kick[size_t(n)]=float(.2*std::sin(2*pi*100*t));}
+    for(int block=0;block<240;++block){for(int n=0;n<256;++n){const double t=(block*256+n)/sr;dry[size_t(n)]=wet[size_t(n)]=float(.4*std::sin(2*pi*50*t));kick[size_t(n)]=float(kickAmplitude*std::sin(2*pi*100*t));}
         engine.process(out,1,side,1,256,settings,120);
         for(int n=0;n<256;++n){AnalysisFrame f;f.pre={dry[size_t(n)],dry[size_t(n)]};f.post={wet[size_t(n)],wet[size_t(n)]};f.kick={kick[size_t(n)],kick[size_t(n)]};q->push(f);}
         if(block%6==0)a->consume(*q);
@@ -69,7 +71,7 @@ int main(int argc,char** argv){try{
     a->consume(*q);const float generated=near(a->maskPost,100,sr),original=near(a->maskPre,100,sr);
     std::cout<<"Real Soft Tube "+std::to_string(int(sr))+" Hz, 50 -> shared 100 Hz: PRE "<<original<<" POST "<<generated<<'\n';
     for(double hz:{50.,100.,150.,200.}){const auto bin=size_t(std::round(hz*A::fftSize/sr));std::cout<<hz<<" Hz PRE "<<a->pre[bin]<<" POST "<<a->post[bin]<<" dBFS\n";}
-    if(original>=.12f||generated<.12f)++failures;
+    if(original>=.12f || (kickAmplitude<.01?generated<.12f:generated>=.12f))++failures;
     }
     std::cout<<"Matrix: "<<cases<<" cases; pulse detections "<<detected<<'/'<<expected<<"; false negative-profile frames "<<falseFrames<<'/'<<negativeFrames<<"; failed cases "<<failures<<'\n';
     return failures?1:0;

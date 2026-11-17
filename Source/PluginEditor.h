@@ -88,6 +88,7 @@ private:
     juce::ComboBox scopeChannel;
     juce::TextButton phaseScopeButton{"PHASE A/B"};
     juce::Slider phaseReference, phaseAngle;
+    juce::ToggleButton phaseAutoReference{"AUTO REF"};
     std::unique_ptr<State::SliderAttachment> phaseAngleAttachment;
     Knob* rotationKnob=nullptr;
     juce::TextButton scopeCompareButton{"COMPARE PRE"};
@@ -126,6 +127,11 @@ private:
     } autoPanel;
     juce::DrawableButton autoMixButton{"Auto Mix", juce::DrawableButton::ImageAboveTextLabel};
     juce::ComboBox autoBars;
+    juce::Slider balanceTrim,balanceLow,balanceSplit,balanceHigh;
+    juce::Label balanceCaption,balanceBandLabel;
+    juce::TextButton balanceListen{"LISTEN TRIM"},balanceApply{"APPLY TRIM"},balanceSave{"SAVE TARGET"},balanceReset{"RESET TRIM"};
+    std::array<std::unique_ptr<State::SliderAttachment>,3> balanceBandAttachments;
+    bool balanceInitialized=false;
     juce::Label autoTitle, autoStatus;
     juce::TextEditor autoReport;
     juce::TextButton autoScan{"ANALYZE"}, autoDry{"A / DRY"}, autoWet{"B / AUTO MIX"},
