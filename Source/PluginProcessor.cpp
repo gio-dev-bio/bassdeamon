@@ -114,7 +114,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout BassDeamonProcessor::layout(
     continuous("phase.angle","Phase angle (degrees)",-180,180,0);
     continuous("duck.lowHz","Duck Low-Band cutoff (Hz)",0,250,110);
     continuous("unmask.kickReferenceHz","Auto Focus kick reference (Hz)",0,130,0);
-    continuous("balance.trim","Balance trim (dB)",-12,12,0);
+    p.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{"balance.trim",1}, "Balance trim (dB)",
+        juce::NormalisableRange<float>(-12,12,1.f/1024.f), 0));
     continuous("balance.lowHz","Balance low edge (Hz)",20,100,30);
     continuous("balance.splitHz","Balance split (Hz)",40,150,70);
     continuous("balance.highHz","Balance high edge (Hz)",80,300,150);

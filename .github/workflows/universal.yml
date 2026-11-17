@@ -13,7 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 scripts/verify_gui_lock.py
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         with:
           path: build
           key: macos-universal-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
@@ -23,6 +23,10 @@ jobs:
       - name: Configure Universal VST3
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release '-DCMAKE_OSX_ARCHITECTURES=x86_64;arm64' -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
       - run: cmake --build build --config Release --parallel 3
+      - uses: actions/cache/save@v4
+        with:
+          path: build
+          key: macos-universal-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
       - run: ctest --test-dir build -C Release --parallel 2 --output-on-failure
         env:
           BASSDEAMON_AUTO_MIX_PREVIEW: ${{ github.workspace }}/GUI-AutoMix.png

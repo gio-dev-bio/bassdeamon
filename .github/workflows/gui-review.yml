@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: python3 scripts/verify_gui_lock.py
       - run: sudo apt-get update && sudo apt-get install -y ninja-build libasound2-dev libx11-dev libxext-dev libxinerama-dev libxrandr-dev libxcursor-dev libxi-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev xvfb
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         with:
           path: build-gui
           key: gui-linux-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
@@ -21,6 +21,10 @@ jobs:
             gui-linux-
       - run: cmake -G Ninja -S . -B build-gui -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build-gui --target plugin_tests --parallel 4
+      - uses: actions/cache/save@v4
+        with:
+          path: build-gui
+          key: gui-linux-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
       - name: Check real controls and capture real editor
         run: |
           BASSDEAMON_AUTO_MIX_PREVIEW="$PWD/GUI-AutoMix.png" xvfb-run -a build-gui/plugin_tests_artefacts/Release/plugin_tests
