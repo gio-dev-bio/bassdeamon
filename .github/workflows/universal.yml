@@ -49,7 +49,7 @@ jobs:
           bash -n install.sh
           bash -n Installa_Aggiorna.command
           chmod +x Installa_Aggiorna.command
-          zip -Xj "$package" INSTALL.txt install.sh Installa_Aggiorna.command BUILD-COMMIT.txt BUILD-SHA256.txt GUI-Preview.png GUI-Raw.png GUI-Raw-Advanced.png GUI-Duck-Raw.png GUI-AutoMix.png
+          zip -Xj "$package" INSTALL.txt install.sh Installa_Aggiorna.command docs/RELEASE_1.0.9_IT.md BUILD-COMMIT.txt BUILD-SHA256.txt GUI-Preview.png GUI-Raw.png GUI-Raw-Advanced.png GUI-Duck-Raw.png GUI-AutoMix.png
           unzip -t "$package"
           unzip -q "$package" -d package-verification
           bundle=package-verification/BassDeamon.vst3

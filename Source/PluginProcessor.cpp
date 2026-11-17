@@ -3,7 +3,7 @@
 #include <optional>
 
 namespace {
-constexpr std::array<const char*, 74> ids{
+constexpr std::array<const char*, 75> ids{
     "glue.on", "glue.amount", "glue.lock", "phase.on", "phase.invert", "phase.delay",
     "phase.rotate", "phase.frequency", "unmask.on", "unmask.amount", "unmask.delta",
     "glue.agc", "glue.agcLock", "phase.agc", "phase.agcLock", "unmask.agc", "unmask.agcLock",
@@ -12,7 +12,7 @@ constexpr std::array<const char*, 74> ids{
     "tube.on","tube.drive","tube.amount","tube.source","tube.colour","tube.agc","tube.agcLock","tube.audition",
     "glue.timing","glue.attackMs","glue.releaseMs","glue.attackNote","glue.releaseNote",
     "unmask.timing","unmask.attackNote","unmask.releaseNote","view.range","view.hold",
-    "view.spectrum","view.minHz","view.maxHz","unmask.attenuation","unmask.controlDb","unmask.stereoMode","unmask.focusMinHz","unmask.focusMaxHz","kickEq.on","kickEq.frequency","kickEq.cut","subMono.on","subMono.hz","duck.on","duck.amount","duck.attack","duck.release","duck.timing","duck.releaseNote","tube.oversampling","duck.multiband","duck.body","duck.punch","duck.click","phase.angle","duck.lowHz","balance.trim","balance.lowHz","balance.splitHz","balance.highHz"};
+    "view.spectrum","view.minHz","view.maxHz","unmask.attenuation","unmask.controlDb","unmask.stereoMode","unmask.focusMinHz","unmask.focusMaxHz","kickEq.on","kickEq.frequency","kickEq.cut","subMono.on","subMono.hz","duck.on","duck.amount","duck.attack","duck.release","duck.timing","duck.releaseNote","tube.oversampling","duck.multiband","duck.body","duck.punch","duck.click","phase.angle","duck.lowHz","balance.trim","balance.lowHz","balance.splitHz","balance.highHz","unmask.kickReferenceHz"};
 }
 
 BassDeamonProcessor::BassDeamonProcessor()
@@ -113,6 +113,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout BassDeamonProcessor::layout(
     continuous("duck.click","Duck Click amount",0,1,.35f);
     continuous("phase.angle","Phase angle (degrees)",-180,180,0);
     continuous("duck.lowHz","Duck Low-Band cutoff (Hz)",0,250,110);
+    continuous("unmask.kickReferenceHz","Auto Focus kick reference (Hz)",0,130,0);
     continuous("balance.trim","Balance trim (dB)",-12,12,0);
     continuous("balance.lowHz","Balance low edge (Hz)",20,100,30);
     continuous("balance.splitHz","Balance split (Hz)",40,150,70);
@@ -150,7 +151,7 @@ bassdeamon::Settings BassDeamonProcessor::readSettings(bool proposal) const noex
     s.glue = value(0) > 0.5f; s.glueAmount = value(1); s.glueLocked = value(2) > 0.5f;
     s.phase = value(3) > 0.5f; s.invert = value(4) > 0.5f; s.delayMs = value(5);
     s.rotate = value(6) > 0.5f; s.rotationHz = value(7);
-    s.phaseAngle=value(68); s.phaseReference=phaseProcessingReferenceHz.load(std::memory_order_relaxed); s.kickReferenceHz=detectedKickHz.load(std::memory_order_relaxed);
+    s.phaseAngle=value(68); s.phaseReference=phaseProcessingReferenceHz.load(std::memory_order_relaxed); s.kickReferenceHz=value(74);
     s.unmask = value(8) > 0.5f; s.unmaskAmount = value(9); s.delta = value(10) > 0.5f;
     for (size_t i = 0; i < 3; ++i) s.agc[i] = {value(11+2*i) > 0.5f, value(12+2*i) > 0.5f};
     // Canonicalise the declared 0.001 dB grid in double: JUCE's normalised
@@ -392,6 +393,7 @@ void BassDeamonProcessor::timerCallback() {
                 parameter->endChangeGesture();
             };
             acceptKickReference(hz);
+            set("unmask.kickReferenceHz",float(hz));
             set("kickEq.frequency", float(hz));
             set("kickEq.on", 1);
             parameters.copyState();

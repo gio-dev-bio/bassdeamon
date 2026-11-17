@@ -170,7 +170,7 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
         return std::abs(hz - root) <= root * .06;
     });
     result.reliableKick = agreeing > 0 && 2 * agreeing > kickWindows;
-    if(result.reliableKick){result.kickRootHz=root;settings.kickReferenceHz=root;}
+    if(result.reliableKick){result.kickRootHz=root;propose("unmask.kickReferenceHz",settings.kickReferenceHz,root);settings.kickReferenceHz=root;}
     if (result.reliableKick && *strongest > bassEnergy * .005) {
         propose("kickEq.on", settings.kickEqEnabled, 1);
         propose("kickEq.frequency", settings.kickEqFrequency, root);

@@ -12,7 +12,7 @@ Auto Focus privilegia la zona della fondamentale acquisita, sempre entro il rang
 
 ## Phase
 
-AUTO REF acquisisce un riferimento affidabile dopo Auto Mix o Learn Kick EQ. È disponibile in Phase Advanced. Il riferimento dello Scope è separato dal riferimento fisico del filtro: l'acquisizione non cambia da sola il suono. La lettura e l'immissione dei gradi vengono convertite alle nuove coordinate. Una scelta manuale disattiva AUTO REF. Riferimenti e scelta automatica sono salvati nello stato.
+AUTO REF acquisisce un riferimento affidabile dopo Auto Mix o Learn Kick EQ. L’acquisizione per lo Scope non modifica i parametri audio; la priorità della fondamentale in Auto Focus viene proposta da Auto Mix e confermata con APPLY, oppure acquisita con Learn Kick EQ. È disponibile in Phase Advanced. Il riferimento dello Scope è separato dal riferimento fisico del filtro: l'acquisizione non cambia da sola il suono. La lettura e l'immissione dei gradi vengono convertite alle nuove coordinate. Una scelta manuale disattiva AUTO REF. Riferimenti e scelta automatica sono salvati nello stato.
 
 ## Balance
 

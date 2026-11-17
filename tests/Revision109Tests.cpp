@@ -8,6 +8,7 @@ void revision109Tests(){
     const auto set=[](BassDeamonProcessor& p,const char* id,float v){auto* x=p.parameters.getParameter(id);x->setValueNotifyingHost(x->convertTo0to1(v));};
     for(auto* p:{&a,&b}){set(*p,"glue.on",0);set(*p,"unmask.on",0);set(*p,"phase.on",1);set(*p,"phase.angle",73);p->prepareToPlay(48000,128);}
     a.acceptKickReference(48);
+    check(a.parameters.getRawParameterValue("unmask.kickReferenceHz")->load()==0,"Scope acquisition changed live Auto Focus settings before Apply");
     check(a.phaseReferenceHz.load()==48 && a.phaseProcessingReferenceHz.load()==60,"Auto reference retuned physical Phase reference");
     a.phaseReferenceAutomatic.store(false);a.acceptKickReference(92);
     check(a.phaseReferenceHz.load()==48,"Automatic learn overrode manual reference");

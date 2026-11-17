@@ -113,7 +113,7 @@ private:
     std::vector<bassdeamon::AutoMixFrame> autoAudio;
     std::future<bassdeamon::AutoMixResult> autoWorker;
     bassdeamon::AutoMixResult autoResult;
-    static constexpr size_t parameterCount=74;
+    static constexpr size_t parameterCount=75;
     std::array<std::atomic<float>,parameterCount> autoParameters{};
     std::array<float,parameterCount> autoOriginal{};
     std::atomic<bool> hostBypassed{false};

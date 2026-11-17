@@ -612,10 +612,11 @@ void BassDeamonEditor::layoutMain() {
     phaseAngle.setTooltip("Phase rotation at the reference frequency. Double-click to reset to zero. Phase must be enabled.");
     face.addAndMakeVisible(phaseAngle);
     phaseAngleAttachment=std::make_unique<State::SliderAttachment>(processor.parameters,"phase.angle",phaseAngle);
-    phaseAngle.textFromValueFunction=[this](double value){
+    const auto phaseRate=[this]{return processor.getSampleRate()>0?processor.getSampleRate():48000.;};
+    phaseAngle.textFromValueFunction=[this,phaseRate](double value){
         return juce::String(bassdeamon::phaseDegreesAtReference(value,processor.phaseProcessingReferenceHz.load(),processor.phaseReferenceHz.load(),phaseRate()),1)+juce::String::charToString(0x00b0);
     };
-    phaseAngle.valueFromTextFunction=[this](const juce::String& value){return bassdeamon::phaseDegreesAtReference(value.getDoubleValue(),processor.phaseReferenceHz.load(),processor.phaseProcessingReferenceHz.load(),phaseRate());};
+    phaseAngle.valueFromTextFunction=[this,phaseRate](const juce::String& value){return bassdeamon::phaseDegreesAtReference(value.getDoubleValue(),processor.phaseReferenceHz.load(),processor.phaseProcessingReferenceHz.load(),phaseRate());};
     phaseAngle.updateText();
     phaseScopeButton.setBounds(985,461,72,25);
     phaseAdvanced.setComponentID("view-mode");
