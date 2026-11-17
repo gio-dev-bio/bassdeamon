@@ -15,7 +15,7 @@ Decisioni approvate per la GUI e per il percorso audio della prossima versione. 
 ## Vista principale
 
 - Il riferimento RAW approvato è [BassDeamon, console analogica in grafite.png](https://chatgpt.com/library?file_id=libfile_50789945c8808191b5c9709e71f988a0&account_id=personal). Fissa la grafite satinata, la cornice in acciaio brunito, le scritte avorio e i meter ambrati. La leva Power nel mockup va accorciata come indicato sotto.
-- **Power** in alto a destra usa sempre una leva metallica **ON/OFF** in entrambe le skin. La spia ambra separata indica lo stato attivo. Nel sorgente della GUI il parametro grafico della leva è 11,5 px logici e il raggio della punta è 3 px; verificare la proporzione nella build reale.
+- **Power** in alto a destra usa sempre una leva metallica **ON/OFF** in entrambe le skin. La spia ambra separata indica lo stato attivo. Power e gli altri selettori metallici usano la stessa ghiera, leva e punta in entrambe le skin. La larghezza del controllo dipende dalle etichette. Verificare le proporzioni nella build reale.
 - Logo gotico **BASS ✝ DEAMON** in avorio con croce in rame e firma **Engineered by Guy_BioRg**. Etichette in inglese.
 - **Skin** sceglie fra **Classic** e **Raw**. Il tema Raw riprende una console analogica vissuta, con selettori metallici e meter a lancetta intera, dello stesso stile per Glue, Unmask e Duck.
 - Manopole in metallo spazzolato. I meter di riduzione partono da 0 dB a destra e si muovono verso sinistra per valori negativi.
