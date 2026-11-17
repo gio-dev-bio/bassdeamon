@@ -63,3 +63,7 @@ La cattura 1.0.6 conserva scheggiature marcate, ghiere dentate e meter più stre
 ## Richiamo e tracciabilità
 
 Gli stati senza visualRawTheme usano Raw, come le nuove istanze. La scelta Classic salvata esplicitamente viene rispettata. GUI-Preview mostra Classic; GUI-Raw e GUI-Raw-Advanced mostrano Raw. Il pacchetto include queste catture, commit e checksum del binario e delle immagini. Queste verifiche provano provenienza e presenza delle catture, non la conformità visiva: confrontare sempre Raw Main e Advanced con il mockup approvato prima della consegna.
+
+## RAW 1.0.8 — materiali e controlli
+
+Cornice continua con bordo estruso in acciaio e faccia incassata in grafite. Manopole a calotta liscia tornita, senza bitmap a ventaglio; filetto nero di posizione e tacche avorio/ambra. Campi numerici scuri incassati e arrotondati; pulsanti rialzati con carattere regolare e senza striscia luminosa laterale. Meter ambrati con quattro viti e bordo in acciaio. Il test visuale confronta i pixel della meccanica Power/On/Delta/Auto Gain. La cattura dell'editor resta il controllo della resa d'insieme; il test sui selettori non certifica da solo la corrispondenza del mockup.

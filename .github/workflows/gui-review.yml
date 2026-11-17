@@ -1,0 +1,29 @@
+name: Actual editor visual review
+on:
+  push:
+    branches: ['fix/gui-regression']
+permissions:
+  contents: read
+jobs:
+  editor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build libasound2-dev libx11-dev libxext-dev libxinerama-dev libxrandr-dev libxcursor-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev xvfb
+      - uses: actions/cache@v4
+        with:
+          path: build-gui
+          key: gui-linux-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
+          restore-keys: gui-linux-${{ hashFiles('CMakeLists.txt') }}-
+      - run: cmake -G Ninja -S . -B build-gui -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build-gui --target plugin_tests --parallel 4
+      - name: Check real controls and capture real editor
+        run: |
+          xvfb-run -a build-gui/plugin_tests_artefacts/Release/plugin_tests
+          xvfb-run -a build-gui/plugin_tests_artefacts/Release/plugin_tests --capture "$PWD/GUI-Preview.png"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GUI-review-${{ github.sha }}
+          path: GUI-*.png
+          if-no-files-found: error

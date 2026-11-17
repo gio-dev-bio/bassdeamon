@@ -45,15 +45,21 @@ void paintReductionMeter(juce::Graphics& g,float x,float y,float reduction,int f
         const auto bezel=meter.expanded(4);
         g.setColour(juce::Colour(0xff110b08));
         g.fillRoundedRectangle(bezel,6);
-        g.setGradientFill(juce::ColourGradient(juce::Colour(0xff75614e),bezel.getX(),bezel.getY(),
-            juce::Colour(0xff302720),bezel.getRight(),bezel.getBottom(),false));
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xff999d9c),bezel.getX(),bezel.getY(),
+            juce::Colour(0xff343a3d),bezel.getRight(),bezel.getBottom(),false));
         g.drawRoundedRectangle(bezel.reduced(1),5,2);
+        for(float sx:{bezel.getX()+6,bezel.getRight()-6})
+            for(float sy:{bezel.getY()+6,bezel.getBottom()-6}) {
+                g.setColour(juce::Colour(0xff202627));g.fillEllipse(sx-3,sy-3,6,6);
+                g.setColour(juce::Colour(0xffafb1aa));g.drawEllipse(sx-2.4f,sy-2.4f,4.8f,4.8f,.7f);
+                g.drawLine(sx-1,sy-1,sx+1,sy+1,.7f);
+            }
     }
     g.setColour(console::ink);
     g.fillRoundedRectangle(meter,4);
     const auto dial=meter.reduced(2);
-    const auto dialTop=juce::Colour(raw?0xffeac98a:0xffedcb88);
-    const auto dialBottom=juce::Colour(raw?0xffac7948:0xffb8874d);
+    const auto dialTop=juce::Colour(raw?0xffffd17b:0xffedcb88);
+    const auto dialBottom=juce::Colour(raw?0xffdb963e:0xffb8874d);
     g.setGradientFill(juce::ColourGradient(dialTop,0,dial.getY(),dialBottom,0,dial.getBottom(),false));
     g.fillRoundedRectangle(dial,3);
     juce::Graphics::ScopedSaveState meterClip(g);
@@ -87,7 +93,7 @@ void paintReductionMeter(juce::Graphics& g,float x,float y,float reduction,int f
     g.setColour(juce::Colour(0xff81382a));
     g.fillPath(needle);
     g.setColour(console::ink.withAlpha(.9f));
-    g.fillEllipse(pivot.x-3.5f,pivot.y-3.5f,7.f,7.f);
+    g.fillEllipse(pivot.x-2.5f,pivot.y-2.5f,5.f,5.f);
     if (!raw) console::text(g,"GAIN REDUCTION",{meter.getX()+8,y+55,104,18},12,console::ink);
     const float readoutY=y+(raw?46.f:55.f);
     const float displayedDb=reduction>=.05f?-reduction:0.f;
@@ -743,7 +749,7 @@ void BassDeamonEditor::rebuildConsoleBackground() {
     juce::Graphics g(consoleBackground);
     g.fillAll(console::ink);
     skin.paintPanel(g,{5,5,1190,860});
-    if (!skin.isRaw()) g.drawImageAt(grain,0,0);
+    g.drawImageAt(grain,0,0);
     static const auto wordmark=juce::ImageCache::getFromMemory(BassDeamonArt::BassDeamonWordmark_png,
                                                               BassDeamonArt::BassDeamonWordmark_pngSize);
     g.drawImageWithin(wordmark,45,18,265,39,juce::RectanglePlacement::centred);
@@ -815,6 +821,10 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g) {
         stageTitle(g,stages[index],{x+18,509,152,27},20);
     }
     const bool raw=skin.isRaw();
+    if(raw) {
+        g.setColour(juce::Colour(0xffa5a59c).withAlpha(.65f));
+        g.drawLine(244,626,244,721,.8f);g.drawLine(633,626,633,721,.8f);
+    }
     paintReductionMeter(g,panelLeft+panelWidth*.5f,542,glueGr,20,raw);
     paintReductionMeter(g,panelLeft+panelStride+panelWidth*.5f,542,processor.duckReduction.load(),18,raw);
     if (!showUnmaskAdvanced) paintReductionMeter(g,panelLeft+2*panelStride+panelWidth*.5f,542,processor.unmaskReduction.load(),24,raw);
