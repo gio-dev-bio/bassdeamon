@@ -611,8 +611,8 @@ void BassDeamonEditor::layoutMain() {
         knob->resized();
     };
     duckField("duck.attack",{655,timingAttackY,100,26});duckField("duck.release",{655,timingReleaseY,100,26});
-    place("duck.releaseNote",{655,timingReleaseY,100,26});place("duck.timing",{490,688,128,25});
-    duckField("duck.lowHz",{490,622,128,25});
+    place("duck.releaseNote",{655,timingReleaseY,100,26});place("duck.timing",{490,timingReleaseY,128,25});
+    duckField("duck.lowHz",{490,timingAttackY,128,25});
 
     place("tube.on",{175,786,58,25});place("tube.audition",{241,786,65,25});
     const auto tubeField=[&](const char* id,int x,int width) {
@@ -840,8 +840,8 @@ void BassDeamonEditor::paintConsole(juce::Graphics& g) {
     console::text(g,"ATTACK",{655,timingAttackY-19,100,19},12,console::muted);
     console::text(g,"RELEASE",{655,timingReleaseY-19,100,19},12,console::muted);
     if (showDuckAdvanced) {
-        console::text(g,"LOW-BAND FREQUENCY",{490,601,145,19},12,console::muted);
-        console::text(g,"RELEASE MODE",{490,667,128,19},12,console::muted);
+        console::text(g,"LOW-BAND FREQUENCY",{490,timingAttackY-19,145,19},12,console::muted);
+        console::text(g,"RELEASE MODE",{490,timingReleaseY-19,128,19},12,console::muted);
     }
 
 
