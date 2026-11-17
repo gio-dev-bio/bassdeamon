@@ -46,6 +46,8 @@ int captureGui(const juce::File& output){
     auto* eq=p.parameters.getParameter("kickEq.frequency");
     eq->setValueNotifyingHost(eq->convertTo0to1(60));
     p.parameters.getParameter("kickEq.on")->setValueNotifyingHost(1);
+    p.setRawTheme(false);
+    timedGui->syncTheme();
     if(!save(output))return 1;
     p.setRawTheme(true);
     timedGui->syncTheme();

@@ -1,7 +1,7 @@
 name: BassDeamon macOS Universal
 on:
   push:
-    branches: ['build/bassdeamon-1.0.7-universal']
+    branches: ['build/bassdeamon-1.0.7-universal', 'fix/gui-regression']
   workflow_dispatch:
 permissions:
   contents: read
@@ -24,12 +24,19 @@ jobs:
           codesign --verify --strict --verbose=2 "$bundle"
       - name: Capture the actual editor
         run: build/plugin_tests_artefacts/Release/plugin_tests --capture "$PWD/GUI-Preview.png"
+      - name: Require visual evidence and source identity
+        run: |
+          for image in GUI-Preview.png GUI-Raw.png GUI-Raw-Advanced.png GUI-Duck-Raw.png; do
+            test -s "$image"
+          done
+          git rev-parse HEAD > BUILD-COMMIT.txt
+          shasum -a 256 GUI-Preview.png GUI-Raw.png GUI-Raw-Advanced.png GUI-Duck-Raw.png build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3/Contents/MacOS/BassDeamon > BUILD-SHA256.txt
       - name: Package Universal plugin
         run: |
           package="$PWD/BassDeamon-1.0.7-macOS-Universal.zip"
           (cd build/BassDeamon_artefacts/Release/VST3 && zip -Xqr "$package" BassDeamon.vst3)
           bash -n install.sh
-          zip -Xj "$package" INSTALL.txt install.sh
+          zip -Xj "$package" INSTALL.txt install.sh BUILD-COMMIT.txt BUILD-SHA256.txt GUI-Preview.png GUI-Raw.png GUI-Raw-Advanced.png GUI-Duck-Raw.png
           unzip -t "$package"
           unzip -q "$package" -d package-verification
           bundle=package-verification/BassDeamon.vst3
@@ -37,10 +44,10 @@ jobs:
           codesign --verify --strict --verbose=2 "$bundle"
       - name: Test installation and replacement from the extracted ZIP
         run: |
-          export HOME="$(mktemp -d)"
-          bash package-verification/install.sh
-          bash package-verification/install.sh
-          installed="$HOME/Library/Audio/Plug-Ins/VST3/BassDeamon.vst3"
+          test_home="$(mktemp -d)"
+          env HOME="$test_home" bash package-verification/install.sh
+          env HOME="$test_home" bash package-verification/install.sh
+          installed="$test_home/Library/Audio/Plug-Ins/VST3/BassDeamon.vst3"
           test -x "$installed/Contents/MacOS/BassDeamon"
           codesign --verify --strict "$installed"
       - uses: actions/upload-artifact@v4

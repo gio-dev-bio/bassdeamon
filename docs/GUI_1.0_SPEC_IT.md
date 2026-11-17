@@ -59,3 +59,7 @@ Controllare ordine DSP, Learn Kick EQ e Phase a 44,1 kHz con loop reali di kick 
 ## Correzione dopo confronto con Cubase 1.0.6
 
 La cattura 1.0.6 conserva scheggiature marcate, ghiere dentate e meter più stretti del riferimento. Per riprodurre il RAW approvato usare cornici continue in acciaio brunito, grana tenue, manopole a calotta metallica larga e meter RAW da 224 px logici. Confrontare le catture Main e Advanced con il mockup prima della consegna. La sola verifica dei rettangoli non certifica la corrispondenza visiva.
+
+## Richiamo e tracciabilità
+
+Gli stati senza visualRawTheme usano Raw, come le nuove istanze. La scelta Classic salvata esplicitamente viene rispettata. GUI-Preview mostra Classic; GUI-Raw e GUI-Raw-Advanced mostrano Raw. Il pacchetto include queste catture, commit e checksum del binario e delle immagini. Queste verifiche provano provenienza e presenza delle catture, non la conformità visiva: confrontare sempre Raw Main e Advanced con il mockup approvato prima della consegna.

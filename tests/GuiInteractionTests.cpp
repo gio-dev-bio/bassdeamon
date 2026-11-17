@@ -50,8 +50,11 @@ int interactionTests(){
         oldXml->setAttribute("visualAnalyzerRate",3);
         juce::AudioProcessor::copyXmlToBinary(*oldXml,state);
         b.setStateInformation(state.getData(),int(state.getSize()));
-        ensure(!b.usesRawTheme(),"Old sessions should open in Classic");
+        ensure(b.usesRawTheme(),"States without a theme must use approved Raw default");
         ensure(b.analyzerRefreshHz()==4,"Legacy 4 fps analyzer rate did not migrate");
+        a.setRawTheme(false);a.getStateInformation(state);
+        b.setStateInformation(state.getData(),int(state.getSize()));
+        ensure(!b.usesRawTheme(),"Explicit Classic choice must survive recall");
         std::cout<<"PASS PRE/POST null test: 184320 identical audio samples across 360 real button clicks, with active processors and AGC; host parameters unchanged\n";
     }
     BassDeamonProcessor p;auto layout=p.getBusesLayout();

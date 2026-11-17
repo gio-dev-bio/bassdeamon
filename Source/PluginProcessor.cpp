@@ -656,7 +656,9 @@ void BassDeamonProcessor::setStateInformation(const void* data, int bytes) {
             const auto oldRate = size_t(std::clamp(xml->getIntAttribute("visualAnalyzerRate",2),0,5));
             const double reference=xml->getDoubleAttribute("phaseReferenceHz",60.);
             phaseReferenceHz.store(float(std::isfinite(reference)?std::clamp(reference,30.,130.):60.));
-            setRawTheme(xml->getBoolAttribute("visualRawTheme",false));
+            // States predating the skin selector inherit the approved default.
+            // An explicit Classic selection remains authoritative.
+            setRawTheme(xml->getBoolAttribute("visualRawTheme",true));
             setAnalyzerRefreshHz(xml->getDoubleAttribute("visualAnalyzerHz",previousRates[oldRate]));
             setSpectrumView(xml->getIntAttribute("visualSpectrumView",int(parameters.getRawParameterValue("view.spectrum")->load())));
             const bassdeamon::Engine::RuntimeState defaults{-24, 2, 20, 180, 0, 0, 0, 75,0};
