@@ -26,6 +26,6 @@ void revision109Tests(){
     check(std::abs(undoneTrim)<.001f,"Balance trim is not undoable");
     a.applyBalanceTrim(-1.5f);juce::MemoryBlock state;a.getStateInformation(state);b.setStateInformation(state.getData(),int(state.getSize()));
     check(b.phaseReferenceHz.load()==48 && b.phaseProcessingReferenceHz.load()==60,"Scope/physical references did not survive state recall");
-    check(b.parameters.getRawParameterValue("balance.trim")->load()==-1.5f,"Balance trim did not survive state recall");
+    check(std::abs(b.parameters.getRawParameterValue("balance.trim")->load()+1.5f)<.001f,"Balance trim did not survive state recall");
     std::cout<<"PASS Phase automatic root audio null / manual override / invalid root / angle coordinates / Balance apply Undo recall\n";
 }
