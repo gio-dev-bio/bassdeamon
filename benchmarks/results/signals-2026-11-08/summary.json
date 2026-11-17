@@ -1,0 +1,24 @@
+{
+  "version": "0.2.1",
+  "test_commit": "a942ac03c17de0c9ef24f360b449a3ea423e11c8",
+  "run": "https://github.com/gio-dev-bio/bassdeamon/actions/runs/42477224963",
+  "dsp_cases": 717,
+  "dsp_samples": 243025200,
+  "nonfinite": 0,
+  "peak_fs": 0.983877778053,
+  "tail_peak_fs": 1.51327969999e-22,
+  "host_bypass_cases": 504,
+  "host_bit_differences": 0,
+  "host_compared_samples": 1046682,
+  "switches": {
+    "host": {
+      "switch_jump_fs": -0.24316436052322388,
+      "max_hf_peak_dbfs": -16.77304453915514
+    },
+    "global": {
+      "switch_jump_fs": -0.0025383010506629944,
+      "max_hf_peak_dbfs": -74.17379117969011
+    }
+  },
+  "failures": []
+}

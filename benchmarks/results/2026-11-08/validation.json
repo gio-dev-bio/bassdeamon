@@ -1,0 +1,13 @@
+{
+  "code_commit": "1401e355b78050c51b5408a79cef873373cce5cc",
+  "baseline_commit": "e6d48b7fa76979da31214eca03d4190fdef3578e",
+  "workflow_run": 42474838355,
+  "workflow_url": "https://github.com/gio-dev-bio/bassdeamon/actions/runs/42474838355",
+  "jobs": {
+    "dsp": "success",
+    "macos": "success",
+    "benchmark (macos-15)": "success",
+    "benchmark (macos-15-intel)": "success"
+  },
+  "validation": "pluginval 1.0.4 strictness 5, ARM native and Intel through Rosetta on ARM runner. CPU benchmarks use separate native Intel and ARM runners."
+}

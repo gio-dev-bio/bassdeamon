@@ -1,0 +1,9 @@
+{
+  "version": "0.2.2",
+  "sha256": "94a42d27d2d978d83607bc1ff1524a0b33110cb77ceb7c864674cfa2570fd34b",
+  "architectures": [
+    "x86_64",
+    "arm64"
+  ],
+  "bytes": 8035575
+}

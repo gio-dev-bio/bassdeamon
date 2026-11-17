@@ -1,0 +1,8 @@
+mode,max_absolute_error,rms_error,different_samples,nonfinite
+bypass,0,0,0,0
+glue,0,0,0,0
+unmask,0,0,0,0
+all,0,0,0,0
+agc,1.49012e-08,4.43876e-11,16,0
+learn,7.45058e-09,2.43678e-11,18,0
+automation,0.0123007,0.00221708,235169,0

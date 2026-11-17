@@ -1,0 +1,13 @@
+build*/
+.DS_Store
+*.zip
+*.wav
+.cache/
+
+benchmarks/before/
+benchmarks/optimized/
+benchmarks/final/
+bench-results/
+*.f32
+benchmarks/native-intel/
+benchmarks/native-arm64/

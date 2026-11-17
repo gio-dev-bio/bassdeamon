@@ -1,0 +1,16 @@
+{
+  "reference": "BassDeamon-1.0.8-GUI-Raw.png",
+  "reference_library_file_id": "libfile_6aa129ad3fdc8191b97ce0ddaa4e80f9",
+  "reference_sha256": "b6b329efc5deeb8a76fa57134dac7c2344da88e9d49db114f3c5edd87bec4da9",
+  "review": "1.0.8 main GUI retained; 1.0.9 intended additions in Advanced/Auto Mix and corrected analyzer labels require real captures",
+  "sha256": {
+    "Source/ConsoleSkin.h": "322a9b2be7a365950ff7227fcc56ea2863d9a3dd7b0a176c20456111e8043020",
+    "Source/PluginEditor.cpp": "302c43b8d462777126b6470ed0828d1523c1d70e3483db726e5be54bca27a283",
+    "Source/PluginEditor.h": "47a39f6db37e0c48b3d98545a5ccdc8c0f55c06a880a1b8eafa80bda597935fa",
+    "Source/SpectrumDisplay.h": "a390d9719435b2e8598a1e432e6471e3c9a43f222444b27d77500c201ad22ab1",
+    "Assets/RawSteel.png": "edcfca1f15630e0c6d89c32cb925ad28bb17dcb1fcd0c8921223a0023342999c",
+    "Assets/RawKnob.png": "440d692401b710409159b27f0d818654682a7206eef88a6f5b94cecafdaad33a",
+    "Assets/BassDeamonWordmark.png": "1b3748bbbdd2aaca7965da37e8635cf6eb659cab9b65d4d35f68bbea9f72effa",
+    "tests/GuiCapture.cpp": "8fb6cae658fe8a493211e2be87465b539e1096db733d80cea657396fece14bce"
+  }
+}
