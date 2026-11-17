@@ -129,11 +129,11 @@ public:
         g.setGradientFill(juce::ColourGradient(juce::Colour(0xffbcb9ad),cx-cap,cy-cap,
             juce::Colour(0xff555751),cx+cap,cy+cap,false));g.fillEllipse(disc(cap));
         // Broad reflections over the turned surface follow the approved steel cap.
-        g.drawImage(rawCap,disc(cap));
         // Wide, low-contrast reflected light, rather than alternating spokes.
         {
             juce::Graphics::ScopedSaveState clip(g);
             juce::Path circle;circle.addEllipse(disc(cap));g.reduceClipRegion(circle);
+            g.drawImage(rawCap,disc(cap));
             g.setGradientFill(juce::ColourGradient(juce::Colours::white.withAlpha(.30f),cx-cap*.5f,cy-cap*.6f,
                 juce::Colours::transparentWhite,cx+cap*.7f,cy+cap*.7f,true));g.fillEllipse(disc(cap));
             for(int i=1;i<22;++i) {

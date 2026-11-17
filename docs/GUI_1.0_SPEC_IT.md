@@ -67,3 +67,7 @@ Gli stati senza visualRawTheme usano Raw, come le nuove istanze. La scelta Class
 ## RAW 1.0.8 — materiali e controlli
 
 Cornice continua con bordo estruso in acciaio e faccia incassata in grafite. Manopole a calotta liscia tornita, senza bitmap a ventaglio; filetto nero di posizione e tacche avorio/ambra. Campi numerici scuri incassati e arrotondati; pulsanti rialzati con carattere regolare e senza striscia luminosa laterale. Meter ambrati con quattro viti e bordo in acciaio. Il test visuale confronta i pixel della meccanica Power/On/Delta/Auto Gain. La cattura dell'editor resta il controllo della resa d'insieme; il test sui selettori non certifica da solo la corrispondenza del mockup.
+
+## Blocco della resa grafica
+
+`docs/RAW_GUI_LOCK.json` lega il riferimento approvato ai sorgenti e alle risorse grafiche con SHA-256. Entrambe le pipeline verificano il blocco prima di compilare. Una modifica visuale deve essere accompagnata dal confronto delle catture reali Main e Advanced con il riferimento prima di aggiornare manualmente il blocco; non è previsto un comando che lo aggiorni automaticamente. I test sui pixel della meccanica dei selettori e sul ritaglio circolare delle manopole restano indipendenti dal blocco.

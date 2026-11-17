@@ -1,0 +1,16 @@
+{
+  "reference": "BassDeamon, console analogica in grafite.png",
+  "reference_library_file_id": "libfile_50789945c8808191b5c9709e71f988a0",
+  "reference_sha256": "38235d9058a8da0a82130456aec6aee258f4a07778a729c15b8dbc2498463d45",
+  "review": "Main and Advanced actual editor captures required before release",
+  "sha256": {
+    "Source/ConsoleSkin.h": "322a9b2be7a365950ff7227fcc56ea2863d9a3dd7b0a176c20456111e8043020",
+    "Source/PluginEditor.cpp": "59222e671fc6ec73c49badafd335b9cc03996c81f731c08aadf17b62a47a6021",
+    "Source/PluginEditor.h": "b2e321f034f92bcf175bc5e8ead4c2ec709a0372e14c9740a2538f686eb1da88",
+    "Source/SpectrumDisplay.h": "a390d9719435b2e8598a1e432e6471e3c9a43f222444b27d77500c201ad22ab1",
+    "Assets/RawSteel.png": "edcfca1f15630e0c6d89c32cb925ad28bb17dcb1fcd0c8921223a0023342999c",
+    "Assets/RawKnob.png": "440d692401b710409159b27f0d818654682a7206eef88a6f5b94cecafdaad33a",
+    "Assets/BassDeamonWordmark.png": "1b3748bbbdd2aaca7965da37e8635cf6eb659cab9b65d4d35f68bbea9f72effa",
+    "tests/GuiCapture.cpp": "8fb6cae658fe8a493211e2be87465b539e1096db733d80cea657396fece14bce"
+  }
+}

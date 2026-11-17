@@ -12,6 +12,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+      - run: python3 scripts/verify_gui_lock.py
       - uses: actions/cache@v4
         with:
           path: build
