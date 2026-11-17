@@ -53,6 +53,7 @@ inline void demon(juce::Graphics& g, juce::Rectangle<float> area) {
 class Skin final : public juce::LookAndFeel_V4 {
 public:
     Skin() {
+        rawCap=makeRawCap();
         setColour(juce::Slider::thumbColourId,amber); setColour(juce::Slider::trackColourId,copper);
         setColour(juce::Slider::backgroundColourId,ink);
         setColour(juce::Slider::textBoxTextColourId,cream); setColour(juce::Slider::textBoxBackgroundColourId,ink);
@@ -127,6 +128,8 @@ public:
         const float cap=radius-4;
         g.setGradientFill(juce::ColourGradient(juce::Colour(0xffbcb9ad),cx-cap,cy-cap,
             juce::Colour(0xff555751),cx+cap,cy+cap,false));g.fillEllipse(disc(cap));
+        // Broad reflections over the turned surface follow the approved steel cap.
+        g.drawImage(rawCap,disc(cap));
         // Wide, low-contrast reflected light, rather than alternating spokes.
         {
             juce::Graphics::ScopedSaveState clip(g);
@@ -259,7 +262,20 @@ public:
     juce::Font getLabelFont(juce::Label&) override {return font(14);}
 private:
     bool raw=false;
-    juce::Image steel,knob;
+    juce::Image steel,knob,rawCap;
+    static juce::Image makeRawCap() {
+        juce::Image image(juce::Image::RGB,128,128,false);
+        juce::Image::BitmapData pixels(image,juce::Image::BitmapData::writeOnly);
+        juce::Random grain(0x5319);
+        for(int y=0;y<128;++y)for(int x=0;x<128;++x) {
+            const double dx=x-63.5,dy=y-63.5,r=std::sqrt(dx*dx+dy*dy);
+            const double a=std::atan2(dy,dx);
+            const double reflected=143+48*std::cos(2*a+r*.018)+25*std::cos(a+.6);
+            const int v=juce::jlimit(48,234,juce::roundToInt(reflected+1.5*std::cos(r*9)+grain.nextDouble()*2));
+            pixels.setPixelColour(x,y,juce::Colour::fromRGB(juce::uint8(v),juce::uint8(v*.985),juce::uint8(v*.95)));
+        }
+        return image;
+    }
     // Mechanical steel toggle: purely visual, JUCE ButtonAttachment and accessibility unchanged.
     void metalToggle(juce::Graphics& g, juce::Button& b, bool hover, bool down, bool viewMode=false) const {
         const auto r=b.getLocalBounds().toFloat().reduced(1.0f);

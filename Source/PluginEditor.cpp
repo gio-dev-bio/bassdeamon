@@ -48,12 +48,7 @@ void paintReductionMeter(juce::Graphics& g,float x,float y,float reduction,int f
         g.setGradientFill(juce::ColourGradient(juce::Colour(0xff999d9c),bezel.getX(),bezel.getY(),
             juce::Colour(0xff343a3d),bezel.getRight(),bezel.getBottom(),false));
         g.drawRoundedRectangle(bezel.reduced(1),5,2);
-        for(float sx:{bezel.getX()+6,bezel.getRight()-6})
-            for(float sy:{bezel.getY()+6,bezel.getBottom()-6}) {
-                g.setColour(juce::Colour(0xff202627));g.fillEllipse(sx-3,sy-3,6,6);
-                g.setColour(juce::Colour(0xffafb1aa));g.drawEllipse(sx-2.4f,sy-2.4f,4.8f,4.8f,.7f);
-                g.drawLine(sx-1,sy-1,sx+1,sy+1,.7f);
-            }
+
     }
     g.setColour(console::ink);
     g.fillRoundedRectangle(meter,4);
@@ -62,7 +57,7 @@ void paintReductionMeter(juce::Graphics& g,float x,float y,float reduction,int f
     const auto dialBottom=juce::Colour(raw?0xffdb963e:0xffb8874d);
     g.setGradientFill(juce::ColourGradient(dialTop,0,dial.getY(),dialBottom,0,dial.getBottom(),false));
     g.fillRoundedRectangle(dial,3);
-    juce::Graphics::ScopedSaveState meterClip(g);
+    { juce::Graphics::ScopedSaveState meterClip(g);
     g.reduceClipRegion(dial.toNearestInt());
     const auto mark=[fullScale,x,y,width](float reduction) {
         const float normal=1.f-2.f*std::sqrt(std::clamp(reduction/float(fullScale),0.f,1.f));
@@ -99,13 +94,23 @@ void paintReductionMeter(juce::Graphics& g,float x,float y,float reduction,int f
     const float displayedDb=reduction>=.05f?-reduction:0.f;
     console::text(g,juce::String(displayedDb,1)+" dB",{meter.getRight()-70,readoutY,61,18},12,console::ink,
                   juce::Justification::centredRight);
+    }
+    if(raw) {
+        for(float sx:{meter.getX()+1,meter.getRight()-1})
+            for(float sy:{meter.getY()+1,meter.getBottom()-1}) {
+                g.setColour(juce::Colour(0xff161b1c));g.fillEllipse(sx-4,sy-4,8,8);
+                g.setGradientFill(juce::ColourGradient(juce::Colour(0xffd6d4c8),sx-2,sy-3,
+                    juce::Colour(0xff4c5254),sx+2,sy+3,false));g.fillEllipse(sx-2.5f,sy-2.5f,5,5);
+                g.setColour(juce::Colour(0xff202423));g.drawLine(sx-1.3f,sy-1,sx+1.3f,sy+1,1);
+            }
+    }
 }
 
 void paintSignalPath(juce::Graphics& g, const BassDeamonProcessor& processor) {
     constexpr std::array stageSwitches{"kickEq.on","glue.on","phase.on","tube.on","duck.on","unmask.on"};
     const bool powered=!processor.displayBypassed();
     g.setColour(juce::Colour(0xff1a1916));
-    g.fillRoundedRectangle(24,102,1152,24,4);
+    if(!processor.usesRawTheme()) g.fillRoundedRectangle(24,102,1152,24,4);
     console::text(g,"BASS SIGNAL PATH",{44,102,159,24},14,console::muted);
     constexpr std::array<float,6> positions{206,365,508,650,824,1004};
     for (size_t index=0;index<positions.size();++index) {
@@ -755,12 +760,12 @@ void BassDeamonEditor::rebuildConsoleBackground() {
     g.drawImageWithin(wordmark,45,18,265,39,juce::RectanglePlacement::centred);
     console::text(g,"Engineered by Guy_BioRg",{319,20,170,33},15,console::amber);
     console::text(g,"SKIN",{35,69,40,25},13,console::muted);
-    skin.paintPanel(g,{24,128,1152,320},true);
+    skin.paintPanel(g,{24,128,1152,320},!skin.isRaw());
     skin.paintPanel(g,{24,453,660,45});
     skin.paintPanel(g,{691,453,485,45});
     for (int i=0;i<3;++i) skin.paintPanel(g,{float(panelLeft+panelStride*i),503,float(panelWidth),267});
     skin.paintPanel(g,{24,776,1152,44});
-    skin.paintPanel(g,{24,824,1152,38},true);
+    skin.paintPanel(g,{24,824,1152,38},!skin.isRaw());
 }
 
 void BassDeamonEditor::paintConsole(juce::Graphics& g) {
@@ -878,8 +883,8 @@ std::array<double,2> BassDeamonEditor::spectrumLimits() const {
 }
 void BassDeamonEditor::paintSpectrum(juce::Graphics& g) {
     const bool post = spectrumIsPost();
-    const juce::Colour bassBlue(0xff8faef1);
-    g.setColour(juce::Colour(0xff181a18));
+    const juce::Colour bassBlue(skin.isRaw()?0xff08d8f0:0xff8faef1);
+    g.setColour(juce::Colour(skin.isRaw()?0xff06161c:0xff181a18));
     g.fillRoundedRectangle(72,166,1070,22,3);
     const auto legend = [&](const juce::String& label, float x, juce::Colour colour, bool dashed=false) {
         g.setColour(colour);
@@ -892,7 +897,7 @@ void BassDeamonEditor::paintSpectrum(juce::Graphics& g) {
         console::text(g,label,{x+32,166,140,22},15,colour);
     };
     legend(post?"BASS POST":"BASS PRE",88,bassBlue);
-    legend("KICK",340,juce::Colour(0xffd59666));
+    legend("KICK",340,juce::Colour(skin.isRaw()?0xffffae12:0xffd59666));
     legend("KICK EQ",600,eqTrace,true);
     if (post) legend("UNMASK",860,unmaskTrace);
     console::text(g,"RATE",{408,136,48,26},13,console::muted);
@@ -918,7 +923,7 @@ int BassDeamonEditor::paintSpectrumPlot(juce::Graphics& g,juce::Rectangle<float>
     const double span = std::log1p(maximum/20)-start;
     const auto fx=[&](double hz){return plot.getX()+float((std::log1p(hz/20)-start)/span)*plot.getWidth();};
     const auto fy=[&](float level){return plot.getBottom()-juce::jlimit(0.f,1.f,(level+96)/96)*plot.getHeight();};
-    g.setColour(juce::Colour(0xff11151a));
+    g.setColour(juce::Colour(skin.isRaw()?0xff03141d:0xff11151a));
     g.fillRect(plot);
     for(int level:{-96,-72,-48,-24,0}){
         const float y=fy(float(level));
@@ -981,7 +986,7 @@ int BassDeamonEditor::paintSpectrumPlot(juce::Graphics& g,juce::Rectangle<float>
         g.reduceClipRegion(plot.toNearestInt());
         for(int trace=0;trace<2;++trace){
             const auto& values=trace==0?visualKick:selected;
-            const auto colour=trace==0?juce::Colour(0xffd59666):bassBlue;
+            const auto colour=trace==0?juce::Colour(skin.isRaw()?0xffffae12:0xffd59666):bassBlue;
             juce::Path curve;
             const size_t first=size_t(std::max(0.,std::floor(minimum/binWidth)));
             const size_t last=std::min(values.size()-1,size_t(std::ceil(maximum/binWidth)));
@@ -1110,12 +1115,12 @@ int BassDeamonEditor::paintSpectrumPlot(juce::Graphics& g,juce::Rectangle<float>
             juce::Rectangle<float> label(boxX,374,width,50);
             g.setColour(console::muted.withAlpha(.25f));g.drawHorizontalLine(374,label.getX(),label.getRight());
             console::text(g,resolved?"BELOW THRESHOLD":"MAIN COLLISION",label.withWidth(190).withHeight(17),12,console::muted);
-            console::text(g,juce::String(region.hz,1)+" Hz",label.withWidth(190).withTrimmedTop(17),21,accent);
+            console::text(g,juce::String(region.hz,1)+" Hz",label.withWidth(190).withTrimmedTop(17),skin.isRaw()?24.f:21.f,accent);
             console::text(g,"BASS - KICK",{boxX+width*.33f,374,185,17},12,console::muted);
-            console::text(g,relation,{boxX+width*.33f,391,185,29},20,console::cream);
+            console::text(g,relation,{boxX+width*.33f,391,185,29},skin.isRaw()?22.f:20.f,console::cream);
             if(post){
                 console::text(g,"POST - PRE",{boxX+width*.66f,374,185,17},12,console::muted);
-                console::text(g,delta,{boxX+width*.66f,391,185,29},20,console::cream);
+                console::text(g,delta,{boxX+width*.66f,391,185,29},skin.isRaw()?22.f:20.f,console::cream);
             }
 
         }
