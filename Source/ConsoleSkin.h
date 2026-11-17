@@ -223,10 +223,11 @@ private:
             return;
         }
         const bool on=b.getToggleState();
-        const float radius=juce::jlimit(5.0f,13.0f,r.getHeight()*0.38f);
-        const float cx=viewMode?r.getCentreX():r.getRight()-radius-5.0f;
+        const bool power=b.getComponentID()=="global.on";
+        const float radius=power?7.5f:juce::jlimit(5.0f,13.0f,r.getHeight()*0.38f);
+        const float cx=viewMode?r.getCentreX():r.getRight()-(power?17.0f:radius+5.0f);
         const float cy=r.getCentreY();
-        const float shaftLength=juce::jlimit(3.0f,8.0f,r.getHeight()*(raw?.34f:.25f));
+        const float shaftLength=power?11.5f:juce::jlimit(3.0f,8.0f,r.getHeight()*(raw?.34f:.25f));
         g.setColour(juce::Colours::black.withAlpha(0.66f));
         g.fillEllipse(cx-radius+1,cy-radius+2,radius*2,radius*2);
         g.setGradientFill(juce::ColourGradient(juce::Colour(0xffe2d7c0),cx-radius,cy-radius,
@@ -235,25 +236,31 @@ private:
         g.setColour(juce::Colour(0xff211e1b));g.drawEllipse(cx-radius,cy-radius,radius*2,radius*2,1.2f);
         g.setColour(juce::Colour(0xff24211e));g.fillEllipse(cx-radius*.67f,cy-radius*.67f,radius*1.34f,radius*1.34f);
         const float sx=cx+(on?shaftLength:-shaftLength)*.66f;
-        const float sy=cy+(on?-shaftLength:shaftLength)*.85f+(down?1.0f:0.0f);
+        const float sy=cy+(on?-shaftLength:shaftLength)*(power?.69f:.85f)+(down?1.0f:0.0f);
+        const float tipRadius=power?3.0f:2.6f;
         g.setColour(juce::Colours::black.withAlpha(.7f));
         g.drawLine(cx+1,cy+1,sx+1,sy+1,5.2f);
         g.setGradientFill(juce::ColourGradient(juce::Colour(0xfff6ecd7),cx-radius,cy-radius,
                                                juce::Colour(0xff817c72),cx+radius,cy+radius,false));
         g.drawLine(cx,cy,sx,sy,4.5f);
         g.setColour(juce::Colour(0xfff2e5cb));
-        g.fillEllipse(sx-2.6f,sy-2.6f,5.2f,5.2f);
-        const float lampX=cx-radius*1.8f;
+        g.fillEllipse(sx-tipRadius,sy-tipRadius,2*tipRadius,2*tipRadius);
+        const float lampX=cx-(power?23.0f:radius*1.8f);
         if (!viewMode && r.getWidth()>62.0f) {
             g.setColour(on?amber:juce::Colour(0xff40362c));
             g.fillEllipse(lampX-2.4f,cy-2.4f,4.8f,4.8f);
             if (on) {g.setColour(amber.withAlpha(.16f));g.fillEllipse(lampX-5,cy-5,10,10);}
         }
         if (viewMode) {
-            const auto labelWidth=r.getWidth()*.5f-radius-3;
+            const auto labelWidth=r.getWidth()*.5f-radius-5;
             const bool band=b.getComponentID()=="duck.multiband";
-            text(g,band?"FULL-BAND":"MAIN",r.withWidth(labelWidth),11,on?muted:cream,juce::Justification::centred);
-            text(g,band?"LOW-BAND":"ADV",r.withX(cx+radius+3).withWidth(labelWidth),11,on?cream:muted,juce::Justification::centred);
+            const auto drawLabel=[&](const char* label,juce::Rectangle<float> bounds,bool selected) {
+                g.setColour(selected?cream:muted);
+                g.setFont(font(11,true));
+                g.drawFittedText(label,bounds.toNearestInt(),juce::Justification::centred,1);
+            };
+            drawLabel(band?"FULL-BAND":"MAIN",r.withWidth(labelWidth),!on);
+            drawLabel(band?"LOW-BAND":"ADV",r.withX(cx+radius+5).withWidth(labelWidth),on);
         } else {
             const auto labelArea=juce::Rectangle<float>(r.getX()+3,r.getY(),juce::jmax(1.0f,(r.getWidth()>62.f?lampX-9:cx-radius-3)-r.getX()),r.getHeight());
             g.setColour(b.isEnabled()?cream:muted.withAlpha(.5f));
