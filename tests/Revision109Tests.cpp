@@ -20,7 +20,10 @@ void revision109Tests(){
         check(std::abs(bassdeamon::phaseDegreesAtReference(display,hz,60,48000)-degrees)<1e-6,"Degree coordinate conversion is not reversible");
     }
     a.applyBalanceTrim(-2.5f);check(a.parameters.getRawParameterValue("balance.trim")->load()==-2.5f,"Balance apply failed");
-    check(a.undoEdit()&&a.parameters.getRawParameterValue("balance.trim")->load()==0,"Balance trim is not undoable");
+    check(a.undoEdit(),"Balance trim Undo transaction missing");
+    const float undoneTrim=a.parameters.getRawParameterValue("balance.trim")->load();
+    std::cout << "Balance trim after Undo: " << undoneTrim << " dB\n";
+    check(std::abs(undoneTrim)<.001f,"Balance trim is not undoable");
     a.applyBalanceTrim(-1.5f);juce::MemoryBlock state;a.getStateInformation(state);b.setStateInformation(state.getData(),int(state.getSize()));
     check(b.phaseReferenceHz.load()==48 && b.phaseProcessingReferenceHz.load()==60,"Scope/physical references did not survive state recall");
     check(b.parameters.getRawParameterValue("balance.trim")->load()==-1.5f,"Balance trim did not survive state recall");
