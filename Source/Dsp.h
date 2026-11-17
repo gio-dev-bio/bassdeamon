@@ -509,7 +509,8 @@ public:
         const double duckDepth = duckEnabled ? std::clamp(s.duckAmountDb,0.,18.) : 0.;
         duckBandMix.set(s.duckMultiband?1:0,rampSamples);
         const bool lowBand = s.duckLowHz > 0;
-        const double lowBandPole = s.duckMultiband && lowBand
+        // Keep the selected crossover until the outgoing Low-Band path has faded out.
+        const double lowBandPole = lowBand && (s.duckMultiband || duckBandMix.value() > 0)
             ? std::exp(-2*pi*std::clamp(s.duckLowHz,60.,250.)/sampleRate) : duckBodyPole;
         const bool runDuck = duckDepth > 0 || duckReduction > 0
             || std::any_of(duckBandReduction.begin(),duckBandReduction.end(),[](double v){return v>0;});

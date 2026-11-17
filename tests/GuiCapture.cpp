@@ -50,6 +50,13 @@ int captureGui(const juce::File& output){
     p.setRawTheme(true);
     timedGui->syncTheme();
     if(!save(output.getSiblingFile("GUI-Raw.png")))return 1;
+    timedGui->duckAdvanced.onClick();
+    timedGui->unmaskAdvanced.setToggleState(true,juce::dontSendNotification);
+    timedGui->unmaskAdvanced.onClick();
+    if(!save(output.getSiblingFile("GUI-Raw-Advanced.png")))return 1;
+    timedGui->duckAdvanced.onClick();
+    timedGui->unmaskAdvanced.setToggleState(false,juce::dontSendNotification);
+    timedGui->unmaskAdvanced.onClick();
     const auto setPhase=[&](const char* id,float value) {
         auto* parameter=p.parameters.getParameter(id);
         parameter->setValueNotifyingHost(parameter->convertTo0to1(value));

@@ -79,17 +79,17 @@ public:
         juce::Path edge;
         edge.addRoundedRectangle(r,6);
         g.reduceClipRegion(edge);
-        g.setGradientFill(juce::ColourGradient(juce::Colour(dark?0xff191712:0xff474744),0,r.getY(),
-            juce::Colour(dark?0xff111210:0xff2d2e2d),0,r.getBottom(),false));
+        g.setGradientFill(juce::ColourGradient(juce::Colour(dark?0xff191712:0xff484a4d),0,r.getY(),
+            juce::Colour(dark?0xff111210:0xff35373a),0,r.getBottom(),false));
         g.fillRect(r);
-        g.setTiledImageFill(steel,juce::roundToInt(r.getX()+r.getWidth()*.17f),juce::roundToInt(r.getY()),dark?.27f:.32f);
+        g.setTiledImageFill(steel,juce::roundToInt(r.getX()+r.getWidth()*.17f),juce::roundToInt(r.getY()),dark?.27f:.24f);
         g.fillRect(r);
         g.setGradientFill(juce::ColourGradient(juce::Colours::white.withAlpha(dark?0.f:.09f),0,r.getY(),
             juce::Colours::black.withAlpha(dark?.38f:.17f),0,r.getBottom(),false));
         g.fillRect(r);
-        g.setGradientFill(juce::ColourGradient(juce::Colour(0xff96958d),r.getX(),r.getY(),
-            juce::Colour(0xff414340),r.getRight(),r.getBottom(),false));
-        g.drawRoundedRectangle(r.reduced(1),5,2);
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xff808287),r.getX(),r.getY(),
+            juce::Colour(0xff45474a),r.getRight(),r.getBottom(),false));
+        g.drawRoundedRectangle(r.reduced(1.5f),5,2.5f);
         g.setColour(juce::Colours::black.withAlpha(.76f));
         g.drawRoundedRectangle(r.reduced(3),4,1);
         if (!dark) {
