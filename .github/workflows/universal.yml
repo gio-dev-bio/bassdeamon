@@ -61,18 +61,21 @@ jobs:
           codesign --verify --strict --verbose=2 "$bundle"
       - name: Test installation and replacement from the extracted ZIP
         run: |
-          test_home="$(mktemp -d)"
-          env HOME="$test_home" bash package-verification/install.sh
-          env HOME="$test_home" bash package-verification/install.sh
-          printf '\n' | env HOME="$test_home" bash package-verification/Installa_Aggiorna.command
-          installed="$test_home/Library/Audio/Plug-Ins/VST3/BassDeamon.vst3"
+          source=package-verification/BassDeamon.vst3
+          installed=/Library/Audio/Plug-Ins/VST3/BassDeamon.vst3
+          test ! -e "$installed" && test ! -L "$installed"
+          trap 'sudo /bin/rm -rf -- "$installed"' EXIT
+          xattr -w com.apple.quarantine '0081;00000000;InstallerTest;' "$source/Contents/MacOS/BassDeamon"
+          /bin/bash package-verification/Installa_Aggiorna.command </dev/null
           test -x "$installed/Contents/MacOS/BassDeamon"
+          attributes="$(sudo xattr -r "$installed")"
+          [[ "$attributes" != *com.apple.quarantine* ]]
           codesign --verify --strict "$installed"
-          before="$(shasum -a 256 "$installed/Contents/MacOS/BassDeamon")"
-          cp -R package-verification invalid-package
-          printf 'broken' >> invalid-package/BassDeamon.vst3/Contents/MacOS/BassDeamon
-          if env HOME="$test_home" bash invalid-package/install.sh; then exit 1; fi
-          test "$before" = "$(shasum -a 256 "$installed/Contents/MacOS/BassDeamon")"
+          sudo touch "$installed/Contents/old-version-test"
+          xattr -r -d com.apple.quarantine "$source"
+          /bin/bash package-verification/Installa_Aggiorna.command </dev/null
+          test ! -e "$installed/Contents/old-version-test"
+          cmp "$source/Contents/MacOS/BassDeamon" "$installed/Contents/MacOS/BassDeamon"
           codesign --verify --strict "$installed"
       - uses: actions/upload-artifact@v4
         with:

@@ -24,6 +24,6 @@ LISTEN TRIM ascolta temporaneamente la regolazione senza cambiare il parametro s
 
 ## Installazione
 
-Estrarre l'intero ZIP, chiudere Cubase e aprire Installa_Aggiorna.command. Il launcher usa la destinazione esistente, richiedendo i privilegi amministrativi solo per la cartella di sistema. Due copie preesistenti nelle cartelle utente e sistema vengono segnalate per evitare aggiornamenti ambigui.
+Estrai tutto lo ZIP, chiudi Cubase e apri Installa_Aggiorna.command. Digita la password amministratore quando sudo la richiede.
 
-La nuova copia viene preparata e verificata prima di spostare quella precedente. Dopo la sostituzione viene verificata ancora; in caso di errore viene ripristinata la precedente. Lo script non modifica progetti o impostazioni della DAW.
+Lo script prepara la copia, sostituisce il bundle in /Library/Audio/Plug-Ins/VST3 e rimuove la quarantena dal plugin installato.

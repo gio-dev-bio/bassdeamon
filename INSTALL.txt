@@ -2,18 +2,13 @@ BASSDEAMON 1.0.9 — VST3 macOS Universal (Intel e Apple Silicon)
 
 1. Chiudi Cubase.
 2. Estrai tutto lo ZIP e fai doppio clic su Installa_Aggiorna.command.
-   In alternativa, dalla cartella estratta esegui: bash install.sh
-   Installa in ~/Library/Audio/Plug-Ins/VST3 senza sudo.
-   Per aggiornare una copia in /Library/Audio/Plug-Ins/VST3, esegui:
-   bash install.sh --system
-3. Se macOS blocca questa build di sviluppo, apri Terminale ed esegui:
-
-   xattr -r -d com.apple.quarantine "$HOME/Library/Audio/Plug-Ins/VST3/BassDeamon.vst3"
-
-   Per una copia di sistema, usa sudo e il percorso /Library/Audio/Plug-Ins/VST3/BassDeamon.vst3.
-
-   Il comando riguarda solo questo plugin. Durante la password non appaiono caratteri.
-   Il pacchetto è firmato ad-hoc, non notarizzato da Apple.
+   Se Finder non apre il file .command, apri Terminale, digita
+   /bin/bash seguito da uno spazio, trascina Installa_Aggiorna.command
+   nella finestra e premi Invio.
+3. Digita la password amministratore quando sudo la richiede.
+   Durante la digitazione non appaiono caratteri. Lo script sostituisce
+   automaticamente BassDeamon.vst3 in /Library/Audio/Plug-Ins/VST3,
+   poi rimuove la quarantena da quella copia.
 4. Riapri Cubase. Se il plugin è nella Blocklist:
    Studio > VST Plug-in Manager > Blocklist > BassDeamon > Riattiva.
 5. Inserisci BassDeamon sul canale BASSO. Attiva il suo sidechain in Cubase
