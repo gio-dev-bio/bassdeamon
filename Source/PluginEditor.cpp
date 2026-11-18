@@ -212,7 +212,7 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
     unmaskAttackKnob=&addKnob("unmask.attack","ATTACK"," ms",false,{},"Dynamic cut attack, 0 to 50 ms.");
     unmaskReleaseKnob=&addKnob("unmask.release","RELEASE"," ms",false,{},"Dynamic cut recovery, 30 to 500 ms.");
     addSwitch("unmask.controlDb","dB CONTROL",{},"On: calibrated attenuation knob in dB. Off: previous DEPTH percentage algorithm, retained for existing sessions.");
-    addSwitch("unmask.track","AUTO FOCUS",{},"Follow the strongest overlapping low-end resonance, with hysteresis and slow movement. This is not pitch/fundamental detection.");
+    addSwitch("unmask.track","AUTO FOCUS",{},"Follow the strongest low-end overlap before Duck cuts it. A learned kick frequency gives the nearby bands priority.");
     addSwitch("unmask.hold","HOLD FOCUS",{},"Hold the current auto focus frequency. The dynamic gain reduction remains active.");
     addSwitch("unmask.delta","DELTA",{},"Audition the bass removed by UNMASK, before its Auto Gain and output trim.");
     output.setSliderStyle(juce::Slider::LinearHorizontal);output.setTextBoxStyle(juce::Slider::TextBoxRight,false,78,24);
@@ -1004,7 +1004,7 @@ int BassDeamonEditor::paintSpectrumPlot(juce::Graphics& g,juce::Rectangle<float>
     // Give priority to the most significant peaks and leave room between markers.
     std::sort(regions.begin(),regions.end(),[&](const Region& a,const Region& b){
         const auto rank=[&](const Region& r){return (r.strength>0?200.f:0.f)+
-            std::min(visualPre[r.peak],visualKick[r.peak])+10*r.strength;};
+            std::min((r.strength>0?selected:visualPre)[r.peak],visualKick[r.peak])+10*r.strength;};
         return rank(a)>rank(b);
     });
     std::array<const Region*,1> visibleRegions{};
@@ -1040,15 +1040,14 @@ int BassDeamonEditor::paintSpectrumPlot(juce::Graphics& g,juce::Rectangle<float>
         }
         for(size_t i=0;i<count;++i){
             const auto& region=*visibleRegions[i];
+            if (region.strength <= 0) continue;
             const float x=fx(region.hz);
             const float y=fy(selected[region.peak]);
-            const bool active=region.strength>0;
-            const auto accent=active?red:console::muted;
+            const auto accent=region.strength>=.65f ? red : console::amber;
             g.setColour(accent.withAlpha(.30f));
             g.drawVerticalLine(juce::roundToInt(x),y,plot.getBottom());
             g.setColour(accent);
-            if(active)g.fillEllipse(x-3,y-3,6,6);
-            else g.drawEllipse(x-3,y-3,6,6,1);
+            g.fillEllipse(x-3,y-3,6,6);
         }
     }
     const double eqHz=processor.parameters.getRawParameterValue("kickEq.frequency")->load();

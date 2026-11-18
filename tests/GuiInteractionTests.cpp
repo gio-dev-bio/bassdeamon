@@ -254,6 +254,41 @@ int interactionTests(){
     for(int b=0;b<30;++b){buffer.clear();p.processBlock(buffer,midi);visualTick();}
     ensure(std::abs(editor->visualUnmaskResponse.gainDb(75,48000))<.05,
            "Live response did not clear after disabling UNMASK");
+    // With both modules at maximum, retune the real published curve from
+    // the learned root to the alternate collision. The kick stays the same.
+    set("duck.on",1);set("duck.amount",18);set("duck.attack",1);
+    set("unmask.on",1);set("unmask.track",1);set("unmask.hold",0);
+    set("unmask.attenuation",24);set("unmask.attack",1);
+    set("unmask.kickReferenceHz",60);set("unmask.focusMinHz",30);set("unmask.focusMaxHz",250);
+    editor->spectrumPost.onClick();
+    double firstCentre=0;
+    int stablePre=0,stableResidual=0;
+    for(int b=0;b<1260;++b) {
+        for(int n=0;n<256;++n) {
+            const double t=(b*256+n)/48000.,age=std::fmod(t,.5);
+            buffer.setSample(0,n,float(.3*std::sin(2*bassdeamon::pi*(t<3?60:118)*t)));
+            buffer.setSample(1,n,float(std::exp(-age/.035)*
+                (.45*std::sin(2*bassdeamon::pi*60*age)+.22*std::sin(2*bassdeamon::pi*118*age))));
+        }
+        host.time=b*256/48000.;p.processBlock(buffer,midi);
+        if(b%6==0) {
+            visualTick();
+            if(b>460&&b<550)firstCentre=editor->visualUnmaskResponse.centreHz;
+            if(b>1020) {
+                stablePre+=editor->analyzer.summary(false).regions>0;
+                stableResidual+=editor->analyzer.summary(true).regions>0;
+            }
+        }
+    }
+    const auto& tracked=editor->visualUnmaskResponse;
+    ensure(std::abs(firstCentre-60)<4&&std::abs(tracked.centreHz-118)<4,
+           "UNMASK curve stayed at the learned kick root after the bass collision changed");
+    ensure(tracked.gainDb(118,48000)<tracked.gainDb(60,48000)-6,
+           "UNMASK graph center does not match its active filter");
+    ensure(stablePre>0&&stableResidual*3<stablePre,
+           "Strong Duck plus UNMASK left persistent POST collision markers after settling");
+    std::cout<<"PASS moving Auto Focus curve with Duck 18 / Unmask 24 dB; PRE "<<stablePre
+             <<" frames, POST "<<stableResidual<<" frames, centers "<<firstCentre<<" -> "<<tracked.centreHz<<" Hz\n";
     p.setStateInformation(audioState.getData(),int(audioState.getSize()));visualTick();
     for(int b=0;b<200;++b){host.time=b*256/48000.;for(int n=0;n<256;++n){buffer.setSample(0,n,float(.6*std::sin(2*bassdeamon::pi*75*(b*256+n)/48000.)));buffer.setSample(1,n,0);}
         p.processBlock(buffer,midi);if(b>100)output+=buffer.getRMSLevel(0,0,256);visualTick();}
@@ -396,7 +431,7 @@ int interactionTests(){
     buffer.clear();p.processBlock(buffer,midi);
     ensure(p.autoMixState()==BassDeamonProcessor::AutoMixState::armed, "Auto Mix captured stopped transport");
     host.playing=true;host.bpm=120;
-    set("phase.on",0);set("kickEq.on",0);set("kickEq.frequency",0);
+    set("phase.on",0);set("kickEq.on",0);set("kickEq.frequency",0);set("unmask.track",1);
     for (int pos=0;pos<8*48000;pos+=256) {
         host.time=std::fmod(pos/48000.,.5);
         for (int n=0;n<256;++n) {
@@ -428,6 +463,7 @@ int interactionTests(){
     editor->autoApply.onClick();
     ensure(get("kickEq.on")==1&&std::abs(get("kickEq.frequency")-60)<1, "Auto Mix did not commit proposed Kick EQ");
     ensure(get("duck.on")==1&&get("duck.amount")>=1.5f, "Auto Mix did not commit proposed Duck");
+    ensure(get("unmask.track")==1,"Auto Mix disabled Auto Focus on Apply");
     ensure(p.undoEdit()&&get("kickEq.on")==0&&get("kickEq.frequency")==0&&get("duck.on")==0, "Auto Mix Undo did not restore original settings");
     set("subMono.on",1);set("subMono.hz",135);
     juce::MemoryBlock subState;

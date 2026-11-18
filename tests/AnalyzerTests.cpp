@@ -34,6 +34,13 @@ int main(){try{
         check(flagged(harmonic->maskPre)>0&&flagged(harmonic->maskPre)<=5,"shared partial not selective");
         for(size_t b=0;b<Analyzer::bins;++b)if(harmonic->maskPre[b]>=.2f)
             check(std::abs(double(b)*sr/Analyzer::fftSize-75)<3*sr/Analyzer::fftSize,"unrelated harmonics highlighted");
+        auto faintPartials=render(sr,[&](size_t n){
+            AnalysisFrame f;
+            const float bass=tone(75,n,sr)+tone(330,n,sr,.003f)+tone(490,n,sr,.003f);
+            const float kick=tone(75,n,sr)+tone(330,n,sr,.003f)+tone(490,n,sr,.003f);
+            f.pre={bass,bass};f.post=f.pre;f.kick={kick,kick};return f;
+        });
+        check(faintPartials->summary(false).regions==1,"Negligible shared partials inflate the collision count");
         auto alternating=render(sr,[&](size_t n){AnalysisFrame f;const float value=tone(hz,n,sr);if(n<Analyzer::fftSize/2)f.pre={value,value};else f.kick={value,value};f.post=f.pre;return f;});
         check(flagged(alternating->maskPre)==0,"non-simultaneous notes falsely collide in long FFT window");
         auto changedNote=render(sr,[&](size_t n){AnalysisFrame f;const float bass=tone(n<Analyzer::fftSize/2?75:150,n,sr);f.pre={bass,bass};f.post=f.pre;if(n>=Analyzer::fftSize/2){const float kick=tone(75,n,sr);f.kick={kick,kick};}return f;});

@@ -162,6 +162,7 @@ public:
             // two editor updates. Collision history is NOT a gate at the end
             // of a long FFT window.
             if(count>=fastSize&&count-lastFastCount>=hop){
+                prepareKickGate();
                 analyze(0,pre,true);analyze(1,post,true);analyze(2,kick,true);
                 updateEvents();lastFastCount=count;
             }
@@ -234,7 +235,9 @@ private:
         std::array<std::array<double,2>,2> joint{};
         // Actual concurrent samples in this SAME short window, not two
         // independently smoothed envelopes from different points in time.
-        for(size_t i=0;i<fastSize;++i){const auto& f=frames[(count-fastSize+i)%fftSize];const double weight=fastWindow[i]*fastWindow[i];
+        for(size_t i=0;i<fastSize;++i){const auto& f=frames[(count-fastSize+i)%fftSize];
+            const double windowedGate=fastWindow[i]*kickGate[i];
+            const double weight=windowedGate*windowedGate;
             for(size_t c=0;c<2;++c){const std::array<double,3> e{double(f.pre[c])*f.pre[c],double(f.post[c])*f.post[c],double(f.kick[c])*f.kick[c]};
                 for(size_t t=0;t<3;++t)energy[t][c]+=weight*e[t];
                 for(size_t t=0;t<2;++t)joint[t][c]+=weight*std::min(e[t],e[2]);}}
@@ -246,7 +249,7 @@ private:
             active[t]=std::max(active[t],*std::max_element(fastLevels[t][c].begin(),fastLevels[t][c].end()));
         referenceDb=active[2];
         const double elapsed=lastFastCount?double(count-lastFastCount)/rate:double(hop)/rate;
-        const float decay=float(std::exp(-elapsed/.16)); // readable recent events, ~340 ms to -17 dB
+        const float decay=float(std::exp(-elapsed/.12));
         for(size_t b=0;b<fastBins;++b)for(size_t t=0;t<2;++t){float shared=0,event=0;
             for(size_t c=0;c<2;++c){const float common=std::sqrt(fastSupport[t][c][b]*fastSupport[2][c][b]);
                 shared=std::max(shared,common);event=std::max(event,common*coincidence[t][c]*mask(fastLevels[t][c][b],fastLevels[2][c][b]));}
@@ -258,39 +261,60 @@ private:
         }
     }
     void updateMask() noexcept {
+        std::array<std::array<float,2>,3> loudest{};
+        for (size_t stream=0;stream<3;++stream) for (size_t channel=0;channel<2;++channel)
+            loudest[stream][channel]=*std::max_element(channelLevels[stream][channel].begin()+1,
+                                                       channelLevels[stream][channel].end());
         for(size_t b=0;b<bins;++b){maskPre[b]=maskPost[b]=0;const double hz=double(b)*rate/fftSize;
             if(hz<20||hz>20000)continue;
             const double position=double(b)*fastSize/fftSize;const size_t lo=std::min(fastBins-1,size_t(position)),hi=std::min(fastBins-1,lo+1);
             const float fraction=float(position-double(lo));
             for(size_t t=0;t<2;++t){float fine=0;
-                for(size_t c=0;c<2;++c)fine=std::max(fine,std::sqrt(fineSupport[t][c][b]*fineSupport[2][c][b]));
+                for(size_t c=0;c<2;++c) {
+                    const float prominence=std::max(channelLevels[t][c][b]-loudest[t][c],
+                                                    channelLevels[2][c][b]-loudest[2][c]);
+                    const float weight=std::clamp((prominence+36.f)/16.f,0.f,1.f);
+                    fine=std::max(fine,weight*std::sqrt(fineSupport[t][c][b]*fineSupport[2][c][b]));
+                }
                 const auto& recent=t==0?recentPre:recentPost;
                 const float event=recent[lo]+fraction*(recent[hi]-recent[lo]);
                 (t==0?maskPre[b]:maskPost[b])=std::min(fine,event);
             }
         }
     }
+    void prepareKickGate() noexcept {
+        // Keep the body of each kick, where the bass competes with it. A
+        // recovered bass against the last few dB of a decaying tail is not
+        // evidence that the kick body is still masked.
+        constexpr size_t slices=32, sliceSize=fastSize/slices;
+        std::array<double,slices> energy{};
+        for (size_t i=0;i<fastSize;++i) {
+            const auto& kickFrame=frames[(count-fastSize+i)%fftSize].kick;
+            energy[i/sliceSize]+=.5*(double(kickFrame[0])*kickFrame[0]+double(kickFrame[1])*kickFrame[1]);
+        }
+        const double peak=*std::max_element(energy.begin(),energy.end());
+        if (peak<=1e-16) { kickGate.fill(0); return; }
+        for (auto& slice : energy) {
+            const double weight=std::clamp((slice/peak-.035)/.12,0.,1.);
+            slice=weight*weight*(3-2*weight);
+        }
+        // Interpolate between slice centres to avoid making new FFT partials
+        // by abruptly switching the audio on and off in the analysis window.
+        for (size_t i=0;i<fastSize;++i) {
+            const double position=std::clamp(double(i)/sliceSize-.5,0.,double(slices-1));
+            const size_t lo=size_t(position), hi=std::min(lo+1,slices-1);
+            kickGate[i]=float(energy[lo]+(position-lo)*(energy[hi]-energy[lo]));
+        }
+    }
     void analyze(int stream,Spectrum& destination,bool fast=false) noexcept {
         powers.fill(0);
         const size_t length=fast?fastSize:fftSize,valid=std::min(count,length),numBins=length/2+1;
         const double sum=fast?fastWindowSum:windowSum;
-        std::array<float,fastSize> gate{};
-        if(fast) {
-            constexpr size_t slices=32;
-            std::array<double,slices> energy{};double peak=0;
-            for(size_t i=0;i<fastSize;++i) {
-                const auto& f=frames[(count-fastSize+i)%fftSize];
-                energy[std::min(slices-1,i*slices/fastSize)]+=.5*(double(f.kick[0])*f.kick[0]+double(f.kick[1])*f.kick[1]);
-            }
-            for(double v:energy)peak=std::max(peak,v);
-            for(size_t i=0;i<fastSize;++i)
-                gate[i]=peak>1e-16 && energy[std::min(slices-1,i*slices/fastSize)]>=peak*.01?1.f:0.f;
-        }
         for(size_t channel=0;channel<2;++channel){
             bool nonzero=false;
             for(size_t i=0;i<length;++i){double sample=0;if(i>=length-valid){const auto& f=frames[(count-valid+i-(length-valid))%fftSize];
                 sample=stream==0?f.pre[channel]:stream==1?f.post[channel]:f.kick[channel];}
-                if(fast)sample*=gate[i];
+                if(fast)sample*=kickGate[i];
                 nonzero|=sample!=0;work[i]=sample*(fast?fastWindow[i]:window[i]);}
             if(nonzero){
                 for(size_t i=1,j=0;i<length;++i){size_t bit=length>>1;for(;j&bit;bit>>=1)j^=bit;j^=bit;if(i<j)std::swap(work[i],work[j]);}
@@ -324,6 +348,7 @@ private:
     std::array<AnalysisFrame,fftSize> frames{};
     std::array<double,fftSize> window{};std::array<double,bins> powers{};
     std::array<double,fastSize> fastWindow{};
+    std::array<float,fastSize> kickGate{};
     std::array<std::complex<double>,fftSize> work{};
 };
 }

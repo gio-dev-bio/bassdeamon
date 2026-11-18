@@ -346,9 +346,9 @@ public:
         directWeightDenominator = std::max(1e-12, *std::max_element(focusWeights.begin(),focusWeights.end()));
         globalInitialised=globalPaused=false;globalRamp.reset(1);delayFade.reset(1);polarityRamp.reset(1);
         inputPowerMeter = outputPowerMeter = outputHeld = kickHeld = 0;
-        focusHz = 75; trackedFocusHz = 75; focusCandidate=-1;focusCandidateSamples=0;focusCandidateOnset=0;focusAcquisitions=0;focusReferenceSeen=0;
+        focusHz = 75; trackedFocusHz = 75; focusCandidate=-1;focusCandidateSamples=0;focusAcquisitions=0;focusReferenceSeen=0;
         cachedRotationHz = -1; cachedAllpassA = 0;
-        cutDb.fill(0); kickE.fill(0); bassE.fill(0);directCutDb=0;directMix=0;directFilters={};
+        cutDb.fill(0); kickE.fill(0); bassE.fill(0); focusBassE.fill(0);directCutDb=0;directMix=0;directFilters={};
         allpassX.fill(0); allpassY.fill(0);
         angleX={};angleY={};angleMix=0;angleCoefficient=0;
         for (auto& d : delays) d.prepare(sampleRate);
@@ -357,6 +357,8 @@ public:
             for (int c = 0; c < 2; ++c) {
                 detectorsBass[b][c] = {}; detectorsKick[b][c] = {}; filters[b][c] = {};
                 detectorsBass[b][c].bandpass(frequencies[b], 2, sampleRate);
+                focusBassFilters[b][c] = {};
+                focusBassFilters[b][c].bandpass(frequencies[b], 4, sampleRate);
                 detectorsKick[b][c].bandpass(frequencies[b], 2, sampleRate);
             }
         }
@@ -366,7 +368,7 @@ public:
         kickFastA = pole(3, sampleRate); kickSlowA = pole(100, sampleRate);
         parameterA = pole(500, sampleRate / 32); // coefficients adapt over 500 ms
         cutAttackA = pole(8, sampleRate); cutReleaseA = pole(120, sampleRate);
-        focusA = pole(350, sampleRate / 32); peakA = pole(300, sampleRate);
+        focusA = pole(200, sampleRate / 32); peakA = pole(300, sampleRate);
         filterParameterA = pole(20, sampleRate / 32);
         attackA = pole(attackMs, sampleRate); releaseA = pole(releaseMs, sampleRate);
     }
@@ -392,7 +394,7 @@ public:
     }
     void clearHistory(bool preserveLearn=false) noexcept {
         for (auto& d : delays) d.clear();
-        for (auto* bank : {&detectorsBass, &detectorsKick, &filters})
+        for (auto* bank : {&detectorsBass, &detectorsKick, &focusBassFilters, &filters})
             for (auto& band : *bank) for (auto& f : band) f.z1 = f.z2 = 0;
         allpassX.fill(0); allpassY.fill(0);
         angleX={};angleY={};angleMix=0;angleCoefficient=0;
@@ -402,7 +404,9 @@ public:
         duckBassBands={};duckKickBands={};
         duckBandEnvelope.fill(0);duckBandReduction.fill(0);
         subMono.clear();
-        bassE.fill(0); kickE.fill(0); bassEnergy = envelope = kickFast = kickSlow = 0;
+        bassE.fill(0); kickE.fill(0); focusBassE.fill(0);
+        focusCandidate=-1;focusCandidateSamples=0;
+        bassEnergy = envelope = kickFast = kickSlow = 0;
         inputPowerMeter = outputPowerMeter = outputHeld = kickHeld = 0;
         if(!preserveLearn)learner.cancel();
         tube.clear();directCutDb=0;directFilters={};
@@ -599,43 +603,11 @@ public:
                     releaseMs=s.glueTiming==2?noteMilliseconds(s.glueReleaseNote,bpm):std::clamp(s.glueReleaseMs,1.0,4000.0);
                 }
                 attackA = pole(attackMs, sampleRate); releaseA = pole(releaseMs, sampleRate);
-                // Track the strongest overlapping low-end band, not an asserted musical fundamental.
-                // Hysteresis prevents bouncing between adjacent resonances on each kick.
                 if (s.unmaskTrack && !s.unmaskHold) {
-                    size_t best=0,current=0;double score=0,currentScore=0,nearest=1e9;
-                    const double root=s.kickReferenceHz;
-                    if(std::abs(root-focusReferenceSeen)>.5) {
-                        focusReferenceSeen=root;focusAcquisitions=0;focusCandidate=-1;focusCandidateSamples=0;
-                    }
-                    const auto priority=[&](size_t b) {
-                        const double energy=std::min(bassE[b],kickE[b]);
-                        if(root<30||root>130)return energy;
-                        const double octaves=std::log2(frequencies[b]/root)/.45;
-                        return energy*std::exp(-.5*octaves*octaves);
-                    };
-                    for(size_t b=0;b<frequencies.size();++b) {
-                        if(frequencies[b]<focusLow||frequencies[b]>focusHigh)continue;
-                        const double value=priority(b);
-                        if(value>score){score=value;best=b;}
-                        const double distance=std::abs(std::log(frequencies[b]/trackedFocusHz));
-                        if(distance<nearest){nearest=distance;current=b;}
-                    }
-                    currentScore=priority(current);
-                    if(score>1e-8 && best!=current && (score>currentScore*(focusAcquisitions==0?1.05:2.0)||currentScore<1e-9)) {
-                        if(focusCandidate!=int(best)) {
-                            focusCandidate=int(best);focusCandidateSamples=0;focusCandidateOnset=lastOnset;
-                        }
-                        focusCandidateSamples+=32;
-                        // First acquisition is quick. Later changes need sustained
-                        // evidence and a second kick, or 600 ms of continuous material.
-                        const bool first=focusAcquisitions==0;
-                        if(focusCandidateSamples>=sampleRate*(first?.10:.20) &&
-                           (first||lastOnset!=focusCandidateOnset||focusCandidateSamples>=sampleRate*.60)) {
-                            trackedFocusHz=frequencies[best];++focusAcquisitions;
-                            focusCandidate=-1;focusCandidateSamples=0;
-                        }
-                    } else {focusCandidate=-1;focusCandidateSamples=0;}
-
+                    updateAutoFocus(s.kickReferenceHz, focusLow, focusHigh);
+                } else {
+                    focusCandidate = -1;
+                    focusCandidateSamples = 0;
                 }
                 const double targetFocus = s.unmaskTrack ? std::clamp(trackedFocusHz, focusLow, focusHigh) : std::clamp(s.unmaskFrequency, 30.0, 250.0);
                 if (!s.unmaskHold || !s.unmaskTrack) {
@@ -743,6 +715,24 @@ public:
             const double tubeGain=1+tube.wetMix()*(learnedTubeGain-1);
             if(tubeGain!=1)for(auto& v:x)v*=tubeGain;
             meters.tubeAgcDb=db(tubeGain);budget-=std::max(0.0,meters.tubeAgcDb);
+            // Measure the bass before Duck so the tracker still sees the
+            // resonance that caused the cut. Keep gain detection after Duck.
+            if (s.unmaskTrack) {
+                for (size_t band = 0; band < frequencies.size(); ++band) {
+                    const double left = focusBassFilters[band][0].tick(x[0]);
+                    double energy = left * left;
+                    if (channels == 2) {
+                        const double right = focusBassFilters[band][1].tick(x[1]);
+                        const double centre = (left + right) * .5;
+                        const double difference = (left - right) * .5;
+                        energy = linked ? .5 * (left * left + right * right)
+                                        : mid * centre * centre + side * difference * difference;
+                    } else if (!linked) {
+                        energy *= mid;
+                    }
+                    focusBassE[band] = follow(focusBassE[band], energy, bandA);
+                }
+            }
             if (runDuck) {
                 if (duckDepth > 0)
                     duckEnvelope = std::max(std::max(std::abs(k[0]),std::abs(k[1])),
@@ -930,12 +920,65 @@ public:
         return response;
     }
 private:
+    void updateAutoFocus(double root, double low, double high) noexcept {
+        if (std::abs(root - focusReferenceSeen) > .5) {
+            focusReferenceSeen = root;
+            focusAcquisitions = 0;
+            focusCandidate = -1;
+            focusCandidateSamples = 0;
+        }
+        size_t best = 0, current = 0;
+        double score = 0, distanceToCurrent = 1e9;
+        std::array<double, bandCount> scores{};
+        for (size_t band = 0; band < frequencies.size(); ++band) {
+            const double hz = frequencies[band];
+            if (hz < low || hz > high) continue;
+            // The bass peak must also be present in the kick. A learned root
+            // favours its neighbourhood but cannot veto a stronger overlap.
+            const double bass = focusBassE[band];
+            const double kick = kickE[band];
+            double value = std::sqrt(bass * std::min(bass, kick));
+            if (root >= 30 && root <= 130) {
+                const double distance = std::log2(hz / root) / .48;
+                value *= .16 + .84 * std::exp(-.5 * distance * distance);
+            }
+            scores[band] = value;
+            if (value > score) { score = value; best = band; }
+            const double distance = std::abs(std::log(hz / trackedFocusHz));
+            if (distance < distanceToCurrent) { distanceToCurrent = distance; current = band; }
+        }
+        if (score < 2e-7) {
+            // Retain partial evidence between kicks, without counting silence.
+            focusCandidateSamples = std::max(0., focusCandidateSamples - 4.);
+            if (focusCandidateSamples == 0) focusCandidate = -1;
+            return;
+        }
+        const bool first = focusAcquisitions == 0;
+        const double margin = scores[current] * (first ? 1.08 : 1.30);
+        if (best == current || score <= margin) {
+            focusCandidate = -1;
+            focusCandidateSamples = 0;
+            return;
+        }
+        if (focusCandidate < 0 || scores[size_t(focusCandidate)] < std::max(margin, score * .82)) {
+            focusCandidate = int(best);
+            focusCandidateSamples = 0;
+        }
+        focusCandidateSamples += 32;
+        if (focusCandidateSamples >= sampleRate * (first ? .045 : .065)) {
+            trackedFocusHz = frequencies[size_t(focusCandidate)];
+            ++focusAcquisitions;
+            focusCandidate = -1;
+            focusCandidateSamples = 0;
+        }
+    }
+
     std::array<Biquad, 2> kickEqFilters{}, nextKickEqFilters{};
     Ramp kickEqMix, kickEqRetune, monitorMix, monitorGain, balanceRamp;
     double kickEqHz = 0, kickEqDb = 0, wetPower = 0;
     static constexpr auto frequencies = bandFrequencies;
-    std::array<std::array<Biquad, 2>, bandCount> detectorsBass{}, detectorsKick{}, filters{};
-    std::array<double, bandCount> bassE{}, kickE{}, cutDb{}, focusWeights{};
+    std::array<std::array<Biquad, 2>, bandCount> detectorsBass{}, detectorsKick{}, focusBassFilters{}, filters{};
+    std::array<double, bandCount> bassE{}, kickE{}, focusBassE{}, cutDb{}, focusWeights{};
     std::array<Delay, 2> delays;
     std::array<AutoGain, 3> agc;
     PhaseLearner learner;
@@ -955,7 +998,7 @@ private:
     double cachedRotationHz = -1, cachedAllpassA = 0;
     double smoothedFilterQ = 2, filterParameterA = 0;
     double inputPowerMeter = 0, outputPowerMeter = 0, outputHeld = 0, kickHeld = 0;
-    int focusCandidate=-1,focusAcquisitions=0;double focusCandidateSamples=0,focusReferenceSeen=0;uint64_t focusCandidateOnset=0;
+    int focusCandidate=-1,focusAcquisitions=0;double focusCandidateSamples=0,focusReferenceSeen=0;
     double focusHz = 75, trackedFocusHz = 75, focusA = 0, peakA = 0;
     std::uint64_t onsetClock = 0, lastOnset = 0;
     double directWeightDenominator = 1e-12;

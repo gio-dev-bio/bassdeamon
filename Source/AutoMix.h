@@ -205,15 +205,16 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
         const double release = std::clamp(12000 / bpm, 50., 160.);
         propose("unmask.on", settings.unmask, 1);
         propose("unmask.controlDb", settings.unmaskDirect, 1);
-        propose("unmask.track", settings.unmaskTrack, 0);
-        propose("unmask.frequency", settings.unmaskFrequency, focus);
+        if (!settings.unmaskTrack)
+            propose("unmask.frequency", settings.unmaskFrequency, focus);
         propose("unmask.width", settings.unmaskWidth, .5);
         propose("unmask.attenuation", settings.unmaskAttenuationDb, cut);
         propose("unmask.attack", settings.unmaskAttackMs, 5);
         propose("unmask.release", settings.unmaskReleaseMs, release);
         propose("unmask.timing", settings.unmaskSync, 0);
-        settings.unmask = settings.unmaskDirect = true; settings.unmaskTrack = settings.unmaskSync = false;
-        settings.unmaskFrequency = focus; settings.unmaskWidth = .5;
+        settings.unmask = settings.unmaskDirect = true; settings.unmaskSync = false;
+        if (!settings.unmaskTrack) settings.unmaskFrequency = focus;
+        settings.unmaskWidth = .5;
         settings.unmaskAttenuationDb = cut; settings.unmaskAttackMs = 5; settings.unmaskReleaseMs = release;
     }
     if (!settings.tube.enabled && result.reliableKick && fraction > .035 && overlap[8] + overlap[9] < *strongest * .2) {
