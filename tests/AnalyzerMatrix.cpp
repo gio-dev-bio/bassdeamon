@@ -10,25 +10,38 @@ float near(const A::Spectrum& map,double hz,double sr){float peak=0;
     for(size_t b=1;b<A::bins;++b)if(std::abs(double(b)*sr/A::fftSize-hz)<std::max(8.,2*sr/A::fftSize))peak=std::max(peak,map[b]);return peak;}
 int main(int argc,char** argv){try{
     std::ofstream csv(argc>1?argv[1]:"analyzer-matrix.csv");
-    csv<<"sample_rate,gui_ms,kick_relative_db,profile,bass_peak_db,hits_expected,hits_detected,false_frames,pre_score,post_score\n";
+    csv<<"sample_rate,gui_ms,kick_relative_db,profile,bass_peak_db,hits_expected,hits_detected,false_frames,output_score,filtered_output_score\n";
     int cases=0,expected=0,detected=0,negativeFrames=0,falseFrames=0,failures=0;
     const char* names[]{"short20ms","short70ms","shared_harmonic100","chirp90to60","separated75_180","exclusive75","no_kick","different_stereo","quiet_residue"};
     if(!(argc>2&&std::string(argv[2])=="--tube-only"))
     for(double sr:{44100.,48000.,96000.})for(double gui:{.017,.033,.090})for(double balance:{-30.,-20.,0.,10.})for(int profile=0;profile<9;++profile){
         auto analyzer=std::make_unique<A>();auto queue=std::make_unique<AnalysisQueue>();analyzer->prepare(sr);
+        std::unique_ptr<A> filteredAnalyzer;
+        std::unique_ptr<AnalysisQueue> filteredQueue;
+        if (profile==2) {
+            filteredAnalyzer=std::make_unique<A>();filteredAnalyzer->prepare(sr);
+            filteredQueue=std::make_unique<AnalysisQueue>();
+        }
         const int levelIndex=(profile+int(gui*1000))%3;const double level=levelIndex==0?-12:levelIndex==1?-30:-48;
         const double amplitude=std::pow(10.,level/20),kickAmplitude=amplitude*std::pow(10.,balance/20);
         const bool positive=profile<4;
         const bool expectedPositive=positive && level+std::min(0.,balance)>=-60.;
         const double target=profile==2?100:75;
-        bool hits[2]{};float maxPre=0,maxPost=0;int falseInCase=0;double nextGui=gui;
-        const auto inspect=[&](double time){analyzer->consume(*queue);if(!analyzer->ready())return;
-            const float preScore=near(analyzer->maskPre,target,sr),postScore=near(analyzer->maskPost,target,sr);
-            maxPre=std::max(maxPre,preScore);maxPost=std::max(maxPost,postScore);
+        bool hits[2]{};float maxOutput=0,maxFiltered=0;int falseInCase=0;double nextGui=gui;
+        const auto inspect=[&](double time){
+            analyzer->consume(*queue);
+            if (filteredAnalyzer) filteredAnalyzer->consume(*filteredQueue);
+            if(!analyzer->ready())return;
+            const float outputScore=near(analyzer->maskPost,target,sr);
+            maxOutput=std::max(maxOutput,outputScore);
+            if (filteredAnalyzer) {
+                const float filteredScore=near(filteredAnalyzer->maskPost,target,sr);
+                maxFiltered=std::max(maxFiltered,filteredScore);
+                if (filteredScore>=.12f) ++falseInCase;
+            }
             if(positive){for(int event=0;event<2;++event){const double start=.45+.5*event;
-                if(time>=start&&time<=start+.32&&preScore>=.12f)hits[event]=true;}
-                if(profile==2&&postScore>=.12f)++falseInCase;
-            }else{++negativeFrames;float any=0;for(size_t b=1;b<A::bins&&double(b)*sr/A::fftSize<1000;++b)any=std::max(any,analyzer->maskPre[b]);
+                if(time>=start&&time<=start+.32&&outputScore>=.12f)hits[event]=true;}
+            }else{++negativeFrames;float any=0;for(size_t b=1;b<A::bins&&double(b)*sr/A::fftSize<1000;++b)any=std::max(any,analyzer->maskPost[b]);
                 if(any>=.12f){++falseInCase;++falseFrames;}}
         };
         for(int n=0;n<int(sr*1.35);++n){const double t=n/sr,phase=(balance+30)*.017;
@@ -45,19 +58,23 @@ int main(int argc,char** argv){try{
             if(profile==6)kick=0;
             if(profile==7)kick=kickAmplitude*std::sin(2*pi*75*t+phase);
             if(profile==8){const double quiet=amplitude*.0001*std::sin(2*pi*300*t);bass=post=bass+quiet;kick=kickAmplitude*std::sin(2*pi*180*t)+quiet;}
-            AnalysisFrame f;f.pre={float(bass),profile==7?0.f:float(-bass)};f.post={float(post),profile==7?0.f:float(-post)};
+            AnalysisFrame f;f.pre={float(bass),profile==7?0.f:float(-bass)};f.post=f.pre;
             f.kick=profile==7?std::array<float,2>{0,float(kick)}:std::array<float,2>{float(kick),float(kick)};
             if(!queue->push(f))throw std::runtime_error("matrix lost samples");
+            if (filteredQueue) {
+                f.post={float(post),float(-post)};
+                if (!filteredQueue->push(f)) throw std::runtime_error("filtered matrix lost samples");
+            }
             if(t>=nextGui){inspect(t);nextGui+=gui;}
         }
         inspect(1.35);const int found=int(hits[0])+int(hits[1]);
         if(expectedPositive){expected+=2;detected+=found;}
         const bool fail=(expectedPositive&&found<2)||falseInCase>0;
-        if(fail){++failures;if(failures<24)std::cerr<<"FAIL "<<names[profile]<<" sr "<<sr<<" gui "<<gui<<" balance "<<balance<<" level "<<level<<" hits "<<found<<" false "<<falseInCase<<" max "<<maxPre<<'\n';}
-        csv<<sr<<','<<gui*1000<<','<<balance<<','<<names[profile]<<','<<level<<','<<(expectedPositive?2:0)<<','<<found<<','<<falseInCase<<','<<maxPre<<','<<maxPost<<'\n';++cases;
+        if(fail){++failures;if(failures<24)std::cerr<<"FAIL "<<names[profile]<<" sr "<<sr<<" gui "<<gui<<" balance "<<balance<<" level "<<level<<" hits "<<found<<" false "<<falseInCase<<" max "<<maxOutput<<'\n';}
+        csv<<sr<<','<<gui*1000<<','<<balance<<','<<names[profile]<<','<<level<<','<<(expectedPositive?2:0)<<','<<found<<','<<falseInCase<<','<<maxOutput<<','<<maxFiltered<<'\n';++cases;
     }
     // REAL nonlinear processor: a 50 Hz input acquires a shared 100 Hz partial
-    // after Soft Tube. PRE must stay clear there and POST must detect it.
+    // after Soft Tube. The POST detector must see a partial absent at input.
     for(double sr:{44100.,48000.,96000.})for(double kickAmplitude:{.2,.005}){
     Engine engine;engine.prepare(sr);Settings settings;settings.glue=settings.phase=settings.unmask=false;
     settings.tube.enabled=true;settings.tube.driveDb=18;settings.tube.amount=1;settings.tube.sourceHz=200;
@@ -68,10 +85,11 @@ int main(int argc,char** argv){try{
         for(int n=0;n<256;++n){AnalysisFrame f;f.pre={dry[size_t(n)],dry[size_t(n)]};f.post={wet[size_t(n)],wet[size_t(n)]};f.kick={kick[size_t(n)],kick[size_t(n)]};q->push(f);}
         if(block%6==0)a->consume(*q);
     }
-    a->consume(*q);const float generated=near(a->maskPost,100,sr),original=near(a->maskPre,100,sr);
-    std::cout<<"Real Soft Tube "+std::to_string(int(sr))+" Hz, 50 -> shared 100 Hz: PRE "<<original<<" POST "<<generated<<'\n';
+    a->consume(*q);const float generated=near(a->maskPost,100,sr);
+    const float inputDb=a->pre[size_t(std::round(100*A::fftSize/sr))];
+    std::cout<<"Real Soft Tube "+std::to_string(int(sr))+" Hz, 50 -> shared 100 Hz: PRE "<<inputDb<<" dBFS, POST score "<<generated<<'\n';
     for(double hz:{50.,100.,150.,200.}){const auto bin=size_t(std::round(hz*A::fftSize/sr));std::cout<<hz<<" Hz PRE "<<a->pre[bin]<<" POST "<<a->post[bin]<<" dBFS\n";}
-    if(original>=.12f || (kickAmplitude<.01?generated<.12f:generated>=.12f))++failures;
+    if(inputDb>=-90 || (kickAmplitude<.01?generated<.12f:generated>=.12f))++failures;
     }
     std::cout<<"Matrix: "<<cases<<" cases; pulse detections "<<detected<<'/'<<expected<<"; false negative-profile frames "<<falseFrames<<'/'<<negativeFrames<<"; failed cases "<<failures<<'\n';
     return failures?1:0;

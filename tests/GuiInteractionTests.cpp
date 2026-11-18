@@ -190,20 +190,21 @@ int interactionTests(){
     };
     // Select via real buttons, then inject deterministic analysis levels to
     // exercise the renderer independently of its smoothing/FFT settling time.
+    editor->spectrumDisplay.residualReady=true;
+    editor->spectrumDisplay.paired[1][overlapBin]=-12;
+    editor->spectrumDisplay.maskPost[overlapBin]=1;
     editor->spectrumPre.onClick();
     editor->visualPre[overlapBin]=editor->visualKick[overlapBin]=-12;
-    editor->visualMaskPre.fill(0);editor->visualMaskPre[overlapBin]=1;
     ensure(!editor->spectrumIsPost()&&editor->spectrumPre.getToggleState(),"PRE selector did not switch view");
-    ensure(redInSpectrum()>20,"PRE collision bands missing");
+    ensure(redInSpectrum()==0,"PRE displayed a collision marker");
     editor->spectrumPost.onClick();editor->visualPost[overlapBin]=editor->visualKick[overlapBin]=-12;
-    editor->visualMaskPost.fill(0);editor->visualMaskPost[overlapBin]=1;
     ensure(editor->spectrumIsPost()&&editor->spectrumPost.getToggleState(),"POST selector did not switch view");
     ensure(redInSpectrum()>20,"POST collision bands missing");
     const auto lower=editor->face.createComponentSnapshot({72,240,1070,27});int lowerRed=0;
     for(int y=0;y<lower.getHeight();++y)for(int x=0;x<lower.getWidth();++x){const auto colour=lower.getPixelAt(x,y);
         if(colour.getRed()>colour.getGreen()*1.6&&colour.getRed()>colour.getBlue()*1.6&&colour.getRed()>50)++lowerRed;}
     ensure(lowerRed<150,"Collision indicator filled unrelated lower spectrum");
-    editor->visualPost.fill(-120);editor->visualMaskPost.fill(0);
+    editor->visualPost.fill(-120);editor->spectrumDisplay.maskPost.fill(0);
     ensure(redInSpectrum()==0,"POST collision bands incorrectly use PRE");
     BassDeamonEditor::UserToggle* added=nullptr;
     for(auto& sw:editor->switches)if(sw->button.getComponentID()=="tube.audition")added=&sw->button;
@@ -222,40 +223,43 @@ int interactionTests(){
     ensure(p.redoEdit()&&get("tube.audition")==1&&get("tube.on")==1&&get("unmask.delta")==0,"Compound monitor redo incomplete");
     set("glue.on",0);set("unmask.on",0);set("tube.drive",18);set("tube.amount",1);
     juce::AudioBuffer<float> buffer(2,256);juce::MidiBuffer midi;double output=0;
-    // End-to-end: actual processor -> SPSC -> FFT -> PRE/POST -> red pixels.
+    // End-to-end: actual processor -> SPSC -> FFT -> visible POST markers.
     // No manually assigned FFT levels/maps in this regression test.
     juce::MemoryBlock audioState;p.getStateInformation(audioState);
     set("tube.on",0);set("tube.audition",0);set("unmask.on",0);set("phase.on",0);set("glue.on",0);
     editor->analyzer.prepare(48000);bassdeamon::AnalysisFrame discarded;while(p.analysisQueue.pop(discarded)){}
-    int preHits=0,postHits=0;bool prePainted=false,postPainted=false;
+    int postHits=0;bool postPainted=false;
     for(int b=0;b<240;++b){for(int n=0;n<256;++n){const double t=(b*256+n)/48000.,since=std::fmod(t,.5);
         buffer.setSample(0,n,float(.3*std::sin(2*bassdeamon::pi*75*t)+.12*std::sin(2*bassdeamon::pi*150*t)));
         const double envelope=since<.020?std::pow(std::sin(bassdeamon::pi*since/.020),2):0;
         buffer.setSample(1,n,float(.012*envelope*std::sin(2*bassdeamon::pi*75*t)));}
         host.time=b*256/48000.;p.processBlock(buffer,midi);
         if(b%6==0){visualTick();
-            if(editor->analyzer.summary(false).regions){++preHits;editor->spectrumPre.onClick();prePainted|=redInSpectrum()>10;}
-            if(editor->analyzer.summary(true).regions){++postHits;editor->spectrumPost.onClick();postPainted|=redInSpectrum()>10;}
+            if(editor->analyzer.summary().regions){
+                ++postHits;
+                editor->spectrumPre.onClick();ensure(redInSpectrum()==0,"Real PRE trace displayed a residual");
+                editor->spectrumPost.onClick();postPainted|=redInSpectrum()>10;
+            }
             const auto unrelated=size_t(std::round(150.*bassdeamon::RelationAnalyzer::fftSize/48000.));
-            ensure(editor->analyzer.maskPre[unrelated]<.12f&&editor->analyzer.maskPost[unrelated]<.12f,"Real GUI marks bass-only harmonic");
+            ensure(editor->analyzer.maskPost[unrelated]<.12f,"Real GUI marks bass-only harmonic");
         }
     }
-    ensure(preHits>0&&postHits>0&&prePainted&&postPainted,"Real short/quiet kick has no visible PRE/POST collisions");
-    // Real 20 dB reduction with the slowest display: PRE remains red, POST
-    // must clear after the actual output settles, without consulting the knob.
+    ensure(postHits>0&&postPainted,"Real short/quiet kick has no visible POST collision");
+    // After a real 20 dB Unmask reduction, both views keep their traces and
+    // the residual disappears at the selected slow display rate.
     p.setAnalyzerRefreshHz(4);set("unmask.controlDb",1);set("unmask.attenuation",20);set("unmask.on",1);
     set("unmask.track",0);set("unmask.frequency",75);set("unmask.agc",0);set("output.trim",0);
     editor->analyzer.prepare(48000);editor->spectrumDisplay.reset();while(p.analysisQueue.pop(discarded)){}
     for(int b=0;b<360;++b){for(int n=0;n<256;++n){const float value=float(.4*std::sin(2*bassdeamon::pi*75*(b*256+n)/48000.));buffer.setSample(0,n,value);buffer.setSample(1,n,value);}
         host.time=b*256/48000.;p.processBlock(buffer,midi);if(b%6==0)visualTick();}
-    std::cout<<"20 dB / 4 fps renderer: raw PRE="<<editor->analyzer.maskPre[overlapBin]<<" POST="<<editor->analyzer.maskPost[overlapBin]
-        <<"; shown PRE="<<editor->visualMaskPre[overlapBin]<<" POST="<<editor->visualMaskPost[overlapBin]<<"; revision="<<editor->spectrumDisplay.revision<<" clock="<<visualClock<<'\n';
-    ensure(editor->visualMaskPre[overlapBin]>.8f&&editor->visualMaskPost[overlapBin]<.12f,"Slow POST display ignores actual 20 dB reduction");
+    std::cout<<"20 dB / 4 fps renderer: measured score="<<editor->analyzer.maskPost[overlapBin]
+        <<" shown score="<<editor->spectrumDisplay.maskPost[overlapBin]<<'\n';
+    ensure(editor->visualPre[overlapBin]>-12&&editor->spectrumDisplay.maskPost[overlapBin]<.12f,"Slow POST display ignores actual 20 dB reduction");
     editor->spectrumPost.onClick();ensure(redInSpectrum()==0,"POST still paints red after real 20 dB cut");
     ensure(std::abs(editor->visualUnmaskResponse.gainDb(75,48000)+20)<.2,
            "POST response snapshot did not receive the applied 20 dB filter");
     ensure(!editor->visualUnmaskPath.isEmpty(),"POST does not paint the live UNMASK curve");
-    editor->spectrumPre.onClick();ensure(redInSpectrum()>20,"PRE collision disappeared with POST attenuation");
+    editor->spectrumPre.onClick();ensure(redInSpectrum()==0,"PRE still reports a resolved collision");
     editor->spectrumHold.setToggleState(true,juce::dontSendNotification);
     set("unmask.on",0);
     for(int b=0;b<40;++b){buffer.clear();p.processBlock(buffer,midi);visualTick();}
@@ -266,6 +270,36 @@ int interactionTests(){
     for(int b=0;b<30;++b){buffer.clear();p.processBlock(buffer,midi);visualTick();}
     ensure(std::abs(editor->visualUnmaskResponse.gainDb(75,48000))<.05,
            "Live response did not clear after disabling UNMASK");
+    // A fixed PRE overlap disappears from the POST readout when Duck alone
+    // clears it. Dry audition of the same signals cannot resurrect the marker.
+    editor->spectrumPost.onClick();
+    set("duck.multiband",0);set("duck.amount",18);set("duck.attack",0);
+    set("duck.on",0);
+    int steadySample=0;
+    const auto steady=[&](int blocks) {
+        for (int b=0;b<blocks;++b) {
+            for (int n=0;n<256;++n,++steadySample) {
+                const float wave=float(std::sin(2*bassdeamon::pi*75*steadySample/48000.));
+                buffer.setSample(0,n,.17f*wave);buffer.setSample(1,n,.4f*wave);
+            }
+            host.time=double(steadySample)/48000.;p.processBlock(buffer,midi);
+            if (b%6==0) visualTick();
+        }
+    };
+    steady(200);
+    ensure(editor->spectrumDisplay.residualReady&&editor->spectrumDisplay.maskPost[overlapBin]>.5f,
+           "POST did not display shared frequencies before the Duck reduction");
+    set("duck.on",1);steady(200);
+    ensure(editor->visualPre[overlapBin]>-19&&editor->spectrumDisplay.residualReady&&
+           editor->spectrumDisplay.maskPost[overlapBin]<.12f&&editor->analyzer.summary().regions==0,
+           "POST counted the band that Duck had already cleared");
+    p.compareDry.store(true);steady(128);
+    ensure(!editor->spectrumDisplay.residualReady&&editor->analyzer.summary().regions==0&&redInSpectrum()==0,
+           "Dry audition was measured as a processed collision");
+    p.compareDry.store(false);steady(200);
+    ensure(editor->spectrumDisplay.residualReady&&editor->analyzer.summary().regions==0,
+           "POST measurement did not resume on the Duck output after audition");
+    std::cout<<"PASS POST residual cleared by Duck alone, PRE reference and dry audition\n";
     // With both modules at maximum, retune the real published curve from
     // the learned root to the alternate collision. The kick stays the same.
     set("duck.on",1);set("duck.amount",18);set("duck.attack",1);
@@ -274,7 +308,7 @@ int interactionTests(){
     set("unmask.kickReferenceHz",60);set("unmask.focusMinHz",30);set("unmask.focusMaxHz",250);
     editor->spectrumPost.onClick();
     double firstCentre=0;
-    int stablePre=0,stableResidual=0;
+    int stableFrames=0,stableResidual=0;
     for(int b=0;b<1260;++b) {
         for(int n=0;n<256;++n) {
             const double t=(b*256+n)/48000.,age=std::fmod(t,.5);
@@ -287,8 +321,8 @@ int interactionTests(){
             visualTick();
             if(b>460&&b<550)firstCentre=editor->visualUnmaskResponse.centreHz;
             if(b>1020) {
-                stablePre+=editor->analyzer.summary(false).regions>0;
-                stableResidual+=editor->analyzer.summary(true).regions>0;
+                ++stableFrames;
+                stableResidual+=editor->analyzer.summary().regions>0;
             }
         }
     }
@@ -297,10 +331,10 @@ int interactionTests(){
            "UNMASK curve stayed at the learned kick root after the bass collision changed");
     ensure(tracked.gainDb(118,48000)<tracked.gainDb(60,48000)-6,
            "UNMASK graph center does not match its active filter");
-    ensure(stablePre>0&&stableResidual*3<stablePre,
+    ensure(stableFrames>0&&stableResidual*3<stableFrames,
            "Strong Duck plus UNMASK left persistent POST collision markers after settling");
-    std::cout<<"PASS moving Auto Focus curve with Duck 18 / Unmask 24 dB; PRE "<<stablePre
-             <<" frames, POST "<<stableResidual<<" frames, centers "<<firstCentre<<" -> "<<tracked.centreHz<<" Hz\n";
+    std::cout<<"PASS moving Auto Focus curve with Duck 18 / Unmask 24 dB; POST residuals "<<stableResidual
+             <<'/'<<stableFrames<<" frames, centers "<<firstCentre<<" -> "<<tracked.centreHz<<" Hz\n";
     p.setStateInformation(audioState.getData(),int(audioState.getSize()));visualTick();
     for(int b=0;b<200;++b){host.time=b*256/48000.;for(int n=0;n<256;++n){buffer.setSample(0,n,float(.6*std::sin(2*bassdeamon::pi*75*(b*256+n)/48000.)));buffer.setSample(1,n,0);}
         p.processBlock(buffer,midi);if(b>100)output+=buffer.getRMSLevel(0,0,256);visualTick();}

@@ -2,15 +2,15 @@
   "reference": "BassDeamon-1.0.8-GUI-Raw.png",
   "reference_library_file_id": "libfile_6aa129ad3fdc8191b97ce0ddaa4e80f9",
   "reference_sha256": "b6b329efc5deeb8a76fa57134dac7c2344da88e9d49db114f3c5edd87bec4da9",
-  "review": "1.0.8 main layout reference. Scope offers distinct left and right traces. Analyzer shows measured overlap bands within 30\u2013250 Hz.",
+  "review": "1.0.8 RAW Main and Advanced layout reference. The 1.0.12 editor was checked in both views. Collision bands appear in POST using the processed output.",
   "sha256": {
     "Source/ConsoleSkin.h": "322a9b2be7a365950ff7227fcc56ea2863d9a3dd7b0a176c20456111e8043020",
-    "Source/PluginEditor.cpp": "a361a0428a875869f9b6072290ab8c1a25e3537dadcd91e5960ad3b736ff2d4c",
-    "Source/PluginEditor.h": "3e1032391fe66fb57a0d1d7b272852953671d82ee9e2db07717ce1fa9f007174",
-    "Source/SpectrumDisplay.h": "8e5bdc24761685ccdd41d82f6e0bc466d588dd28e3da9e8557c40de6a24a5ac1",
+    "Source/PluginEditor.cpp": "a9994306bcb5f826777b02ced4127f9128b14c6e42137678e1564851257b3963",
+    "Source/PluginEditor.h": "cca7002885f7f3d29b7f9c6322593db936366edabafc7ab0732437629dec4906",
+    "Source/SpectrumDisplay.h": "52b2b42b91ba12d354160ccbc63aa0d56c5be8b7f002c166b519e1da1d0276d8",
     "Assets/RawSteel.png": "edcfca1f15630e0c6d89c32cb925ad28bb17dcb1fcd0c8921223a0023342999c",
     "Assets/RawKnob.png": "440d692401b710409159b27f0d818654682a7206eef88a6f5b94cecafdaad33a",
     "Assets/BassDeamonWordmark.png": "1b3748bbbdd2aaca7965da37e8635cf6eb659cab9b65d4d35f68bbea9f72effa",
-    "tests/GuiCapture.cpp": "8fb6cae658fe8a493211e2be87465b539e1096db733d80cea657396fece14bce"
+    "tests/GuiCapture.cpp": "3b61a53cde99afab0452bb14facc0ee8fff1e8d77cbf0bd0b333d19e870ef71d"
   }
 }

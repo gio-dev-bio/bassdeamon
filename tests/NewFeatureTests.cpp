@@ -68,7 +68,7 @@ void contracts(){
         bassdeamon::AnalysisFrame f;f.pre={x,-x};f.post={2*x,-2*x};f.kick={x,x};require(q.push(f),"queue capacity");}
     analyzer.consume(q);require(analyzer.pre[64]>-10,"anti-phase spectrum disappeared");
     require(std::abs(analyzer.post[64]-analyzer.pre[64]-6.0206f)<.001f,"post FFT not actual signal");
-    require(analyzer.maskPre[64]>.9,"equal levels must flag potential overlap");
+    require(analyzer.maskPost[64]>.9,"shared processed tone must flag potential overlap");
     require(bassdeamon::RelationAnalyzer::mask(-120,-10)==0,"silent bass masking");
     require(bassdeamon::RelationAnalyzer::mask(-10,-120)==0,"silent kick masking");
     require(bassdeamon::RelationAnalyzer::mask(-120,-120)==0,"silence masking");
