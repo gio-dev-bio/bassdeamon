@@ -283,27 +283,31 @@ private:
         }
     }
     void prepareKickGate() noexcept {
-        // Keep the body of each kick, where the bass competes with it. A
-        // recovered bass against the last few dB of a decaying tail is not
-        // evidence that the kick body is still masked.
         constexpr size_t slices=32, sliceSize=fastSize/slices;
-        std::array<double,slices> energy{};
-        for (size_t i=0;i<fastSize;++i) {
-            const auto& kickFrame=frames[(count-fastSize+i)%fftSize].kick;
+        constexpr size_t historySlices=fftSize/sliceSize;
+        std::array<double,historySlices> energy{};
+        const size_t valid=std::min(count,fftSize);
+        for (size_t i=fftSize-valid;i<fftSize;++i) {
+            const auto& kickFrame=frames[(count-(fftSize-i))%fftSize].kick;
             energy[i/sliceSize]+=.5*(double(kickFrame[0])*kickFrame[0]+double(kickFrame[1])*kickFrame[1]);
         }
-        const double peak=*std::max_element(energy.begin(),energy.end());
-        if (peak<=1e-16) { kickGate.fill(0); return; }
-        for (auto& slice : energy) {
-            const double weight=std::clamp((slice/peak-.035)/.12,0.,1.);
-            slice=weight*weight*(3-2*weight);
+        const size_t lookback=std::min(historySlices-slices,size_t(std::ceil(.115*rate/sliceSize)));
+        std::array<double,slices> weights{};
+        for (size_t i=0;i<slices;++i) {
+            const size_t slice=historySlices-slices+i;
+            // Refer to the preceding body of the kick even when it has left
+            // the fast FFT. Otherwise a weak tail resets its own threshold.
+            const size_t end=std::min(historySlices,slice+3);
+            const double peak=*std::max_element(energy.begin()+slice-lookback,energy.begin()+end);
+            const double weight=peak>1e-16?std::clamp((energy[slice]/peak-.035)/.12,0.,1.):0.;
+            weights[i]=weight*weight*(3-2*weight);
         }
         // Interpolate between slice centres to avoid making new FFT partials
         // by abruptly switching the audio on and off in the analysis window.
         for (size_t i=0;i<fastSize;++i) {
             const double position=std::clamp(double(i)/sliceSize-.5,0.,double(slices-1));
             const size_t lo=size_t(position), hi=std::min(lo+1,slices-1);
-            kickGate[i]=float(energy[lo]+(position-lo)*(energy[hi]-energy[lo]));
+            kickGate[i]=float(weights[lo]+(position-lo)*(weights[hi]-weights[lo]));
         }
     }
     void analyze(int stream,Spectrum& destination,bool fast=false) noexcept {

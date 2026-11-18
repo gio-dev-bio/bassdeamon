@@ -102,6 +102,30 @@ int main(){try{
         const double expected=(4.-double(RelationAnalyzer::fftSize)/48000)*refreshHz;
         if(std::abs(double(revisionsAfterReady)-expected)>=3){std::cerr<<"Rate "<<refreshHz<<" actual frames "<<revisionsAfterReady<<" expected "<<expected<<"\n";return 1;}
     }
+    // A kick tail must not start a new event when its initial energy has
+    // left the fast FFT. The processed bass returns after the kick body.
+    for (double sr:{44100.,48000.,96000.}) {
+        auto analyzer=std::make_unique<RelationAnalyzer>();
+        auto queue=std::make_unique<AnalysisQueue>();
+        analyzer->prepare(sr);
+        float prePeak=0, latePostPeak=0;
+        for(int n=0;n<int(1.5*sr);++n) {
+            const double time=n/sr, age=std::fmod(time,.5);
+            const float bass=float(.3*std::sin(2*pi*75*time));
+            const float kick=float(.4*std::exp(-age/.035)*std::sin(2*pi*75*age));
+            const float wet=bass*float(.01+.99*std::clamp((age-.075)/.025,0.,1.));
+            AnalysisFrame frame;
+            frame.pre={bass,bass};frame.post={wet,wet};frame.kick={kick,kick};
+            require(queue->push(frame),"Decaying kick queue overflow");
+            if(n%int(sr*.025)==0) {
+                analyzer->consume(*queue);
+                if(time>.5&&age<.2)prePeak=std::max(prePeak,near(analyzer->maskPre,75,sr));
+                if(time>.5&&age>.24)latePostPeak=std::max(latePostPeak,near(analyzer->maskPost,75,sr));
+            }
+        }
+        require(prePeak>=.12,"Kick body was lost while excluding its tail");
+        require(latePostPeak<.12,"Kick tail reopened a resolved POST conflict");
+    }
     // Musical use case: repeated short kicks, a sustained bass plus harmonic,
     // real attack/release and slow display. The 20 dB target is not assumed to
     // equal 20 dB throughout the transient: inspect actual processed spectra.
