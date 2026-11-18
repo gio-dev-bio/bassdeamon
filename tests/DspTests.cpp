@@ -76,6 +76,66 @@ int main() {
         require(a == b, "Audio depends on host block size");
         std::cout << "PASS buffer partition invariance\n";
 
+        {
+            constexpr double sr=44100;
+            constexpr int samples=44100;
+            const auto dry=tone(samples,75,.3,sr);
+            const auto reference=tone(samples,60,.4,sr);
+            Settings chain;
+            chain.kickEqEnabled=chain.phase=chain.tube.enabled=chain.duck=true;
+            chain.kickEqFrequency=67;chain.kickEqCut=2;
+            chain.phaseAngle=45;chain.delayMs=.85;
+            chain.duckMultiband=true;chain.duckLowHz=110;chain.duckAmountDb=9;
+            chain.unmaskDirect=true;chain.unmaskAttenuationDb=12;
+            chain.outputDb=-9;chain.balanceTrimDb=-6;
+            chain.matchEnabled=true;
+            auto shortBlocks=dry,longBlocks=dry,dryAudition=dry;
+            Engine shortEngine,longEngine,dryEngine;
+            shortEngine.prepare(sr);longEngine.prepare(sr);dryEngine.prepare(sr);
+            render(shortEngine,shortBlocks,&reference,chain,17);
+            render(longEngine,longBlocks,&reference,chain,4096);
+            require(shortBlocks==longBlocks,"Level Match depends on buffer partition");
+            chain.auditionDry=true;
+            render(dryEngine,dryAudition,&reference,chain,256);
+            const auto settled=dry.begin()+int(.025*sr);
+            require(std::equal(settled,dry.end(),dryAudition.begin()+int(.025*sr)),
+                    "Dry audition inherited a wet chain gain");
+
+            Settings lowBand=bypass();
+            lowBand.duck=lowBand.duckMultiband=true;
+            lowBand.duckLowHz=110;lowBand.duckAmountDb=18;lowBand.duckAttackMs=0;
+            const auto high=tone(int(sr*.003),2200,.25,sr);
+            auto initial=high, restarted=high;
+            Engine low;
+            low.prepare(sr);
+            render(low,initial,&reference,lowBand);
+            low.clearHistory();
+            render(low,restarted,&reference,lowBand);
+            require(db(rms(initial)/rms(high))>-.2 && initial==restarted,
+                    "Low Band starts by ducking the entire spectrum");
+            std::cout<<"PASS Level Match partition null, true Dry and Low Band on first hit and restart\n";
+
+            chain.matchEnabled=chain.auditionDry=false;
+            chain.delayMs=5;
+            constexpr int offStart=22050, onAgain=23400;
+            const auto withPause=[&](int block) {
+                Engine engine;
+                engine.prepare(sr);
+                auto output=dry;
+                for (int n=0;n<samples;) {
+                    chain.active=n<offStart||n>=onAgain;
+                    const int edge=n<offStart?offStart:n<onAgain?onAgain:samples;
+                    const int count=std::min(block,edge-n);
+                    float* bass[]{output.data()+n};
+                    const float* side[]{reference.data()+n};
+                    engine.process(bass,1,side,1,count,chain,120);
+                    n+=count;
+                }
+                return output;
+            };
+            require(withPause(64)==withPause(4096),"Master bypass keeps different history with large buffers");
+        }
+
         // Stereo gain control must preserve the channel ratio.
         auto left = source, right = source;
         for (auto& v : right) v *= 0.25f;

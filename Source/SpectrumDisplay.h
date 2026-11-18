@@ -50,6 +50,10 @@ public:
     }
     template<class Frame>
     void pushAtRate(const Frame& a,uint64_t samples,double nowSeconds,double refreshHz) noexcept {
+        if (generation!=a.streamGeneration()) {
+            reset();
+            generation=a.streamGeneration();
+        }
         if(!a.ready()){reset();return;}
         const double setting=std::isfinite(refreshHz)?std::clamp(refreshHz,1.,60.):30.;
         if(setting!=mode){mode=setting;ready=false;residualReady=false;lastTrace=-1;pendingData=false;maskPost.fill(0);clearPending();}
@@ -107,5 +111,6 @@ private:
     double nextFrame=0,lastTrace=-1;
     bool pendingData=false,pendingCollision=false;
     double mode=-1;
+    uint64_t generation=0;
 };
 }

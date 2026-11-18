@@ -5,6 +5,7 @@
 #include "AutoMix.h"
 #include <future>
 #include <atomic>
+#include <optional>
 
 class BassDeamonProcessor final : public juce::AudioProcessor, private juce::Timer, private juce::AudioProcessorParameter::Listener {
 public:
@@ -148,6 +149,8 @@ private:
     std::atomic<bool> restoreRequested{false};
     std::atomic<bool> historyResetRequested{false};
     bool wasLearning = false, wasPlaying = false, wasBypassed = false;
+    bool analysisInterrupted = true;
+    std::optional<int64_t> lastSamplePosition;
     double lastTimeSeconds = -1;
     int lastBlockSamples = 0;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BassDeamonProcessor)

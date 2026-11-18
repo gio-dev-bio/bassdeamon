@@ -331,7 +331,7 @@ public:
         duckDetectorRelease = pole(12, sampleRate);
         duckBodyPole=std::exp(-2*pi*110/sampleRate);
         duckPunchPole=std::exp(-2*pi*800/sampleRate);
-        duckBandMix.reset(0);
+        duckModeInitialised = false;
         duckBassBands={};duckKickBands={};
         duckBandEnvelope.fill(0);duckBandReduction.fill(0);
         subMono = {}; subMonoMix.reset(0); subMonoCutoff = 0;
@@ -398,19 +398,20 @@ public:
     }
     void clearHistory(bool preserveLearn=false) noexcept {
         for (auto& d : delays) d.clear();
-        for (auto* bank : {&detectorsBass, &detectorsKick, &focusBassFilters, &filters})
+        for (auto* bank : {&detectorsBass, &detectorsKick, &focusBassFilters})
             for (auto& band : *bank) for (auto& f : band) f.z1 = f.z2 = 0;
+        filters={};cutDb.fill(0);
         allpassX.fill(0); allpassY.fill(0);
         angleX={};angleY={};angleMix=0;angleCoefficient=0;
         duckEnvelope = duckReduction = 0;
         meters.duckReductionDb = 0;
-        duckBandMix.reset(0);
+        duckModeInitialised = false;
         duckBassBands={};duckKickBands={};
         duckBandEnvelope.fill(0);duckBandReduction.fill(0);
         subMono.clear();
         bassE.fill(0); kickE.fill(0); focusBassE.fill(0);
         focusCandidate=-1;focusCandidateSamples=0;
-        bassEnergy = envelope = kickFast = kickSlow = 0;
+        bassEnergy = envelope = glueReduction = kickFast = kickSlow = 0;
         inputPowerMeter = outputPowerMeter = outputHeld = kickHeld = 0;
         if(!preserveLearn)learner.cancel();
         tube.clear();directCutDb=0;directFilters={};
@@ -426,17 +427,23 @@ public:
         const int rampSamples=std::max(1,static_cast<int>(sampleRate*.02));
         if(!globalInitialised){globalRamp.reset(s.active?1:0);globalInitialised=true;}
         globalRamp.set(s.active?1:0,rampSamples);
-        if(!s.active&&globalRamp.finished()){
+        const auto passDry = [&](int first) {
             if(!globalPaused){clearHistory();globalPaused=true;}
             // Leave every input bit untouched, including IEEE signed zeros/subnormals.
-            meters.matchGainDb=0;
+            meters.matchGainDb=meters.kickPeak=0;
             meters.glueReductionDb=meters.unmaskReductionDb=meters.tubeAgcDb=0;meters.agcDb.fill(0);meters.cutsDb.fill(0);
-            for(int n=0;n<samples;++n){
-                std::array<double,2> dry{};for(int c=0;c<channels;++c)dry[c]=bass[c][n];
+            meters.tubeAddedDb=-120;
+            meters.bassDb.fill(-120);meters.kickDb.fill(-120);
+            for(int n=first;n<samples;++n){
+                std::array<double,2> dry{};
+                for(int c=0;c<channels;++c)dry[c]=std::isfinite(bass[c][n])?bass[c][n]:0;
                 inputPowerMeter=follow(inputPowerMeter,power(dry,channels),energyA);
                 outputHeld*=peakA;for(int c=0;c<channels;++c)outputHeld=std::max(outputHeld,std::abs(dry[c]));
             }
             meters.peak=outputHeld;meters.inputRmsDb=meters.outputRmsDb=db(std::sqrt(inputPowerMeter));
+        };
+        if (!s.active && globalRamp.finished()) {
+            passDry(0);
             return;
         }
         globalPaused=false;
@@ -512,9 +519,10 @@ public:
         const bool normalMonitoring = !s.delta && !(s.tube.enabled && s.tube.audition);
         monitorMix.set(s.auditionDry && normalMonitoring ? 1 : 0, rampSamples);
         const bool match = s.matchEnabled && normalMonitoring;
-        const double matchDb = match && inputPowerMeter > 1e-9 && wetPower > 1e-9
-            ? std::clamp(10 * std::log10(inputPowerMeter / wetPower), -12.0, 12.0) : 0;
-        monitorGain.set(gain(matchDb + s.auditionWetDb), rampSamples);
+        if (!match) {
+            monitorGain.set(gain(s.auditionWetDb), rampSamples);
+            wetPower = 0;
+        }
         dryMonitorGain.set(gain(s.auditionDryDb), rampSamples);
         subMonoMix.set(channels == 2 && s.subMono ? 1 : 0, rampSamples);
         const bool runSubMono = channels == 2 && (s.subMono || !subMonoMix.finished());
@@ -522,10 +530,14 @@ public:
         if (!runSubMono) { subMono.clear(); subMonoCutoff = 0; }
         else if (subMonoCutoff == 0) subMonoCutoff = subMonoTarget;
         const bool monitor = match || !monitorMix.finished() || monitorMix.value() != 0 || !monitorGain.finished() || monitorGain.value() != 1 || !dryMonitorGain.finished();
-        if (!match) wetPower = 0;
         const bool duckEnabled = s.duck && s.active && !(s.tube.enabled && s.tube.audition) && kick && kickChannels > 0;
         const double duckDepth = duckEnabled ? std::clamp(s.duckAmountDb,0.,18.) : 0.;
-        duckBandMix.set(s.duckMultiband?1:0,rampSamples);
+        const double duckBandTarget = s.duckMultiband ? 1 : 0;
+        if (!duckModeInitialised) {
+            duckBandMix.reset(duckBandTarget);
+            duckModeInitialised = true;
+        }
+        duckBandMix.set(duckBandTarget,rampSamples);
         const bool lowBand = s.duckLowHz > 0;
         // Keep the selected crossover until the outgoing Low-Band path has faded out.
         const double lowBandPole = lowBand && (s.duckMultiband || duckBandMix.value() > 0)
@@ -542,12 +554,18 @@ public:
         }
         if (!runDuck) {
             duckBassBands={};duckKickBands={};
-            duckBandMix.reset(s.duckMultiband?1:0);
+            duckBandMix.reset(duckBandTarget);
         }
         double displayedDuckReduction=0;
         for (int n = 0; n < samples; ++n) {
             const float dryLeft=bass[0][n],dryRight=channels==2?bass[1][n]:0;
             const double activeMix=globalRamp.next();
+            if (activeMix==0) {
+                // Finish the bypass at its exact sample, even inside a big
+                // host block. Resuming must not reuse pre-bypass history.
+                passDry(n);
+                return;
+            }
             const double mid = midMix.next();
             const double side = channels == 2 ? sideMix.next() : 0;
             const bool linked = mid == 1 && (channels == 1 || side == 1);
@@ -844,8 +862,11 @@ public:
             }
             const auto afterUnmask = x;
             const double unmaskAgc = compensate(2, selectedPower(beforeUnmask), selectedPower(x), unmaskMix);
-            if (!linked)
+            if (linked) {
+                for (int c=0;c<channels;++c) x[c] *= unmaskAgc;
+            } else {
                 applySelectedChange(x, x[0] * (unmaskAgc - 1), x[1] * (unmaskAgc - 1));
+            }
             if (runSubMono) {
                 if (controlCounter % 32 == 0 || (n == 0 && subMonoCutoff == subMonoTarget)) {
                     subMonoCutoff = follow(subMonoCutoff, subMonoTarget, filterParameterA);
@@ -865,20 +886,29 @@ public:
             outputHeld *= peakA;
             for (int c = 0; c < channels; ++c) {
                 // Delta is removed bass BEFORE AGC/output trim; never includes kick.
-                const double normal = (linked ? x[c]*unmaskAgc : x[c])*outputGain;
+                const double normal = x[c]*outputGain;
                 double out = normal + deltaMix*(beforeUnmask[c]-afterUnmask[c]-normal);
                 const float dry=c==0?dryLeft:dryRight;
+                if (match) wet += out * out;
+                if (normalMonitoring) out *= finalBalance;
                 if (monitor) {
-                    if (match) wet += out * out;
                     const double reference = std::isfinite(dry) ? dry : 0;
                     const double matched = out * listenGain;
-                    out = matched + listenDry * (reference * dryGain - matched);
+                    const double drySignal = reference * dryGain;
+                    out = listenDry == 1 ? drySignal : matched + listenDry * (drySignal - matched);
                 }
-                if(normalMonitoring)out*=finalBalance;
-                bass[c][n] = activeMix==0?dry:static_cast<float>(activeMix==1?out:static_cast<double>(dry)+activeMix*(out-dry));
+                bass[c][n] = static_cast<float>(activeMix==1 ? out : static_cast<double>(dry)+activeMix*(out-dry));
                 outputHeld = std::max(std::abs(static_cast<double>(bass[c][n])), outputHeld);
             }
-            if (match) wetPower = follow(wetPower, wet / channels, energyA);
+            if (match) {
+                wetPower = follow(wetPower, wet / channels, energyA);
+                // Use the same sample clock in live, offline and GUI renders.
+                if (controlCounter==0) {
+                    const double matchDb = inputPowerMeter > 1e-9 && wetPower > 1e-9
+                        ? std::clamp(10 * std::log10(inputPowerMeter / wetPower), -12.0, 12.0) : 0;
+                    monitorGain.set(gain(matchDb + s.auditionWetDb), rampSamples);
+                }
+            }
             outputPowerMeter = follow(outputPowerMeter,
                 static_cast<double>(bass[0][n])*bass[0][n]/channels
                 + (channels == 2 ? static_cast<double>(bass[1][n])*bass[1][n]/channels : 0), energyA);
@@ -1009,6 +1039,7 @@ private:
     DuckBands duckBassBands,duckKickBands;
     std::array<double,3> duckBandEnvelope{},duckBandReduction{};
     Ramp duckBandMix;
+    bool duckModeInitialised = false;
     SubMono subMono;
     Ramp subMonoMix, dryMonitorGain;
     double subMonoCutoff = 0;

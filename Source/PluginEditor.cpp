@@ -202,7 +202,7 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
     addSwitch("phase.invert","POLARITY -",{438,654,150,28},"Invert both bass channels together.");
     addSwitch("phase.rotate","LEGACY AP",{610,654,150,28},"Enable the manual all-pass stage.");
     learn.setBounds(438,688,150,28);face.addAndMakeVisible(learn);learn.onClick=[this]{processor.requestLearn();};
-    learn.setTooltip("Analyse four seconds. A reliable result sets delay and polarity and enables PHASE. Uncertain results keep the current settings.");
+    learn.setTooltip("Analyse four seconds. A reliable result enables PHASE and replaces manual rotation with the learned delay and polarity.");
     depthKnob=&addKnob("unmask.amount","DEPTH","",true,{},"Maximum spectral unmasking amount. The kick is never summed into the bass.");
     attenuationKnob=&addKnob("unmask.attenuation","ATTENUATION"," dB",false,{830,448,170,184},"Maximum dynamic attenuation at the focus, 0-24 dB. Actual reduction follows shared signal activity. Before Auto Gain: turn Auto Gain off to measure the requested cut.");
     attenuationKnob->slider.textFromValueFunction=[](double value){return (value>0?juce::String("-"):juce::String{})+juce::String(value,1)+" dB";};
@@ -1334,15 +1334,16 @@ void BassDeamonEditor::analyzeFrames(double now) {
         ++analysisRevision;
     }
     const auto beforeSequence=analyzer.streamSequence();
+    const bool holdScope=processor.parameters.getRawParameterValue("view.hold")->load()>.5f;
     analyzer.scope.setPhaseFrequency(processor.phaseReferenceHz.load());
     analyzer.scope.setSubFrequency(processor.parameters.getRawParameterValue("subMono.hz")->load());
-    analyzer.consume(processor.analysisQueue,processor.tempo.load(),processor.parameters.getRawParameterValue("view.hold")->load()>.5f);
+    analyzer.consume(processor.analysisQueue,processor.tempo.load(),holdScope);
     if (analyzer.streamSequence()!=beforeSequence) {
         lastAnalysisTime=now;
         staleAnalysis=false;
         ++analysisRevision;
     } else if (!staleAnalysis && now-lastAnalysisTime>500) {
-        analyzer.prepare(rate);
+        analyzer.resetInput(holdScope);
         staleAnalysis=true;
         ++analysisRevision;
     }

@@ -2,6 +2,7 @@
 #include "Analyzer.h"
 #include "RealtimeAllocation.h"
 #include <iostream>
+#include <random>
 #include <stdexcept>
 #include <string_view>
 
@@ -15,6 +16,7 @@ int main() {
     constexpr double sr = 44100;
     std::vector<AutoMixFrame> audio(size_t(8 * sr));
     Settings settings;
+    settings.duckLowHz=110;
     for (size_t n = 0; n < audio.size(); ++n) {
         const double t = n / sr, hit = std::fmod(t, .5);
         const float kick = float(.8 * std::exp(-hit * 16) * std::sin(2 * pi * 52 * hit));
@@ -31,6 +33,10 @@ int main() {
         require(std::any_of(proposal.changes.begin(),proposal.changes.end(),[id](const auto& change) {
             return std::string_view(change.parameter)==id;
         }), "A Duck parameter was missing from the proposal");
+    require(std::none_of(proposal.changes.begin(),proposal.changes.end(),[](const auto& change) {
+        const std::string_view id=change.parameter;
+        return id=="duck.body" || id=="duck.punch" || id=="duck.click";
+    }), "Auto Mix proposed inactive legacy Duck coefficients for Low Band");
     const double slowRelease = analyzeDuckTiming(audio,sr).releaseMs;
     auto fastNotes=audio;
     for (size_t n=0; n<fastNotes.size(); ++n) {
@@ -96,6 +102,56 @@ int main() {
     selective.duck=true;
     require(suggestedFocus(dualBand,selective)==0,"Auto Mix proposed a cut already taken care of by Duck");
     std::cout<<"PASS after Duck: live and Auto Mix focus 38 -> 186 Hz; Auto Mix skipped the cleared band\n";
+
+    Settings balance;
+    balance.glue=balance.unmask=false;
+    balance.outputDb=-9;balance.balanceTrimDb=-3;
+    const auto wet=analyzeAutoMix(dualBand,sr,120,2,balance);
+    for (int monitor : {0,1,2,3}) {
+        auto audition=balance;
+        audition.auditionDry=monitor==0;
+        audition.matchEnabled=monitor==1;
+        audition.unmask=audition.delta=monitor==2;
+        audition.tube.enabled=audition.tube.audition=monitor==3;
+        auto normal=audition;
+        normal.auditionDry=normal.matchEnabled=normal.delta=normal.tube.audition=false;
+        const auto baseline=monitor<2 ? wet : analyzeAutoMix(dualBand,sr,120,2,normal);
+        const auto measured=analyzeAutoMix(dualBand,sr,120,2,audition);
+        require(measured.balanceValid && measured.balanceSubDb==baseline.balanceSubDb &&
+                measured.balanceBodyDb==baseline.balanceBodyDb && measured.sumPeakDb==baseline.sumPeakDb,
+                "Auto Mix Balance measured an audition instead of the processed chain");
+    }
+    for (auto& f : dualBand) {f.right=-f.left;f.kickRight=-f.kickLeft;}
+    const auto stereoOverlap=analyzeAutoMix(dualBand,sr,120,2,balance);
+    require(stereoOverlap.overlapValid && stereoOverlap.overlapBefore>10,
+            "Auto Mix lost a valid stereo overlap to a mono fold");
+    for (auto& f : dualBand) {f.right=f.left;f.kickLeft=0;}
+    const auto monoBass=analyzeAutoMix(dualBand,sr,120,1,balance);
+    require(monoBass.balanceValid,"Auto Mix missed the right sidechain on a mono bass bus");
+    std::cout<<"PASS processed Balance across monitor modes and stereo overlap\n";
+
+    std::vector<AutoMixFrame> phaseSource(size_t(4*sr));
+    std::mt19937 random(639);
+    std::uniform_real_distribution<float> noise(-.45f,.45f);
+    const auto lag=size_t(std::lround(.002*sr));
+    for (size_t n=0;n<phaseSource.size();++n) {
+        const double t=n/sr, age=std::fmod(t,.5);
+        const float bass=noise(random)*float(.8*std::exp(-age/.1))+.12f*float(std::sin(2*pi*60*t));
+        const float kick=n>=lag ? -phaseSource[n-lag].left : 0;
+        phaseSource[n]={bass,bass,kick,kick,float(2*t)};
+    }
+    Settings phase;
+    phase.glue=phase.unmask=false;
+    phase.rotate=true;phase.phaseAngle=165;
+    const auto alignment=analyzeAutoMix(phaseSource,sr,120,1,phase);
+    const auto proposed=[&](std::string_view id) {
+        for (const auto& change : alignment.changes)
+            if (id==change.parameter) return change.value;
+        return -1.f;
+    };
+    require(alignment.reliablePhase&&proposed("phase.on")==1&&proposed("phase.invert")==1&&
+            std::abs(proposed("phase.delay")-2)<.26f&&proposed("phase.angle")==0&&proposed("phase.rotate")==0,
+            "Learned Auto Mix alignment retained an incompatible manual rotation");
 
     const double corner = cornerForAllPassDegrees(-45, 50, sr);
     require(std::abs(allPassDegrees(50, corner, sr) + 45) < 1e-8, "Degree input round trip failed");

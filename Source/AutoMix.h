@@ -96,6 +96,10 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
     AutoMixResult result;
     if (audio.empty()) return result;
 
+    // Analysis and the proposal use the normal processing path. Monitor
+    // switches and comparison gains must not affect the Balance report.
+    settings.auditionDry = settings.matchEnabled = settings.delta = settings.tube.audition = false;
+    settings.auditionDryDb = settings.auditionWetDb = 0;
     const Settings originalSettings=settings;
     StereoPhaseAnalysis stereo;
     stereo.prepare(rate, settings.subMonoHz);
@@ -112,9 +116,10 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
     bool phaseConflict = false;
     double bassEnergy = 0, bassPeak = 0;
     std::array<double,bandCount> overlap{};
-    std::array<std::array<Biquad,2>,bandCount> bands{};
+    std::array<std::array<std::array<Biquad,2>,2>,bandCount> bands{};
     for (size_t i = 0; i < bandCount; ++i)
-        for (auto& filter : bands[i]) filter.bandpass(bandFrequencies[i], 2, rate);
+        for (auto& channel : bands[i])
+            for (auto& filter : channel) filter.bandpass(bandFrequencies[i], 2, rate);
     size_t beat = 0;
     for (const auto& frame : audio) {
         const auto nextBeat = size_t(std::max(0.f, std::floor(frame.beat)));
@@ -145,10 +150,13 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
         const double power = (double(frame.left) * frame.left + double(frame.right) * frame.right) * .5;
         bassEnergy += power;
         bassPeak = std::max(bassPeak, power);
-        for (size_t i = 0; i < bandCount; ++i) {
-            const double lowBass = bands[i][0].tick(b), lowKick = bands[i][1].tick(k);
-            overlap[i] += std::min(lowBass * lowBass, lowKick * lowKick);
-        }
+        const std::array<double,2> bassChannels{frame.left,frame.right}, kickChannels{frame.kickLeft,frame.kickRight};
+        for (size_t i = 0; i < bandCount; ++i)
+            for (size_t c=0;c<2;++c) {
+                auto& filters=bands[i][c];
+                const double lowBass=filters[0].tick(bassChannels[c]), lowKick=filters[1].tick(kickChannels[c]);
+                overlap[i]+=.5*std::min(lowBass*lowBass,lowKick*lowKick);
+            }
     }
     stereo.finishBeat(beat);
     result.mono = stereo.report();
@@ -197,7 +205,11 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
         propose("phase.on", settings.phase, 1);
         propose("phase.delay", settings.delayMs, alignment.delayMs);
         propose("phase.invert", settings.invert, alignment.invert);
+        // Learn solves for an absolute delay and polarity, with no rotation.
+        propose("phase.rotate", settings.rotate, 0);
+        propose("phase.angle", settings.phaseAngle, 0);
         settings.phase = true; settings.delayMs = alignment.delayMs; settings.invert = alignment.invert;
+        settings.rotate=false;settings.phaseAngle=0;
     }
     if (!settings.tube.enabled && result.reliableKick && *strongest / bassEnergy > .035 && overlap[8] + overlap[9] < *strongest * .2) {
         propose("tube.on", 0, 1);
@@ -212,7 +224,7 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
         const double bodyPole=std::exp(-2*pi*110/rate), punchPole=std::exp(-2*pi*800/rate);
         for (const auto& frame : audio) {
             const std::array<double,2> b{frame.left,frame.right}, k{frame.kickLeft,frame.kickRight};
-            for(int channel=0;channel<channels;++channel) {
+            for(int channel=0;channel<2;++channel) {
                 const auto bass=bassBands.split(b[channel],channel,bodyPole,punchPole);
                 const auto kick=kickBands.split(k[channel],channel,bodyPole,punchPole);
                 for(size_t band=0;band<shared.size();++band)
@@ -237,21 +249,27 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
         settings.duckAttackMs=duck.attackMs;
         settings.duckReleaseMs=duck.releaseMs;
         settings.duckSync=false;
-        const auto bands=measureDuckBands();
-        constexpr std::array bandIds{"duck.body","duck.punch","duck.click"};
         propose("duck.multiband",settings.duckMultiband,1);
-        for (size_t band=0;band<bands.size();++band)
-            propose(bandIds[band],settings.duckBands[band],bands[band]);
-        settings.duckBands=bands;
         settings.duckMultiband=true;
+        // Body/Punch/Click are read only by the legacy crossover. The
+        // current Low Band mode uses the configured cutoff instead.
+        if (settings.duckLowHz<=0) {
+            const auto weights=measureDuckBands();
+            constexpr std::array bandIds{"duck.body","duck.punch","duck.click"};
+            for (size_t band=0;band<weights.size();++band)
+                propose(bandIds[band],settings.duckBands[band],weights[band]);
+            settings.duckBands=weights;
+        }
     }
 
     settings.active = true;
-    settings.auditionDry = settings.matchEnabled = settings.delta = settings.tube.audition = false;
     constexpr size_t blockSize = 256;
     std::array<float,blockSize> left{}, right{}, kickLeft{}, kickRight{};
     float* output[]{left.data(), right.data()};
     const float* reference[]{kickLeft.data(), kickRight.data()};
+    const auto processedBass = [&](size_t channel, size_t n) {
+        return output[channels==1 ? 0 : channel][n];
+    };
     const auto render = [&](const Settings& pass, auto&& measure) {
         Engine engine;
         engine.prepare(rate);
@@ -285,11 +303,11 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
             for (size_t n=0;n<count;++n)
                 bassAfterDuckEnergy+=double(output[channel][n])*output[channel][n]/channels;
         for (size_t band=0;band<focusBands;++band) {
-            for (int channel=0;channel<channels;++channel) {
+            for (size_t channel=0;channel<2;++channel) {
                 auto& filters=residualFilters[band][channel];
                 double bassPower=0, kickPower=0, joint=0;
                 for (size_t n=0;n<count;++n) {
-                    const double b=filters[0].tick(output[channel][n]);
+                    const double b=filters[0].tick(processedBass(channel,n));
                     const double k=filters[1].tick(reference[channel][n]);
                     bassPower+=b*b;
                     kickPower+=k*k;
@@ -297,7 +315,7 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
                 }
                 const float score=RelationAnalyzer::mask(float(db(std::sqrt(bassPower/count))),
                                                          float(db(std::sqrt(kickPower/count))));
-                if (score>=RelationAnalyzer::collisionThreshold) remaining[band]+=joint/channels;
+                if (score>=RelationAnalyzer::collisionThreshold) remaining[band]+=.5*joint;
             }
         }
     });
@@ -323,21 +341,25 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
     }
 
     // This comparison describes the full Auto Mix proposal against its input.
-    Biquad beforeBand, afterBand, kickBand;
+    std::array<Biquad,2> beforeBand{}, afterBand{}, kickBand{};
     const double focus = fraction>.012 ? unmaskFocus : bandFrequencies[size_t(strongest-overlap.begin())];
-    for (auto* filter : {&beforeBand, &afterBand, &kickBand}) filter->bandpass(focus, 2, rate);
+    for (auto* bank : {&beforeBand,&afterBand,&kickBand})
+        for (auto& filter : *bank) filter.bandpass(focus, 2, rate);
     double wetEnergy = 0, before = 0, after = 0, kickEnergy = 0;
     render(settings,[&](size_t start,size_t count) {
         for (size_t n = 0; n < count; ++n) {
             const auto& frame = audio[start + n];
-            const double l = left[n], r = channels == 1 ? l : right[n];
+            const double l = processedBass(0,n), r = processedBass(1,n);
             wetEnergy += (l*l + r*r) * .5;
-            const double k = kickBand.tick((frame.kickLeft + frame.kickRight) * .5);
-            const double b = beforeBand.tick((frame.left + frame.right) * .5);
-            const double w = afterBand.tick((l + r) * .5);
-            before += std::min(b*b, k*k);
-            after += std::min(w*w, k*k);
-            kickEnergy += k*k;
+            const std::array<double,2> dry{frame.left,frame.right}, wet{l,r};
+            for (size_t c=0;c<2;++c) {
+                const double k=kickBand[c].tick(reference[c][n]);
+                const double b=beforeBand[c].tick(dry[c]);
+                const double w=afterBand[c].tick(wet[c]);
+                before+=std::min(b*b,k*k);
+                after+=std::min(w*w,k*k);
+                kickEnergy+=k*k;
+            }
         }
     });
     if (wetEnergy > 1e-8) {
@@ -364,8 +386,8 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
     }
     std::array<std::array<double,2>,2> energy{};double sumPeak=0;
     render(originalSettings,[&](size_t,size_t count) {
-        for(size_t n=0;n<count;++n)for(size_t c=0;c<size_t(channels);++c) {
-            const double b=output[c][n],k=reference[c][n];sumPeak=std::max(sumPeak,std::abs(b+k));
+        for(size_t n=0;n<count;++n)for(size_t c=0;c<2;++c) {
+            const double b=processedBass(c,n),k=reference[c][n];sumPeak=std::max(sumPeak,std::abs(b+k));
             for(size_t band=0;band<2;++band){const double bv=filters[band][0][c].tick(b),kv=filters[band][1][c].tick(k);energy[band][0]+=bv*bv;energy[band][1]+=kv*kv;}
         }
     });
