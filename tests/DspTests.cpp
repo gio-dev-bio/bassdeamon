@@ -164,6 +164,76 @@ int main() {
         require(recalled.runtimeState() == held, "Frozen runtime recall failed");
         std::cout << "PASS GLUE adaptation lock / runtime recall\n";
 
+        // A strong bass must not be over-compressed while the automatic threshold
+        // starts up, or after silence or a transport reset.
+        for (double sr : {44100., 48000., 96000.}) {
+            const auto phrase = tone(static_cast<int>(sr), 55, 0.8, sr);
+            for (int timing : {0, 1, 2}) {
+                Settings startup = bypass();
+                startup.glue = true;
+                startup.glueAmount = 1;
+                startup.glueTiming = timing;
+                startup.glueAttackMs = 0.5;
+                startup.glueReleaseMs = 70;
+                Engine glue;
+                glue.prepare(sr);
+                const auto checkPhrase = [&](Engine& engine, int block) {
+                    auto wet = phrase;
+                    render(engine, wet, nullptr, startup, block);
+                    double peakReduction = 0;
+                    for (size_t i = 0; i < wet.size() / 4; ++i) {
+                        if (std::abs(phrase[i]) > 1e-6)
+                            peakReduction = std::max(peakReduction, -db(std::abs(double(wet[i]) / phrase[i])));
+                    }
+                    require(peakReduction < 4, "GLUE crushed the bass onset");
+                    const auto steadyStart = wet.size() * 3 / 4;
+                    require(-db(rms(wet, steadyStart) / rms(phrase, steadyStart)) > 1,
+                            "GLUE lost sustained compression");
+                    return wet;
+                };
+                auto start = checkPhrase(glue, 257);
+                Engine alternate;
+                alternate.prepare(sr);
+                require(start == checkPhrase(alternate, 1024), "GLUE acquisition depends on host buffer size");
+                const double learned = glue.runtimeState()[0];
+                auto nearSilence = tone(static_cast<int>(sr * 3), 67, 1e-5, sr);
+                render(glue, nearSilence, nullptr, startup, 63);
+                require(std::abs(glue.runtimeState()[0] - learned) < 0.5, "GLUE threshold followed silence");
+                checkPhrase(glue, 512);
+
+                auto previous = glue.runtimeState();
+                previous[0] = -45;
+                glue.restoreRuntime(previous);
+                glue.clearHistory();
+                checkPhrase(glue, 121);
+            }
+        }
+        {
+            Engine glue;
+            glue.prepare(44100);
+            auto frozen = glue.runtimeState();
+            frozen[0] = -36;
+            frozen[1] = 3.5;
+            glue.restoreRuntime(frozen);
+            glue.clearHistory();
+            Settings locked = bypass();
+            locked.glue = locked.glueLocked = true;
+            locked.glueAmount = 1;
+            auto bass = tone(44100, 55, 0.8, 44100);
+            render(glue, bass, nullptr, locked);
+            const auto current = glue.runtimeState();
+            require(std::equal(frozen.begin(), frozen.begin() + 4, current.begin()),
+                    "GLUE adapted its locked parameters after a reset");
+            require(glue.getMeters().glueReductionDb > 12, "GLUE limited compression from a locked threshold");
+
+            locked.glue = false;
+            Signal transition(612, 0.5f);
+            render(glue, transition, nullptr, locked);
+            require(std::abs(glue.getMeters().glueReductionDb + db(transition.back() / 0.5)) < 1e-5,
+                    "GLUE meter differs from actual gain during its wet/dry transition");
+        }
+        std::cout << "PASS GLUE onset / silence / transport reset / locked threshold / meter\n";
+
         // Independent AGC lock, quiet-signal suspension and 3 dB cap.
         AutoGain agc; agc.prepare(48000, 100);
         for (int i = 0; i < 100000; ++i) agc.tick(0.1, 0.01, {true, false}, 6);

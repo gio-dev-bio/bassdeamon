@@ -148,6 +148,49 @@ int main(int argc, char** argv) {
             analyzer->consume(seeking.analysisQueue);
         }
         require(analyzer->discontinuities==0,"A declared short loop reset the analyzer on each pass");
+
+        auto glue = std::make_unique<BassDeamonProcessor>();
+        set(*glue, "glue.amount", 1);
+        set(*glue, "unmask.on", 0);
+        clock.looping = false;
+        clock.sample = 0;
+        glue->setPlayHead(&clock);
+        glue->prepareToPlay(44100, 128);
+        const auto measureGlue = [&](double amplitude, int blocks) {
+            double peakReduction = 0;
+            std::array<float, 128> input{};
+            for (int block = 0; block < blocks; ++block) {
+                for (int n = 0; n < 128; ++n) {
+                    const double time = (block * 128 + n) / 44100.0;
+                    const float value = static_cast<float>(amplitude * std::sin(2 * bassdeamon::pi * 55 * time));
+                    input[static_cast<size_t>(n)] = value;
+                    seekBuffer.setSample(0, n, value);
+                    seekBuffer.setSample(1, n, -value);
+                }
+                guardedProcess(*glue, seekBuffer, midi);
+                clock.sample += 128;
+                for (int n = 0; n < 128; ++n) {
+                    const float value = input[static_cast<size_t>(n)];
+                    const float output = seekBuffer.getSample(0, n);
+                    require(seekBuffer.getSample(1, n) == -output, "GLUE did not link stereo gain");
+                    if (std::abs(value) > 1e-6f)
+                        peakReduction = std::max(peakReduction, -bassdeamon::db(std::abs(double(output) / value)));
+                }
+                if (std::abs(input.back()) > 1e-6f) {
+                    const double gain = std::abs(double(seekBuffer.getSample(0, 127)) / input.back());
+                    require(std::abs(glue->glueReduction.load() + bassdeamon::db(gain)) < 1e-5,
+                            "Plugin GLUE meter differs from its audio attenuation");
+                }
+            }
+            return peakReduction;
+        };
+        require(measureGlue(0.8, 400) < 4 && glue->glueReduction.load() > 1, "Plugin GLUE failed on first bass phrase");
+        measureGlue(0, 1040);
+        require(measureGlue(0.8, 120) < 4, "Plugin GLUE crushed the first bass note after silence");
+        clock.sample += 44100;
+        require(measureGlue(0.8, 120) < 4, "Plugin GLUE crushed the first note after a seek");
+        std::cout << "PASS plugin GLUE first phrase / silence / seek / stereo meter\n";
+
         BassDeamonProcessor neutral;
         neutral.prepareToPlay(44100,128);
         set(neutral,"glue.on",0);set(neutral,"unmask.on",0);set(neutral,"phase.on",1);

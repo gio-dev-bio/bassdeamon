@@ -339,7 +339,10 @@ public:
         dryMonitorGain.reset(1);
         monitorGain.reset(1);
         wetPower = 0;
-        bassEnergy = envelope = kickFast = kickSlow = 0;
+        glueSignalHoldSamples = static_cast<int>(sampleRate * 0.04);
+        glueRestartSamples = static_cast<int>(sampleRate * 0.5);
+        resetGlueReference();
+        envelope = kickFast = kickSlow = 0;
         thresholdDb = -24; ratio = 2; attackMs = 20; releaseMs = 180;
         glueReduction = 0; onsetClock = lastOnset = 0; kickIntervalMs = 0;
         controlCounter = 0; smoothed = false; meters = {};
@@ -411,7 +414,8 @@ public:
         subMono.clear();
         bassE.fill(0); kickE.fill(0); focusBassE.fill(0);
         focusCandidate=-1;focusCandidateSamples=0;
-        bassEnergy = envelope = glueReduction = kickFast = kickSlow = 0;
+        resetGlueReference();
+        envelope = glueReduction = kickFast = kickSlow = 0;
         inputPowerMeter = outputPowerMeter = outputHeld = kickHeld = 0;
         if(!preserveLearn)learner.cancel();
         tube.clear();directCutDb=0;directFilters={};
@@ -557,6 +561,7 @@ public:
             duckBandMix.reset(duckBandTarget);
         }
         double displayedDuckReduction=0;
+        double glueGain = 1;
         for (int n = 0; n < samples; ++n) {
             const float dryLeft=bass[0][n],dryRight=channels==2?bass[1][n]:0;
             const double activeMix=globalRamp.next();
@@ -596,7 +601,17 @@ public:
             }
             const double kp = power(k, 2);
             kickHeld = std::max(std::max(std::abs(k[0]), std::abs(k[1])), kickHeld * peakA);
-            bassEnergy = follow(bassEnergy, inputPower, energyA);
+            // Keep the reference through short gaps and reacquire it on the next phrase.
+            if (inputPower > 1e-8) { // -80 dBFS
+                glueQuietSamples = 0;
+            } else if (glueQuietSamples < glueRestartSamples && ++glueQuietSamples == glueRestartSamples) {
+                resetGlueReference();
+            }
+            const bool updateGlueReference = glueQuietSamples < glueSignalHoldSamples;
+            if (updateGlueReference) {
+                bassEnergy = follow(bassEnergy, inputPower, energyA);
+                glueReferenceWeight = follow(glueReferenceWeight, 1, energyA);
+            }
             envelope = follow(envelope, inputPower, rmsA);
             kickFast = follow(kickFast, kp, kickFastA); kickSlow = follow(kickSlow, kp, kickSlowA);
             ++onsetClock;
@@ -609,10 +624,16 @@ public:
             if (++controlCounter == 32) {
                 controlCounter = 0;
                 smoothedFilterQ = follow(smoothedFilterQ, filterQTarget, filterParameterA);
-                if (!s.glueLocked && bassEnergy > 1e-10) {
-                    thresholdDb = follow(thresholdDb, db(std::sqrt(bassEnergy)) - 3, parameterA);
-                    const double crest = std::clamp(db(std::sqrt(std::max(envelope, 1e-20) / bassEnergy)), 0.0, 12.0);
-                    ratio = follow(ratio, 1.5 + 2 * std::clamp(s.glueAmount, 0.0, 1.0), parameterA);
+                if (!s.glueLocked && updateGlueReference) {
+                    // Normalise the RMS estimate while the average fills, and initialise
+                    // the threshold from the signal over the first ~32 ms of evidence.
+                    const double referencePower = bassEnergy / glueReferenceWeight;
+                    const double targetThreshold = db(std::sqrt(referencePower)) - 3;
+                    thresholdDb = !glueReferenceReady || glueReferenceWeight < 0.1
+                        ? targetThreshold : follow(thresholdDb, targetThreshold, parameterA);
+                    glueReferenceReady = true;
+                    const double crest = std::clamp(db(std::sqrt(std::max(envelope, 1e-20) / referencePower)), 0.0, 12.0);
+                    ratio = follow(ratio, 1.5 + 2 * glueAmount, parameterA);
                     attackMs = follow(attackMs, 15 + crest, parameterA);
                     const bool validBpm = std::isfinite(bpm) && bpm >= 20 && bpm <= 400;
                     const bool recentKick = onsetClock - lastOnset < static_cast<std::uint64_t>(sampleRate * 2) && kickIntervalMs > 0;
@@ -660,12 +681,15 @@ public:
             glueMix = follow(glueMix, s.glue ? 1 : 0, smoothA);
             phaseMix = follow(phaseMix, s.phase ? 1 : 0, smoothA);
             unmaskMix = follow(unmaskMix, s.unmask ? 1 : 0, smoothA);
-            const double over = db(std::sqrt(envelope)) - thresholdDb;
             const double knee = 6, slope = 1 - 1 / ratio;
-            const double desired = over <= -knee/2 ? 0 : (over >= knee/2 ? slope * over
-                                    : slope * (over+knee/2)*(over+knee/2)/(2*knee));
-            glueReduction = follow(glueReduction, desired * glueAmount,
-                                   desired * s.glueAmount > glueReduction ? attackA : releaseA);
+            double targetReduction = 0;
+            if (s.glueLocked || glueReferenceReady) {
+                const double over = db(std::sqrt(envelope)) - thresholdDb;
+                const double desired = over <= -knee/2 ? 0 : (over >= knee/2 ? slope * over
+                                        : slope * (over+knee/2)*(over+knee/2)/(2*knee));
+                targetReduction = desired * glueAmount;
+            }
+            glueReduction = follow(glueReduction, targetReduction, targetReduction > glueReduction ? attackA : releaseA);
             double budget = 6;
             const auto compensate = [&](int module, double in, double out, double mix) {
                 auto cfg = s.agc[static_cast<size_t>(module)];
@@ -676,8 +700,8 @@ public:
                 meters.agcDb[static_cast<size_t>(module)] = db(applied);
                 return applied;
             };
-            const double glueG = 1 + glueMix * (gain(-glueReduction) - 1);
-            for (auto& v : x) v *= glueG;
+            glueGain = 1 + glueMix * (gain(-glueReduction) - 1);
+            for (auto& v : x) v *= glueGain;
             const double glueAgc = compensate(0, inputPower, power(x, channels), glueMix);
             for (auto& v : x) v *= glueAgc;
 
@@ -912,10 +936,10 @@ public:
             outputPowerMeter = follow(outputPowerMeter,
                 static_cast<double>(bass[0][n])*bass[0][n]/channels
                 + (channels == 2 ? static_cast<double>(bass[1][n])*bass[1][n]/channels : 0), energyA);
-            meters.glueReductionDb = glueReduction * glueMix;
             meters.unmaskReductionDb = (s.unmaskDirect?-directCutDb:maxCut) * unmaskMix; // maximum individual band, not total cut
         }
         meters.duckReductionDb = displayedDuckReduction;
+        if (samples > 0) meters.glueReductionDb = glueMix == 1 ? glueReduction : -db(glueGain);
         meters.matchGainDb = match ? db(monitorGain.value()) : 0;
         meters.tubeAddedDb=db(std::sqrt(tube.addedPower()));
         meters.peak = outputHeld; meters.kickPeak = kickHeld;
@@ -946,6 +970,12 @@ public:
         return response;
     }
 private:
+    void resetGlueReference() noexcept {
+        bassEnergy = glueReferenceWeight = 0;
+        glueQuietSamples = glueRestartSamples;
+        glueReferenceReady = false;
+    }
+
     void updateAutoFocus(double root, double low, double high) noexcept {
         if (std::abs(root - focusReferenceSeen) > .5) {
             focusReferenceSeen = root;
@@ -1018,6 +1048,9 @@ private:
     std::array<std::array<double,2>,2> angleX{},angleY{};
     double angleMix=0,angleCoefficient=0;
     double sampleRate = 48000, bassEnergy = 0, envelope = 0, kickFast = 0, kickSlow = 0;
+    double glueReferenceWeight = 0;
+    int glueSignalHoldSamples = 0, glueRestartSamples = 0, glueQuietSamples = 0;
+    bool glueReferenceReady = false;
     double thresholdDb = -24, ratio = 2, attackMs = 20, releaseMs = 180, glueReduction = 0;
     double energyA = 0, rmsA = 0, smoothA = 0, bandA = 0, parameterA = 0;
     double kickFastA = 0, kickSlowA = 0, attackA = 0, releaseA = 0, cutAttackA = 0, cutReleaseA = 0;
