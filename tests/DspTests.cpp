@@ -114,6 +114,26 @@ int main() {
             require(db(rms(initial)/rms(high))>-.2 && initial==restarted,
                     "Low Band starts by ducking the entire spectrum");
             std::cout<<"PASS Level Match partition null, true Dry and Low Band on first hit and restart\n";
+
+            chain.matchEnabled=chain.auditionDry=false;
+            chain.delayMs=5;
+            constexpr int offStart=22050, onAgain=23400;
+            const auto withPause=[&](int block) {
+                Engine engine;
+                engine.prepare(sr);
+                auto output=dry;
+                for (int n=0;n<samples;) {
+                    chain.active=n<offStart||n>=onAgain;
+                    const int edge=n<offStart?offStart:n<onAgain?onAgain:samples;
+                    const int count=std::min(block,edge-n);
+                    float* bass[]{output.data()+n};
+                    const float* side[]{reference.data()+n};
+                    engine.process(bass,1,side,1,count,chain,120);
+                    n+=count;
+                }
+                return output;
+            };
+            require(withPause(64)==withPause(4096),"Master bypass keeps different history with large buffers");
         }
 
         // Stereo gain control must preserve the channel ratio.

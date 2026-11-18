@@ -398,8 +398,9 @@ public:
     }
     void clearHistory(bool preserveLearn=false) noexcept {
         for (auto& d : delays) d.clear();
-        for (auto* bank : {&detectorsBass, &detectorsKick, &focusBassFilters, &filters})
+        for (auto* bank : {&detectorsBass, &detectorsKick, &focusBassFilters})
             for (auto& band : *bank) for (auto& f : band) f.z1 = f.z2 = 0;
+        filters={};cutDb.fill(0);
         allpassX.fill(0); allpassY.fill(0);
         angleX={};angleY={};angleMix=0;angleCoefficient=0;
         duckEnvelope = duckReduction = 0;
@@ -410,7 +411,7 @@ public:
         subMono.clear();
         bassE.fill(0); kickE.fill(0); focusBassE.fill(0);
         focusCandidate=-1;focusCandidateSamples=0;
-        bassEnergy = envelope = kickFast = kickSlow = 0;
+        bassEnergy = envelope = glueReduction = kickFast = kickSlow = 0;
         inputPowerMeter = outputPowerMeter = outputHeld = kickHeld = 0;
         if(!preserveLearn)learner.cancel();
         tube.clear();directCutDb=0;directFilters={};
@@ -426,17 +427,23 @@ public:
         const int rampSamples=std::max(1,static_cast<int>(sampleRate*.02));
         if(!globalInitialised){globalRamp.reset(s.active?1:0);globalInitialised=true;}
         globalRamp.set(s.active?1:0,rampSamples);
-        if(!s.active&&globalRamp.finished()){
+        const auto passDry = [&](int first) {
             if(!globalPaused){clearHistory();globalPaused=true;}
             // Leave every input bit untouched, including IEEE signed zeros/subnormals.
-            meters.matchGainDb=0;
+            meters.matchGainDb=meters.kickPeak=0;
             meters.glueReductionDb=meters.unmaskReductionDb=meters.tubeAgcDb=0;meters.agcDb.fill(0);meters.cutsDb.fill(0);
-            for(int n=0;n<samples;++n){
-                std::array<double,2> dry{};for(int c=0;c<channels;++c)dry[c]=bass[c][n];
+            meters.tubeAddedDb=-120;
+            meters.bassDb.fill(-120);meters.kickDb.fill(-120);
+            for(int n=first;n<samples;++n){
+                std::array<double,2> dry{};
+                for(int c=0;c<channels;++c)dry[c]=std::isfinite(bass[c][n])?bass[c][n]:0;
                 inputPowerMeter=follow(inputPowerMeter,power(dry,channels),energyA);
                 outputHeld*=peakA;for(int c=0;c<channels;++c)outputHeld=std::max(outputHeld,std::abs(dry[c]));
             }
             meters.peak=outputHeld;meters.inputRmsDb=meters.outputRmsDb=db(std::sqrt(inputPowerMeter));
+        };
+        if (!s.active && globalRamp.finished()) {
+            passDry(0);
             return;
         }
         globalPaused=false;
@@ -553,6 +560,12 @@ public:
         for (int n = 0; n < samples; ++n) {
             const float dryLeft=bass[0][n],dryRight=channels==2?bass[1][n]:0;
             const double activeMix=globalRamp.next();
+            if (activeMix==0) {
+                // Finish the bypass at its exact sample, even inside a big
+                // host block. Resuming must not reuse pre-bypass history.
+                passDry(n);
+                return;
+            }
             const double mid = midMix.next();
             const double side = channels == 2 ? sideMix.next() : 0;
             const bool linked = mid == 1 && (channels == 1 || side == 1);
@@ -884,7 +897,7 @@ public:
                     const double drySignal = reference * dryGain;
                     out = listenDry == 1 ? drySignal : matched + listenDry * (drySignal - matched);
                 }
-                bass[c][n] = activeMix==0?dry:static_cast<float>(activeMix==1?out:static_cast<double>(dry)+activeMix*(out-dry));
+                bass[c][n] = static_cast<float>(activeMix==1 ? out : static_cast<double>(dry)+activeMix*(out-dry));
                 outputHeld = std::max(std::abs(static_cast<double>(bass[c][n])), outputHeld);
             }
             if (match) {

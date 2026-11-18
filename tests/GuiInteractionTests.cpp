@@ -436,10 +436,11 @@ int interactionTests(){
     ensure(p.learnStatus.load()==5,"Learn GUI never completed across short host cycles");
     p.timerCallback();
     ensure(std::abs(get("phase.delay")-2)<.26&&get("phase.invert")==1,"Learn did not apply delay and polarity to host parameters");
-    ensure(get("phase.on")==1&&get("phase.angle")==0&&get("phase.rotate")==0,"Learn kept an incompatible manual rotation");
+    const auto rotationCleared=[&]{return std::abs(get("phase.angle"))<.0005f&&get("phase.rotate")==0;};
+    ensure(get("phase.on")==1&&rotationCleared(),"Learn kept an incompatible manual rotation");
     ensure(p.undoEdit()&&std::abs(get("phase.delay")-delayBeforeLearn)<.001&&get("phase.invert")==invertBeforeLearn&&get("phase.on")==0&&
            std::abs(get("phase.angle")-angleBeforeLearn)<.001&&get("phase.rotate")==1,"Learn undo incomplete");
-    ensure(p.redoEdit()&&std::abs(get("phase.delay")-2)<.26&&get("phase.invert")==1&&get("phase.angle")==0&&get("phase.rotate")==0,"Learn redo incomplete");
+    ensure(p.redoEdit()&&std::abs(get("phase.delay")-2)<.26&&get("phase.invert")==1&&rotationCleared(),"Learn redo incomplete");
     ensure(editor->face.getComponentAt(editor->kickEqLearn.getBounds().getCentre())==&editor->kickEqLearn,
            "Kick EQ Learn hit target covered");
     const auto captureKick = [&](bool hasKick) {

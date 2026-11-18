@@ -110,10 +110,16 @@ int main(int argc, char** argv) {
         }
         struct SampleClock final : juce::AudioPlayHead {
             juce::int64 sample=0;
+            bool looping=false;
             juce::Optional<PositionInfo> getPosition() const override {
                 PositionInfo position;
                 position.setTimeInSamples(sample);
                 position.setIsPlaying(true);
+                if (looping) {
+                    position.setIsLooping(true);
+                    position.setBpm(120.);
+                    position.setLoopPoints(LoopPoints{0,512.*120/(60*44100)});
+                }
                 return position;
             }
         } clock;
@@ -132,6 +138,25 @@ int main(int argc, char** argv) {
             require(analyzer->discontinuities==(sample==386 ? 1u : 0u),
                     "Analyzer did not follow a sample-accurate transport seek");
         }
+        seeking.prepareToPlay(44100,128);
+        analyzer->prepare(44100);
+        clock.looping=true;
+        for (auto sample : {0,128,256,384,0,128,256}) {
+            clock.sample=sample;
+            seekBuffer.clear();
+            guardedProcess(seeking,seekBuffer,midi);
+            analyzer->consume(seeking.analysisQueue);
+        }
+        require(analyzer->discontinuities==0,"A declared short loop reset the analyzer on each pass");
+        BassDeamonProcessor neutral;
+        neutral.prepareToPlay(44100,128);
+        set(neutral,"glue.on",0);set(neutral,"unmask.on",0);set(neutral,"phase.on",1);
+        set(neutral,"phase.angle",0);
+        for (int n=0;n<128;++n) seekBuffer.setSample(0,n,float(.3*std::sin(.017*n)));
+        const auto dry=seekBuffer;
+        guardedProcess(neutral,seekBuffer,midi);
+        require(std::memcmp(dry.getReadPointer(0),seekBuffer.getReadPointer(0),128*sizeof(float))==0,
+                "Host rounding activated an all-pass at nominal zero degrees");
         std::cout << "PASS plugin layouts / routing / state / A-B / legacy migration\n";
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

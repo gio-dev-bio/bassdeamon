@@ -153,7 +153,8 @@ bassdeamon::Settings BassDeamonProcessor::readSettings(bool proposal) const noex
     s.glue = value(0) > 0.5f; s.glueAmount = value(1); s.glueLocked = value(2) > 0.5f;
     s.phase = value(3) > 0.5f; s.invert = value(4) > 0.5f; s.delayMs = value(5);
     s.rotate = value(6) > 0.5f; s.rotationHz = value(7);
-    s.phaseAngle=value(68); s.phaseReference=phaseProcessingReferenceHz.load(std::memory_order_relaxed); s.kickReferenceHz=value(74);
+    s.phaseAngle=std::round(static_cast<double>(value(68))*1000.0)/1000.0;
+    s.phaseReference=phaseProcessingReferenceHz.load(std::memory_order_relaxed); s.kickReferenceHz=value(74);
     s.unmask = value(8) > 0.5f; s.unmaskAmount = value(9); s.delta = value(10) > 0.5f;
     for (size_t i = 0; i < 3; ++i) s.agc[i] = {value(11+2*i) > 0.5f, value(12+2*i) > 0.5f};
     // Canonicalise the declared 0.001 dB grid in double: JUCE's normalised
@@ -213,10 +214,21 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
             if(playing)if(const auto q=position->getPpqPosition())ppq=*q;
             const auto samplePosition = position->getTimeInSamples();
             const auto seconds = position->getTimeInSeconds();
-            const bool seek = playing && wasPlaying && (samplePosition && lastSamplePosition
-                ? *samplePosition != *lastSamplePosition + lastBlockSamples
-                : seconds && lastTimeSeconds >= 0 &&
-                    std::abs(*seconds - lastTimeSeconds - lastBlockSamples/getSampleRate()) > 0.1);
+            const double sampleRate = getSampleRate();
+            const bool haveSampleClock = samplePosition && lastSamplePosition;
+            const double jump = haveSampleClock
+                ? (double(*samplePosition) - double(*lastSamplePosition) - lastBlockSamples) / sampleRate
+                : seconds && lastTimeSeconds >= 0 ? *seconds - lastTimeSeconds - lastBlockSamples/sampleRate : 0;
+            bool seek = playing && wasPlaying && std::abs(jump) > (haveSampleClock ? 1./sampleRate : .1);
+            // A declared transport loop is contiguous playback for the DSP
+            // and FFT. An unrelated jump still starts a fresh measurement.
+            if (seek && jump<0 && position->getIsLooping() && bpm>=20 && bpm<=400) {
+                if (const auto loop=position->getLoopPoints()) {
+                    const double duration=(loop->ppqEnd-loop->ppqStart)*60/bpm;
+                    const double tolerance=haveSampleClock ? 2./sampleRate : .002;
+                    if (duration>0 && std::abs(jump+duration)<=tolerance) seek=false;
+                }
+            }
             if (samplePosition) lastSamplePosition = *samplePosition;
             else lastSamplePosition.reset();
             lastTimeSeconds = seconds ? *seconds : -1;

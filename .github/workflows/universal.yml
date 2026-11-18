@@ -30,6 +30,8 @@ jobs:
       - run: ctest --test-dir build -C Release --parallel 2 --output-on-failure
         env:
           BASSDEAMON_AUTO_MIX_PREVIEW: ${{ github.workspace }}/GUI-AutoMix.png
+      - name: Check native host bypass and signal routing
+        run: build/plugin_tests_artefacts/Release/plugin_tests --signals "$RUNNER_TEMP/bassdeamon-signal-audit"
       - name: Verify architectures and sign
         run: |
           bundle=build/BassDeamon_artefacts/Release/VST3/BassDeamon.vst3
