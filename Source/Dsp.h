@@ -926,9 +926,12 @@ private:
         size_t best = 0, current = 0;
         double score = 0, distanceToCurrent = 1e9;
         std::array<double, bandCount> scores{};
+        // At around 24 dB below the recent kick peak, its tail must not
+        // retune the filter as Duck releases and the bass gets louder again.
+        const bool kickBody = kickFast > .004 * kickHeld * kickHeld;
         for (size_t band = 0; band < frequencies.size(); ++band) {
             const double hz = frequencies[band];
-            if (hz < low || hz > high) continue;
+            if (!kickBody || hz < low || hz > high) continue;
             // The bass peak must also be present in the kick. A learned root
             // favours its neighbourhood but cannot veto a stronger overlap.
             const double bass = focusBassE[band];
@@ -944,8 +947,9 @@ private:
             if (distance < distanceToCurrent) { distanceToCurrent = distance; current = band; }
         }
         if (score < 2e-7) {
-            // Retain partial evidence between kicks, without counting silence.
-            focusCandidateSamples = std::max(0., focusCandidateSamples - 4.);
+            // Short kicks can confirm a change over several hits. Between
+            // bodies, let pending evidence decay without counting the tail.
+            focusCandidateSamples = std::max(0., focusCandidateSamples - 1.);
             if (focusCandidateSamples == 0) focusCandidate = -1;
             return;
         }
