@@ -78,13 +78,16 @@ int main(){try{
         check(bands==2,"A window lobe counted twice or an out-of-range band was included");
         mask.fill(0);
         auto display=std::make_unique<SpectrumDisplay>();
+        frame->pre.fill(-120);
         display->pushAtRate(*frame,1,0,1);
+        display->advanceTrace(0);
         constexpr size_t oldBand=20,newBand=55;
         frame->maskPre[oldBand]=frame->maskPost[oldBand]=1;
         frame->eventLevels[1][oldBand]={-12,-18,-10};
         display->pushAtRate(*frame,1,.2,1);
         frame->maskPre[oldBand]=frame->maskPost[oldBand]=0;
         frame->maskPre[newBand]=1;
+        frame->pre[newBand]=-30;
         frame->eventLevels[0][newBand]={-30,-52,-28};
         display->pushAtRate(*frame,1,.6,1);
         display->pushAtRate(*frame,0,1,1);
@@ -93,6 +96,14 @@ int main(){try{
               "Different snapshots were unioned into one collision frame");
         check(display->eventLevels[0][newBand]==Analyzer::LevelTriplet{-30,-52,-28},
               "Collision levels must come from the same measurement as the marker");
+        const auto measurement=display->revision;
+        display->advanceTrace(1);
+        const float start=display->trace[0][newBand];
+        display->advanceTrace(1.016);
+        check(display->trace[0][newBand]>start && display->trace[0][newBand]<-30 &&
+              display->revision==measurement && display->eventLevels[0][newBand][0]==-30,
+              "Trace interpolation must not alter measured collision values");
+
     }
     auto queue=std::make_unique<AnalysisQueue>();auto analyzer=std::make_unique<Analyzer>();analyzer->prepare(48000);
     for(uint32_t n=0;n<queue->capacity;++n){AnalysisFrame f;const auto value=tone(75,n,48000);f.pre={value,value};f.kick=f.pre;check(queue->push(f),"gap setup");}

@@ -5,9 +5,9 @@
   "review": "1.0.8 main layout reference. Scope offers distinct left and right traces. Analyzer shows measured overlap bands within 30\u2013250 Hz.",
   "sha256": {
     "Source/ConsoleSkin.h": "322a9b2be7a365950ff7227fcc56ea2863d9a3dd7b0a176c20456111e8043020",
-    "Source/PluginEditor.cpp": "da9f0e40d5965ba3c38ef4615e4709c073af7c59e3362b2e8783d380da4e1bb3",
+    "Source/PluginEditor.cpp": "a361a0428a875869f9b6072290ab8c1a25e3537dadcd91e5960ad3b736ff2d4c",
     "Source/PluginEditor.h": "3e1032391fe66fb57a0d1d7b272852953671d82ee9e2db07717ce1fa9f007174",
-    "Source/SpectrumDisplay.h": "ef0abecd5366ca1fa90db7497f3f71f7608fc36d85e54571eac974fd73e5ebde",
+    "Source/SpectrumDisplay.h": "8e5bdc24761685ccdd41d82f6e0bc466d588dd28e3da9e8557c40de6a24a5ac1",
     "Assets/RawSteel.png": "edcfca1f15630e0c6d89c32cb925ad28bb17dcb1fcd0c8921223a0023342999c",
     "Assets/RawKnob.png": "440d692401b710409159b27f0d818654682a7206eef88a6f5b94cecafdaad33a",
     "Assets/BassDeamonWordmark.png": "1b3748bbbdd2aaca7965da37e8635cf6eb659cab9b65d4d35f68bbea9f72effa",

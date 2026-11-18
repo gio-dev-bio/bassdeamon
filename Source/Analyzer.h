@@ -200,7 +200,7 @@ public:
     void prepare(double sr) noexcept {
         rate=sr;scope.prepare(sr);haveSequence=false;discontinuities=0;consumedFrames=0;resetAnalysis();
         wavePre.fill(0);wavePost.fill(0);waveKick.fill(0);sumPre.fill(0);sumPost.fill(0);
-        hop=std::max(size_t(256),size_t(sr*.010));
+        hop=std::max(size_t(256),size_t(sr*.020));
         if (!fftPrepared) {
             for(size_t i=0;i<fftSize/2;++i) fftRoots[i]=std::polar(1.,-2*pi*i/fftSize);
             for(size_t i=1,j=0;i<fftSize;++i){
@@ -276,11 +276,17 @@ private:
         for(auto& stream:channelLevels)for(auto& channel:stream)channel.fill(-120);
         for(auto& stream:fastLevels)for(auto& channel:stream)channel.fill(-120);
     }
+    size_t collisionAnalysisEnd(size_t length) const noexcept {
+        // Leave a guard band above the 250 Hz display range for peak
+        // detection. The spectrum itself still uses the full FFT.
+        return std::min(length/2,size_t(std::ceil(1000.*length/rate))+4);
+    }
     template<size_t N> void buildSupport(const std::array<float,N>& levels,std::array<float,N>& support,size_t length) noexcept {
         support.fill(0);float maximum=-120;
-        for(size_t b=1;b+1<N;++b){const double hz=double(b)*rate/length;if(hz>=20&&hz<=20000)maximum=std::max(maximum,levels[b]);}
+        const size_t end=std::min(N-1,collisionAnalysisEnd(length));
+        for(size_t b=1;b<end;++b){const double hz=double(b)*rate/length;if(hz>=20&&hz<=20000)maximum=std::max(maximum,levels[b]);}
         const float floor=std::max(-110.f,maximum-60.f);
-        for(size_t p=1;p+1<N;++p){const double hz=double(p)*rate/length;const float level=levels[p];
+        for(size_t p=1;p<end;++p){const double hz=double(p)*rate/length;const float level=levels[p];
             if(hz<20||hz>20000||level<=floor||level<=levels[p-1]||level<levels[p+1])continue;
             // Each real partial has its own local contour. Weak harmonics are
             // not discarded just because another partial is >18 dB louder.
@@ -288,7 +294,7 @@ private:
             const float strength=std::clamp((level-floor)/6.f,0.f,1.f),edge=level-12.f;
             size_t lo=p,hi=p;
             while(lo>1&&levels[lo-1]<=levels[lo]&&levels[lo-1]>edge)--lo;
-            while(hi+1<N-1&&levels[hi+1]<=levels[hi]&&levels[hi+1]>edge)++hi;
+            while(hi+1<end&&levels[hi+1]<=levels[hi]&&levels[hi+1]>edge)++hi;
             for(size_t b=lo;b<=hi;++b){const float shape=std::clamp((levels[b]-edge)/6.f,0.f,1.f);
                 support[b]=std::max(support[b],shape*strength);}
         }
@@ -307,15 +313,16 @@ private:
         std::array<std::array<float,2>,2> coincidence{};
         for(size_t t=0;t<2;++t)for(size_t c=0;c<2;++c){const double base=std::min(energy[t][c],energy[2][c]);
             coincidence[t][c]=base>1e-20?float(std::clamp((joint[t][c]/base-.01)/.10,0.0,1.0)):0;}
+        const size_t end=collisionAnalysisEnd(fastSize);
         std::array<float,3> active{};active.fill(-120);
         for(size_t t=0;t<3;++t)for(size_t c=0;c<2;++c)
-            active[t]=std::max(active[t],*std::max_element(fastLevels[t][c].begin(),fastLevels[t][c].end()));
+            active[t]=std::max(active[t],*std::max_element(fastLevels[t][c].begin(),fastLevels[t][c].begin()+end));
         referenceDb=active[2];
         const double elapsed=lastFastCount?double(count-lastFastCount)/rate:double(hop)/rate;
         const float decay=float(std::exp(-elapsed/.12));
         float confidence=0;
         for (size_t stream=0;stream<2;++stream) for (size_t channel=0;channel<2;++channel) {
-            for (size_t b=0;b<fastBins;++b) {
+            for (size_t b=0;b<end;++b) {
                 const float common=std::sqrt(fastSupport[stream][channel][b]*fastSupport[2][channel][b]);
                 const float event=common*coincidence[stream][channel]*
                     mask(fastLevels[stream][channel][b],fastLevels[2][channel][b]);
@@ -331,15 +338,16 @@ private:
             // per band would accumulate collisions from different notes.
             for (auto& stream : recentCollision)
                 for (auto& channel : stream)
-                    for (auto& score : channel) score*=decay;
+                    for (size_t b=0;b<end;++b) channel[b]*=decay;
         }
     }
     void updateMask() noexcept {
+        const auto end=collisionAnalysisEnd(fftSize);
         std::array<std::array<float,2>,3> loudest{};
         for (size_t stream=0;stream<3;++stream) for (size_t channel=0;channel<2;++channel)
             loudest[stream][channel]=*std::max_element(channelLevels[stream][channel].begin()+1,
-                                                       channelLevels[stream][channel].end());
-        for(size_t b=0;b<bins;++b){maskPre[b]=maskPost[b]=0;const double hz=double(b)*rate/fftSize;
+                                                       channelLevels[stream][channel].begin()+end);
+        for(size_t b=0;b<end;++b){maskPre[b]=maskPost[b]=0;const double hz=double(b)*rate/fftSize;
             if(hz<20||hz>20000)continue;
             const double position=double(b)*fastSize/fftSize;const size_t lo=std::min(fastBins-1,size_t(position)),hi=std::min(fastBins-1,lo+1);
             const float fraction=float(position-double(lo));
@@ -402,6 +410,7 @@ private:
         const size_t length=fast?fastSize:fftSize, numBins=length/2+1;
         const double sum=fast?fastWindowSum:windowSum;
         const double scale=1/(sum*sum);
+        const size_t end=collisionAnalysisEnd(length);
         bool nonzero=false;
         for (size_t i=0;i<length;++i) {
             const auto& frame=frames[(count-length+i)%fftSize];
@@ -424,15 +433,15 @@ private:
             }
         }
         const auto level=[](double power){return float(10*std::log10(std::max(1e-12,power)));};
-        for (size_t b=0;b<numBins;++b) {
-            const auto plus=work[b],minus=std::conj(work[(length-b)%length]);
+        for (size_t b=0;b<(fast?end:numBins);++b) {
+            const auto plus=work[b],minus=std::conj(work[b?length-b:0]);
             const double normalization=(b==0||b==length/2)?.25*scale:scale;
             const double left=std::norm(plus+minus)*normalization;
             const double right=std::norm(plus-minus)*normalization;
             const auto t=size_t(stream);
             if (fast) {fastLevels[t][0][b]=level(left);fastLevels[t][1][b]=level(right);}
             else {
-                channelLevels[t][0][b]=level(left);channelLevels[t][1][b]=level(right);
+                if (b<end) {channelLevels[t][0][b]=level(left);channelLevels[t][1][b]=level(right);}
                 destination[b]=level(.5*(left+right));
             }
         }
@@ -443,9 +452,9 @@ private:
                 // A short window cannot resolve a weak partial beside a loud
                 // fundamental. Allow broadband temporal evidence here; the
                 // long, high-resolution spectrum must ALSO contain a real peak.
-                const float peak=*std::max_element(levels.begin(),levels.end());
+                const float peak=*std::max_element(levels.begin(),levels.begin()+end);
                 const float floor=std::max(-110.f,peak-60.f);
-                for(size_t b=1;b+1<fastBins;++b)
+                for(size_t b=1;b+1<end;++b)
                     support[b]=std::max(support[b],std::clamp((levels[b]-floor)/12.f,0.f,1.f));
             }
             else buildSupport(channelLevels[size_t(stream)][channel],fineSupport[size_t(stream)][channel],fftSize);

@@ -1022,7 +1022,9 @@ int BassDeamonEditor::paintSpectrumPlot(juce::Graphics& g,juce::Rectangle<float>
         juce::Graphics::ScopedSaveState clip(g);
         g.reduceClipRegion(plot.toNearestInt());
         for(int trace=0;trace<2;++trace){
-            const auto& values=trace==0?visualKick:selected;
+            const auto& values=spectrumDisplay.ready
+                ? spectrumDisplay.trace[trace==0?2:(post?1:0)]
+                : (trace==0?visualKick:selected);
             const auto colour=trace==0?juce::Colour(skin.isRaw()?0xffffae12:0xffd59666):bassBlue;
             juce::Path curve;
             const size_t first=size_t(std::max(0.,std::floor(minimum/binWidth)));
@@ -1448,7 +1450,9 @@ void BassDeamonEditor::refreshVisuals(double clockMilliseconds) {
         pendingUnmaskResponse={};
         unmaskPathDirty=true;
     }
-    if (bypassChanged || (showScope?scopeUpdated:showPhaseAdvanced || newFrame))
+    const bool tracesChanged=!bypassed && !showScope && !showPhaseAdvanced &&
+        !spectrumHold.getToggleState() && spectrumDisplay.advanceTrace(clockMilliseconds*.001);
+    if (bypassChanged || (showScope?scopeUpdated:showPhaseAdvanced || newFrame || tracesChanged))
         face.repaint(24,128,1152,320);
     if (!bypassChanged && lastMetersPoll>=0 && clockMilliseconds>=lastMetersPoll &&
         clockMilliseconds-lastMetersPoll<30) return;

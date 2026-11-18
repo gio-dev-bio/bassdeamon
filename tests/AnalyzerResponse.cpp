@@ -85,7 +85,7 @@ int main(){try{
             for(int n=0;n<128;++n){AnalysisFrame f;f.pre={k[size_t(n)],k[size_t(n)]};f.post={x[size_t(n)],x[size_t(n)]};f.kick=f.pre;q->push(f);}if(b%12==0)a->consume(*q);}
         a->consume(*q);require(near(a->maskPost,75,48000)>.8,"Detector trusts knob instead of actual output");
     }
-    for(double refreshHz : {1.,2.,4.,7.5,8.,12.5,15.,24.3,30.}){auto a=std::make_unique<RelationAnalyzer>();auto q=std::make_unique<AnalysisQueue>();auto d=std::make_unique<SpectrumDisplay>();a->prepare(48000);
+    for(double refreshHz : {1.,2.,4.,7.5,8.,12.5,15.,24.3,30.,48.,60.}){auto a=std::make_unique<RelationAnalyzer>();auto q=std::make_unique<AnalysisQueue>();auto d=std::make_unique<SpectrumDisplay>();a->prepare(48000);
         uint64_t last=0;int lastTick=0;bool pulseSeen=false;size_t revisionsAfterReady=0;
         for(int n=0;n<4*48000;++n){double t=n/48000.;const double since=t-.6;
             const float bass=float(.4*std::sin(2*pi*75*t));const float kick=since>=0&&since<.02?float(.4*std::sin(pi*since/.02)*std::sin(2*pi*75*t)):0;
