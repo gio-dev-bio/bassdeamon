@@ -331,7 +331,7 @@ public:
         duckDetectorRelease = pole(12, sampleRate);
         duckBodyPole=std::exp(-2*pi*110/sampleRate);
         duckPunchPole=std::exp(-2*pi*800/sampleRate);
-        duckBandMix.reset(0);
+        duckModeInitialised = false;
         duckBassBands={};duckKickBands={};
         duckBandEnvelope.fill(0);duckBandReduction.fill(0);
         subMono = {}; subMonoMix.reset(0); subMonoCutoff = 0;
@@ -404,7 +404,7 @@ public:
         angleX={};angleY={};angleMix=0;angleCoefficient=0;
         duckEnvelope = duckReduction = 0;
         meters.duckReductionDb = 0;
-        duckBandMix.reset(0);
+        duckModeInitialised = false;
         duckBassBands={};duckKickBands={};
         duckBandEnvelope.fill(0);duckBandReduction.fill(0);
         subMono.clear();
@@ -512,9 +512,10 @@ public:
         const bool normalMonitoring = !s.delta && !(s.tube.enabled && s.tube.audition);
         monitorMix.set(s.auditionDry && normalMonitoring ? 1 : 0, rampSamples);
         const bool match = s.matchEnabled && normalMonitoring;
-        const double matchDb = match && inputPowerMeter > 1e-9 && wetPower > 1e-9
-            ? std::clamp(10 * std::log10(inputPowerMeter / wetPower), -12.0, 12.0) : 0;
-        monitorGain.set(gain(matchDb + s.auditionWetDb), rampSamples);
+        if (!match) {
+            monitorGain.set(gain(s.auditionWetDb), rampSamples);
+            wetPower = 0;
+        }
         dryMonitorGain.set(gain(s.auditionDryDb), rampSamples);
         subMonoMix.set(channels == 2 && s.subMono ? 1 : 0, rampSamples);
         const bool runSubMono = channels == 2 && (s.subMono || !subMonoMix.finished());
@@ -522,10 +523,14 @@ public:
         if (!runSubMono) { subMono.clear(); subMonoCutoff = 0; }
         else if (subMonoCutoff == 0) subMonoCutoff = subMonoTarget;
         const bool monitor = match || !monitorMix.finished() || monitorMix.value() != 0 || !monitorGain.finished() || monitorGain.value() != 1 || !dryMonitorGain.finished();
-        if (!match) wetPower = 0;
         const bool duckEnabled = s.duck && s.active && !(s.tube.enabled && s.tube.audition) && kick && kickChannels > 0;
         const double duckDepth = duckEnabled ? std::clamp(s.duckAmountDb,0.,18.) : 0.;
-        duckBandMix.set(s.duckMultiband?1:0,rampSamples);
+        const double duckBandTarget = s.duckMultiband ? 1 : 0;
+        if (!duckModeInitialised) {
+            duckBandMix.reset(duckBandTarget);
+            duckModeInitialised = true;
+        }
+        duckBandMix.set(duckBandTarget,rampSamples);
         const bool lowBand = s.duckLowHz > 0;
         // Keep the selected crossover until the outgoing Low-Band path has faded out.
         const double lowBandPole = lowBand && (s.duckMultiband || duckBandMix.value() > 0)
@@ -542,7 +547,7 @@ public:
         }
         if (!runDuck) {
             duckBassBands={};duckKickBands={};
-            duckBandMix.reset(s.duckMultiband?1:0);
+            duckBandMix.reset(duckBandTarget);
         }
         double displayedDuckReduction=0;
         for (int n = 0; n < samples; ++n) {
@@ -844,8 +849,11 @@ public:
             }
             const auto afterUnmask = x;
             const double unmaskAgc = compensate(2, selectedPower(beforeUnmask), selectedPower(x), unmaskMix);
-            if (!linked)
+            if (linked) {
+                for (int c=0;c<channels;++c) x[c] *= unmaskAgc;
+            } else {
                 applySelectedChange(x, x[0] * (unmaskAgc - 1), x[1] * (unmaskAgc - 1));
+            }
             if (runSubMono) {
                 if (controlCounter % 32 == 0 || (n == 0 && subMonoCutoff == subMonoTarget)) {
                     subMonoCutoff = follow(subMonoCutoff, subMonoTarget, filterParameterA);
@@ -865,20 +873,29 @@ public:
             outputHeld *= peakA;
             for (int c = 0; c < channels; ++c) {
                 // Delta is removed bass BEFORE AGC/output trim; never includes kick.
-                const double normal = (linked ? x[c]*unmaskAgc : x[c])*outputGain;
+                const double normal = x[c]*outputGain;
                 double out = normal + deltaMix*(beforeUnmask[c]-afterUnmask[c]-normal);
                 const float dry=c==0?dryLeft:dryRight;
+                if (match) wet += out * out;
+                if (normalMonitoring) out *= finalBalance;
                 if (monitor) {
-                    if (match) wet += out * out;
                     const double reference = std::isfinite(dry) ? dry : 0;
                     const double matched = out * listenGain;
-                    out = matched + listenDry * (reference * dryGain - matched);
+                    const double drySignal = reference * dryGain;
+                    out = listenDry == 1 ? drySignal : matched + listenDry * (drySignal - matched);
                 }
-                if(normalMonitoring)out*=finalBalance;
                 bass[c][n] = activeMix==0?dry:static_cast<float>(activeMix==1?out:static_cast<double>(dry)+activeMix*(out-dry));
                 outputHeld = std::max(std::abs(static_cast<double>(bass[c][n])), outputHeld);
             }
-            if (match) wetPower = follow(wetPower, wet / channels, energyA);
+            if (match) {
+                wetPower = follow(wetPower, wet / channels, energyA);
+                // Use the same sample clock in live, offline and GUI renders.
+                if (controlCounter==0) {
+                    const double matchDb = inputPowerMeter > 1e-9 && wetPower > 1e-9
+                        ? std::clamp(10 * std::log10(inputPowerMeter / wetPower), -12.0, 12.0) : 0;
+                    monitorGain.set(gain(matchDb + s.auditionWetDb), rampSamples);
+                }
+            }
             outputPowerMeter = follow(outputPowerMeter,
                 static_cast<double>(bass[0][n])*bass[0][n]/channels
                 + (channels == 2 ? static_cast<double>(bass[1][n])*bass[1][n]/channels : 0), energyA);
@@ -1009,6 +1026,7 @@ private:
     DuckBands duckBassBands,duckKickBands;
     std::array<double,3> duckBandEnvelope{},duckBandReduction{};
     Ramp duckBandMix;
+    bool duckModeInitialised = false;
     SubMono subMono;
     Ramp subMonoMix, dryMonitorGain;
     double subMonoCutoff = 0;

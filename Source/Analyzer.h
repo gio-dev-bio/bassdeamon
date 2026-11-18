@@ -32,6 +32,9 @@ public:
         if(r==w)return false;
         frame=frames[r%capacity];read.store(r+1,std::memory_order_release);return true;
     }
+    // Called by the producer when the next samples are from a different
+    // transport position, processing state or sample rate.
+    void markDiscontinuity() noexcept { ++produced; }
     // Consumer-side snapshot: one UI update must never chase an offline
     // producer forever. Only consume frames pending at the start of the tick.
     uint32_t pending() const noexcept {
@@ -68,7 +71,22 @@ public:
     }
     void setSubFrequency(double hz) noexcept { for (auto& filter : subFilters) filter.setCutoff(hz,rate); }
     uint64_t completed=0;double milliseconds=500;
-    void prepare(double sr) noexcept {rate=sr;fallback=0;lastBeat=-1;cycle=-1;completed=0;valid=false;low={};high={};monoCheck={};subMonoCheck={};subFilters={};setSubFrequency(120);phaseHz=0;setPhaseFrequency(60);reset();}
+    void prepare(double sr) noexcept {
+        rate=sr;
+        subFilters={};setSubFrequency(120);
+        phaseHz=0;setPhaseFrequency(60);
+        resetTimeline(false);
+    }
+    void resetTimeline(bool hold) noexcept {
+        fallback=0;lastBeat=-1;cycle=-1;valid=false;
+        for (auto& filter : subFilters) filter.clear();
+        for (auto& filter : phaseFilters) filter.z1=filter.z2=0;
+        reset();
+        if (!hold) {
+            low={};high={};completed=0;milliseconds=500;
+            monoCheck={};subMonoCheck={};phaseMeasured=false;phaseDelta=measuredPhaseHz=0;
+        }
+    }
     void tick(const AnalysisFrame& f,double bpm,bool hold) noexcept {
         const double tempo=std::isfinite(bpm)&&bpm>=20&&bpm<=400?bpm:120;
         const double step=tempo/(60*rate);
@@ -107,15 +125,22 @@ public:
             preL,postL,preR,postR,(preL+preR)*.5f,(postL+postR)*.5f, f.phase[0]+phaseKick, f.phase[1]+phaseKick};
         stereoPower.add(f.post[0],f.post[1]);
         subPower.add(subFilters[0].lowSide(f.post[0]),subFilters[1].lowSide(f.post[1]));
-        for(size_t t=0;t<values.size();++t){buildingLow[t][bin]=std::min(buildingLow[t][bin],values[t]);buildingHigh[t][bin]=std::max(buildingHigh[t][bin],values[t]);}
+        for (size_t t=0;t<values.size();++t) {
+            if (sampled[bin]) {
+                buildingLow[t][bin]=std::min(buildingLow[t][bin],values[t]);
+                buildingHigh[t][bin]=std::max(buildingHigh[t][bin],values[t]);
+            } else buildingLow[t][bin]=buildingHigh[t][bin]=values[t];
+        }
+        sampled[bin]=true;
         lastBeat=beat;lastBin=bin;
     }
 private:
     void reset() noexcept {
-        buildingLow={};buildingHigh={};lastBin=0;
+        buildingLow={};buildingHigh={};sampled.fill(false);lastBin=0;
         stereoPower={}; subPower={}; phaseEnergy={}; phaseSamples=0;
     }
     std::array<Wave,streamCount> buildingLow{},buildingHigh{};
+    std::array<bool,size> sampled{};
     struct PhaseBand {
         double b=0,a1=0,a2=0,z1=0,z2=0;
         void setFrequency(double hz,double sr) noexcept {
@@ -156,15 +181,18 @@ public:
         Spectrum pre{}, post{}, kick{}, maskPost{};
         CollisionLevels eventLevels{};
         bool hasSpectrum=false, hasResidual=false;
+        uint64_t generation=0;
         double rate=48000;
         double sampleRate() const noexcept { return rate; }
         bool ready() const noexcept { return hasSpectrum; }
         bool residualReady() const noexcept { return hasResidual; }
+        uint64_t streamGeneration() const noexcept { return generation; }
     };
     void copyFrame(Frame& frame) const noexcept {
         frame.pre=pre; frame.post=post; frame.kick=kick;
         frame.maskPost=maskPost; frame.eventLevels=eventLevels;
         frame.hasSpectrum=ready(); frame.hasResidual=residualReady(); frame.rate=rate;
+        frame.generation=generation;
     }
     static constexpr double collisionMinHz=30, collisionMaxHz=250;
     static constexpr float collisionThreshold=.12f;
@@ -226,7 +254,7 @@ public:
         const auto budget=queue.pending();
         AnalysisFrame f;for(uint32_t consumed=0;consumed<budget&&queue.pop(f);++consumed){
             ++consumedFrames;
-            if(haveSequence&&f.sequence!=nextSequence){resetAnalysis();scope.prepare(rate);++discontinuities;}
+            if(haveSequence&&f.sequence!=nextSequence){resetInput(hold);++discontinuities;}
             haveSequence=true;nextSequence=f.sequence+1;
             for(auto* stream:{&f.pre,&f.post,&f.kick})for(auto& v:*stream)if(!std::isfinite(v))v=0;
             scope.tick(f,bpm,hold);frames[count%fftSize]=f;++count;
@@ -258,6 +286,10 @@ public:
             wavePre[i]=peak(0);wavePost[i]=peak(1);waveKick[i]=peak(2);sumPre[i]=peak(3);sumPost[i]=peak(4);
         }
     }
+    void resetInput(bool holdScope) noexcept {
+        resetAnalysis();
+        scope.resetTimeline(holdScope);
+    }
     // Significant interference with the kick, not a claim of psychoacoustic masking.
     static float mask(float bass,float reference,float=-120,float=-120) noexcept {
         const float level=std::clamp((std::min(bass,reference)+90.f)/24.f,0.f,1.f);
@@ -267,6 +299,7 @@ public:
     double sampleRate() const noexcept{return rate;}
     bool ready() const noexcept{return count>=fftSize;}
     bool residualReady() const noexcept{return wetSamples>=fftSize;}
+    uint64_t streamGeneration() const noexcept{return generation;}
     uint64_t streamSequence() const noexcept{return haveSequence?nextSequence:0;}
     struct Summary {int regions=0;double strongestHz=0;};
     Summary summary() const noexcept {
@@ -288,6 +321,7 @@ private:
         // Both FFTs read only samples written since count was reset.
         // Leave the old ring slots alone to avoid a full-size stack temporary.
         count=lastCount=lastFastCount=wetSamples=0;
+        ++generation;
         pre.fill(-120);post.fill(-120);kick.fill(-120);
         clearCollisionHistory();
         for(auto& stream:channelLevels)for(auto& channel:stream)channel.fill(-120);
@@ -483,6 +517,7 @@ private:
     }
     double rate=48000,windowSum=1,fastWindowSum=1;size_t count=0,lastCount=0,lastFastCount=0,hop=480;
     bool haveSequence=false;uint64_t nextSequence=0;
+    uint64_t generation=0;
     size_t wetSamples=0;
     float recentConfidence=0;
     std::array<std::array<Spectrum,2>,3> channelLevels{},fineSupport{};

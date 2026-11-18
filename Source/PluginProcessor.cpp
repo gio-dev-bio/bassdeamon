@@ -137,6 +137,7 @@ void BassDeamonProcessor::prepareToPlay(double sr, int maximumBlock) {
     engine.restoreRuntime(r);
     hostBypassed.store(false,std::memory_order_release);
     wasLearning = wasPlaying = wasBypassed = false; lastTimeSeconds = -1; lastBlockSamples = 0;
+    lastSamplePosition.reset();analysisInterrupted=true;
     learnStatus.store(0); resultReady.store(false);
 }
 bool BassDeamonProcessor::isBusesLayoutSupported(const BusesLayout& b) const {
@@ -196,6 +197,7 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
         bassdeamon::Engine::RuntimeState restored{};
         for (size_t i = 0; i < restored.size(); ++i) restored[i] = restoredRuntime[i].load();
         engine.restoreRuntime(restored); engine.clearHistory(); wasLearning = false;
+        analysisInterrupted=true;
         resultReady.store(false); learnStatus.store(0);
     }
     double bpm = 0,ppq=-1, beatsPerBar=4;
@@ -209,15 +211,19 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
             const bool playing = position->getIsPlaying();
             transportAllowsLearn = playing;
             if(playing)if(const auto q=position->getPpqPosition())ppq=*q;
-            bool seek = false;
-            if (const auto t = position->getTimeInSeconds()) {
-                seek = playing && wasPlaying && lastTimeSeconds >= 0
-                    && std::abs(*t - lastTimeSeconds - lastBlockSamples/getSampleRate()) > 0.1;
-                lastTimeSeconds = *t;
-            }
+            const auto samplePosition = position->getTimeInSamples();
+            const auto seconds = position->getTimeInSeconds();
+            const bool seek = playing && wasPlaying && (samplePosition && lastSamplePosition
+                ? *samplePosition != *lastSamplePosition + lastBlockSamples
+                : seconds && lastTimeSeconds >= 0 &&
+                    std::abs(*seconds - lastTimeSeconds - lastBlockSamples/getSampleRate()) > 0.1);
+            if (samplePosition) lastSamplePosition = *samplePosition;
+            else lastSamplePosition.reset();
+            lastTimeSeconds = seconds ? *seconds : -1;
             if (seek || (wasPlaying && !playing)) {
                 const bool keepLearn=engine.learning();
                 engine.clearHistory(keepLearn);
+                analysisInterrupted=true;
                 if(!keepLearn)wasLearning=false;
             }
             wasPlaying = playing;
@@ -274,9 +280,14 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     }
     const bool collectVisuals=settings.active && analysisQueue.enabled.load(std::memory_order_relaxed);
     if(!collectVisuals){
+        analysisInterrupted=true;
         engine.process(bass.getArrayOfWritePointers(),bass.getNumChannels(),
                        sideChannels>0?kick:nullptr,sideChannels,bass.getNumSamples(),settings,bpm);
     }else{
+        if (analysisInterrupted && bass.getNumSamples()>0) {
+            analysisQueue.markDiscontinuity();
+            analysisInterrupted=false;
+        }
         // Fixed stack workspace handles host blocks larger than the prepare hint.
         constexpr int chunkSize=256;std::array<std::array<float,chunkSize>,2> before{};
         const int channels=bass.getNumChannels();
@@ -331,6 +342,7 @@ void BassDeamonProcessor::processBlockBypassed(juce::AudioBuffer<float>&, juce::
     midi.clear();
     if (wasBypassed) return;
     wasBypassed=true;
+    analysisInterrupted=true;
     hostBypassed.store(true,std::memory_order_release);
     cancelAutoMix();
     const auto state=autoMixState();
@@ -417,6 +429,8 @@ void BassDeamonProcessor::timerCallback() {
     };
     set("phase.delay", resultDelay.load());
     set("phase.invert", resultInvert.load() ? 1.0f : 0.0f);
+    set("phase.rotate", 0.0f);
+    set("phase.angle", 0.0f);
     set("phase.on", 1.0f);
     parameters.copyState();undoManager.beginNewTransaction();
 }

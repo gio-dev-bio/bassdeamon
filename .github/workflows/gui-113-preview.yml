@@ -1,0 +1,35 @@
+name: BassDeamon 1.0.13 editor preview
+on:
+  push:
+    branches: ['review/bassdeamon-1.0.13-gui']
+permissions:
+  contents: read
+jobs:
+  editor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build libasound2-dev libx11-dev libxext-dev libxinerama-dev libxrandr-dev libxcursor-dev libxi-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev xvfb
+      - uses: actions/cache/restore@v4
+        with:
+          path: build-gui
+          key: gui-linux-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
+          restore-keys: |
+            gui-linux-${{ hashFiles('CMakeLists.txt') }}-
+            gui-linux-
+      - run: cmake -G Ninja -S . -B build-gui -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build-gui --target plugin_tests --parallel 4
+      - uses: actions/cache/save@v4
+        with:
+          path: build-gui
+          key: gui-linux-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
+      - name: Check real controls and capture real editor
+        run: |
+          BASSDEAMON_AUTO_MIX_PREVIEW="$PWD/GUI-AutoMix.png" xvfb-run -a build-gui/plugin_tests_artefacts/Release/plugin_tests
+          xvfb-run -a build-gui/plugin_tests_artefacts/Release/plugin_tests --capture "$PWD/GUI-Preview.png"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GUI-review-${{ github.sha }}
+          path: GUI-*.png
+          if-no-files-found: error

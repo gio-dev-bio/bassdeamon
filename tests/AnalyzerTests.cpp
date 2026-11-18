@@ -110,6 +110,13 @@ int main(){try{
         display->pushAtRate(*frame,1,1.04,1);
         check(!display->residualReady && display->maskPost[newBand]==0,
               "Audition kept an old residual visible at 1 Hz");
+        frame->hasResidual=true;
+        display->pushAtRate(*frame,1,2,1);
+        check(display->maskPost[newBand]>0,"Holdover fixture has no collision");
+        ++frame->generation;
+        mask.fill(0);
+        display->pushAtRate(*frame,1,2.01,1);
+        check(display->maskPost[newBand]==0,"A seek retained the previous residual until the next refresh");
     }
     auto queue=std::make_unique<AnalysisQueue>();auto analyzer=std::make_unique<Analyzer>();analyzer->prepare(48000);
     for(uint32_t n=0;n<queue->capacity;++n){AnalysisFrame f;const auto value=tone(75,n,48000);f.pre={value,value};f.post=f.kick=f.pre;check(queue->push(f),"gap setup");}
@@ -140,6 +147,21 @@ int main(){try{
           "Partly processed FFT window was reported as a residual");
     monitor(Analyzer::fftSize/2,true,.01f);
     check(analyzer->residualReady()&&analyzer->summary().regions==0,"Old residual survived a return to processed audio");
+    queue->markDiscontinuity();
+    monitor(512,true,1);
+    check(!analyzer->ready() && analyzer->discontinuities==2,"Transport jump mixed two positions in one FFT");
+    {
+        BeatScope scope;
+        scope.prepare(48000);
+        AnalysisFrame f;
+        f.post={.125f,-.375f};
+        for (int n=0;n<=24000;++n) { f.beat=double(n)/24000; scope.tick(f,120,false); }
+        check(scope.completed==1&&scope.low[BeatScope::postLeft][256]==.125f&&
+              scope.high[BeatScope::postRight][256]==-.375f,"Scope clamps one-sided wave bins to zero");
+        scope.resetTimeline(true);
+        check(scope.completed==1&&scope.low[BeatScope::postLeft][256]==.125f,
+              "Scope HOLD was lost when its input timeline reset");
+    }
     // Message-thread cost only; audio callback still only writes the SPSC queue.
     const auto begin=std::chrono::steady_clock::now();
     for(int frame=0;frame<20;++frame){for(int n=0;n<1600;++n){AnalysisFrame f;const auto value=tone(75,size_t(frame*1600+n),48000);f.pre={value,value};f.post=f.pre;f.kick=f.pre;queue->push(f);}analyzer->consume(*queue);}

@@ -91,6 +91,10 @@ int main(int argc, char** argv) {
                 auto l=processor->getBusesLayout();l.inputBuses.set(0,channels==1?juce::AudioChannelSet::mono():juce::AudioChannelSet::stereo());
                 l.outputBuses.set(0,l.inputBuses[0]);l.inputBuses.set(1,juce::AudioChannelSet::mono());
                 require(processor->setBusesLayout(l),"Analyzer layout rejected");set(*processor,"tube.on",1);set(*processor,"phase.on",1);set(*processor,"phase.delay",1.25f);
+                set(*processor,"kickEq.on",1);set(*processor,"kickEq.frequency",72);
+                set(*processor,"duck.on",1);set(*processor,"duck.amount",8);set(*processor,"duck.multiband",1);
+                set(*processor,"subMono.on",1);set(*processor,"output.trim",-7);set(*processor,"balance.trim",-4);
+                processor->compareMatch.store(true);
                 processor->prepareToPlay(48000,64);
             }
             opened.analysisQueue.enabled.store(true);
@@ -103,6 +107,30 @@ int main(int argc, char** argv) {
                 while(opened.analysisQueue.pop(frame)){for(int c=0;c<2;++c)require(frame.post[size_t(c)]==b.getSample(std::min(c,channels-1),frames),"Analyzer POST differs from actual output");++frames;}
                 require(frames==block,"Analyzer loses frames without pressure");
             }
+        }
+        struct SampleClock final : juce::AudioPlayHead {
+            juce::int64 sample=0;
+            juce::Optional<PositionInfo> getPosition() const override {
+                PositionInfo position;
+                position.setTimeInSamples(sample);
+                position.setIsPlaying(true);
+                return position;
+            }
+        } clock;
+        BassDeamonProcessor seeking;
+        seeking.setPlayHead(&clock);
+        seeking.prepareToPlay(44100,128);
+        seeking.analysisQueue.enabled.store(true);
+        juce::AudioBuffer<float> seekBuffer(2,128);
+        auto analyzer=std::make_unique<bassdeamon::RelationAnalyzer>();
+        analyzer->prepare(44100);
+        for (auto sample : {0,128,386}) {
+            clock.sample=sample;
+            seekBuffer.clear();
+            guardedProcess(seeking,seekBuffer,midi);
+            analyzer->consume(seeking.analysisQueue);
+            require(analyzer->discontinuities==(sample==386 ? 1u : 0u),
+                    "Analyzer did not follow a sample-accurate transport seek");
         }
         std::cout << "PASS plugin layouts / routing / state / A-B / legacy migration\n";
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }

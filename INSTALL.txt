@@ -1,4 +1,4 @@
-BASSDEAMON 1.0.12 — VST3 macOS Universal (Intel e Apple Silicon)
+BASSDEAMON 1.0.13 — VST3 macOS Universal (Intel e Apple Silicon)
 
 1. Chiudi Cubase.
 2. Estrai tutto lo ZIP e fai doppio clic su Installa_Aggiorna.command.
