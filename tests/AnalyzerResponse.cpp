@@ -18,17 +18,21 @@ int main(){try{
             if(pos+128>=next){a->consume(*q);display->push(*a,a->consumedFrames-last,(pos+128)/sr,mode);last=a->consumedFrames;next+=sr/30;}
         }
         a->consume(*q);display->push(*a,a->consumedFrames-last,1.7,mode);
-        const float pre=near(display->shown[3],75,sr),post=near(display->shown[4],75,sr);
-        require(pre>.8f,"PRE collision missing in response test");
+        const float post=near(display->maskPost,75,sr);
         // Policy: relative levels 0/-6/-12/-20/-24 dB map to
         // significant overlap scores 1/.844/.5/.074/0, independently of PRE normalisation.
         const float expected=reduction==0?1.f:reduction==6?.84375f:reduction==12?.5f:reduction==20?.074074f:0.f;
-        if(std::abs(post/pre-expected)>.025f){std::cerr<<sr<<" mode "<<mode<<" cut "<<reduction<<" scores "<<pre<<" "<<post<<" expected "<<expected<<'\n';return 1;}
+        if(std::abs(post-expected)>.025f){std::cerr<<sr<<" mode "<<mode<<" cut "<<reduction<<" scores "<<post<<" expected "<<expected<<'\n';return 1;}
         if(reduction>=20)require(post<.12f,"20+ dB actual cut still displays same red collision");
         const size_t peakBin=size_t(std::round(75*RelationAnalyzer::fftSize/sr));
         const auto& paired=display->paired;
         require(std::abs(paired[0][peakBin]-paired[2][peakBin])<.01,"BASS - KICK readout not calibrated");
         require(std::abs(paired[1][peakBin]-paired[0][peakBin]+reduction)<.3,"POST - PRE readout not calibrated");
+        if (post>=RelationAnalyzer::collisionThreshold) {
+            const auto [input,output,kick]=display->eventLevels[peakBin];
+            require(std::abs(input-kick)<.01 && std::abs(output-input+reduction)<.3,
+                    "Residual marker did not read levels from the same interval");
+        }
         ++cases;
     }
     // The plotted curve must match the audio transfer at and away from focus.
@@ -93,8 +97,8 @@ int main(){try{
             require(q->push(f),"Rate fixture queue overflow");
             if(n/800>lastTick){lastTick=n/800;a->consume(*q);const auto oldRevision=d->revision;const auto old=d->shown[0];d->pushAtRate(*a,a->consumedFrames-last,t,refreshHz);last=a->consumedFrames;
                 if(d->revision==oldRevision)require(old==d->shown[0],"Visible frame changed between selected refreshes");
-                if(t>.6&&t<1.6&&near(d->shown[3],75,48000)>=.12)pulseSeen=true;
-                if(t>3.45)require(near(d->shown[4],75,48000)<.12,"Slow display retains old POST collision after actual attenuation");
+                if(t>.6&&t<1.6&&near(d->maskPost,75,48000)>=.12)pulseSeen=true;
+                if(t>3.45)require(near(d->maskPost,75,48000)<.12,"Slow display retains old POST collision after actual attenuation");
                 revisionsAfterReady=d->revision;
             }
         }
@@ -104,44 +108,45 @@ int main(){try{
     }
     // A kick tail must not start a new event when its initial energy has
     // left the fast FFT. The processed bass returns after the kick body.
-    for (double sr:{44100.,48000.,96000.}) {
+    for (double sr:{44100.,48000.,96000.}) for (bool attenuate : {false,true}) {
         auto analyzer=std::make_unique<RelationAnalyzer>();
         auto queue=std::make_unique<AnalysisQueue>();
         analyzer->prepare(sr);
-        float prePeak=0, latePostPeak=0;
+        float bodyPeak=0, tailPeak=0;
         for(int n=0;n<int(1.5*sr);++n) {
             const double time=n/sr, age=std::fmod(time,.5);
             const float bass=float(.3*std::sin(2*pi*75*time));
             const float kick=float(.4*std::exp(-age/.035)*std::sin(2*pi*75*age));
-            const float wet=bass*float(.01+.99*std::clamp((age-.075)/.025,0.,1.));
+            const float wet=attenuate ? bass*float(.01+.99*std::clamp((age-.075)/.025,0.,1.)) : bass;
             AnalysisFrame frame;
             frame.pre={bass,bass};frame.post={wet,wet};frame.kick={kick,kick};
             require(queue->push(frame),"Decaying kick queue overflow");
             if(n%int(sr*.025)==0) {
                 analyzer->consume(*queue);
-                if(time>.5&&age<.2)prePeak=std::max(prePeak,near(analyzer->maskPre,75,sr));
-                if(time>.5&&age>.24)latePostPeak=std::max(latePostPeak,near(analyzer->maskPost,75,sr));
+                if(time>.5&&age<.2)bodyPeak=std::max(bodyPeak,near(analyzer->maskPost,75,sr));
+                if(time>.5&&age>.24)tailPeak=std::max(tailPeak,near(analyzer->maskPost,75,sr));
             }
         }
-        require(prePeak>=.12,"Kick body was lost while excluding its tail");
-        require(latePostPeak<.12,"Kick tail reopened a resolved POST conflict");
+        if (attenuate) require(tailPeak<.12,"Kick tail reopened a resolved POST conflict");
+        else require(bodyPeak>=.12,"Kick body was lost while excluding its tail");
     }
     // Musical use case: repeated short kicks, a sustained bass plus harmonic,
     // real attack/release and slow display. The 20 dB target is not assumed to
     // equal 20 dB throughout the transient: inspect actual processed spectra.
-    {
-        Engine e;e.prepare(48000);Settings s;s.glue=s.phase=false;s.unmaskDirect=true;s.unmaskAttenuationDb=20;s.unmaskTrack=false;s.unmaskFrequency=75;s.unmaskAttackMs=1;s.unmaskReleaseMs=500;
+    for (bool unmask : {false,true}) {
+        Engine e;e.prepare(48000);Settings s;s.glue=s.phase=false;s.unmask=unmask;s.unmaskDirect=true;s.unmaskAttenuationDb=20;s.unmaskTrack=false;s.unmaskFrequency=75;s.unmaskAttackMs=1;s.unmaskReleaseMs=500;
         auto a=std::make_unique<RelationAnalyzer>();auto q=std::make_unique<AnalysisQueue>();auto d=std::make_unique<SpectrumDisplay>();a->prepare(48000);
-        std::array<float,128> dry{},wet{},kick{};float* out[]{wet.data()};const float* side[]{kick.data()};uint64_t last=0;float worstPost=0,strongestPre=0;
+        std::array<float,128> dry{},wet{},kick{};float* out[]{wet.data()};const float* side[]{kick.data()};uint64_t last=0;float worstPost=0;
         for(int b=0;b<1500;++b){for(int n=0;n<128;++n){const double t=(b*128+n)/48000.,phase=std::fmod(t,.5);
             dry[size_t(n)]=wet[size_t(n)]=float(.4*std::sin(2*pi*75*t)+.08*std::sin(2*pi*150*t));
             kick[size_t(n)]=phase<.02?float(.4*std::sin(pi*phase/.02)*std::sin(2*pi*75*t)):0;}
             e.process(out,1,side,1,128,s);for(int n=0;n<128;++n){AnalysisFrame f;f.pre={dry[size_t(n)],dry[size_t(n)]};f.post={wet[size_t(n)],wet[size_t(n)]};f.kick={kick[size_t(n)],kick[size_t(n)]};q->push(f);}
             if(b%12==0){a->consume(*q);d->push(*a,a->consumedFrames-last,(b+1)*128/48000.,3);last=a->consumedFrames;
-                if(b>750){strongestPre=std::max(strongestPre,near(d->shown[3],75,48000));worstPost=std::max(worstPost,near(d->shown[4],75,48000));}}
+                if(b>750)worstPost=std::max(worstPost,near(d->maskPost,75,48000));}
         }
-        require(strongestPre>.8f&&worstPost<.95f,"Real repeated kick ducking still looks identical in PRE and POST");
-        std::cout<<"Repeated 20 ms kicks / actual 20 dB target / 4 fps: strongest PRE "<<strongestPre<<" worst steady POST "<<worstPost<<" (target and actual window attenuation distinguished)\n";
+        if (unmask) require(worstPost<.95f,"Real Unmask did not reduce repeated short kick overlap");
+        else require(worstPost>.8f,"Actual overlap missing in flat pass");
+        std::cout<<"Repeated 20 ms kicks / 4 fps / Unmask "<<unmask<<": worst steady POST "<<worstPost<<'\n';
     }
-    std::cout<<"PASS "<<cases<<" real UNMASK/PRE/POST severity cases at four rates; 20 ms events retained; old markers expire; output-trim cancellation detected\n";
+    std::cout<<"PASS "<<cases<<" real output severity cases at four rates; 20 ms events retained; old markers expire; output-trim cancellation detected\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

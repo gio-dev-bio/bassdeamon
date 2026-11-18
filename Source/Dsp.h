@@ -378,6 +378,10 @@ public:
     double learnProgress() const noexcept { return learner.progress(); }
     LearnResult learnResult() const noexcept { return learner.getResult(); }
     const Meters& getMeters() const noexcept { return meters; }
+    bool hasWetOutput() const noexcept {
+        return globalRamp.value() == 1 && monitorMix.value() == 0 && deltaMix < 1e-4
+            && !tube.isAuditioning();
+    }
     // Frozen adaptation/AGC values are part of the session state, not only UI parameters.
     using RuntimeState = std::array<double, 9>;
     RuntimeState runtimeState() const noexcept {
@@ -715,24 +719,6 @@ public:
             const double tubeGain=1+tube.wetMix()*(learnedTubeGain-1);
             if(tubeGain!=1)for(auto& v:x)v*=tubeGain;
             meters.tubeAgcDb=db(tubeGain);budget-=std::max(0.0,meters.tubeAgcDb);
-            // Measure the bass before Duck so the tracker still sees the
-            // resonance that caused the cut. Keep gain detection after Duck.
-            if (s.unmaskTrack) {
-                for (size_t band = 0; band < frequencies.size(); ++band) {
-                    const double left = focusBassFilters[band][0].tick(x[0]);
-                    double energy = left * left;
-                    if (channels == 2) {
-                        const double right = focusBassFilters[band][1].tick(x[1]);
-                        const double centre = (left + right) * .5;
-                        const double difference = (left - right) * .5;
-                        energy = linked ? .5 * (left * left + right * right)
-                                        : mid * centre * centre + side * difference * difference;
-                    } else if (!linked) {
-                        energy *= mid;
-                    }
-                    focusBassE[band] = follow(focusBassE[band], energy, bandA);
-                }
-            }
             if (runDuck) {
                 if (duckDepth > 0)
                     duckEnvelope = std::max(std::max(std::abs(k[0]),std::abs(k[1])),
@@ -785,6 +771,16 @@ public:
                 const double difference = (signal[0] - signal[1]) * .5;
                 return mid * centre * centre + side * difference * difference;
             };
+            // Auto Focus and gain detection share the input of Unmask. The
+            // tracker cannot chase bass energy that Duck has already removed.
+            if (s.unmaskTrack) {
+                for (size_t band = 0; band < frequencies.size(); ++band) {
+                    std::array<double, 2> filtered{};
+                    for (int c = 0; c < channels; ++c)
+                        filtered[c] = focusBassFilters[band][c].tick(beforeUnmask[c]);
+                    focusBassE[band] = follow(focusBassE[band], selectedPower(filtered), bandA);
+                }
+            }
             const auto applySelectedChange = [&](std::array<double, 2>& signal, double left, double right) {
                 if (channels == 1) {
                     signal[0] += mid * left;

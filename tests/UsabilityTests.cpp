@@ -70,7 +70,7 @@ int main(){try{
     s.glueAttackNote=8;s.unmaskAttackNote=8;
     e.process(out,1,nullptr,0,256,s,173);
     check(e.getMeters().attackMs==17&&e.getMeters().unmaskAttackMs==7,"legacy attack note affected SYNC attack");
-    // Measured PRE/POST collision maps must follow the actual selected signal.
+    // A strong input spectrum cannot create a residual on silent output.
     AnalysisQueue queue;RelationAnalyzer relation;relation.prepare(48000);
     for(size_t n=0;n<RelationAnalyzer::fftSize;++n){
         AnalysisFrame f;const float tone=float(.3*std::sin(2*pi*75*n/48000.));
@@ -78,7 +78,7 @@ int main(){try{
         check(queue.push(f),"collision fixture queue overflow");
     }
     relation.consume(queue);const size_t bin=size_t(std::round(75.*RelationAnalyzer::fftSize/48000.));
-    check(relation.maskPre[bin]>.8f&&relation.maskPost[bin]==0,"PRE/POST collision maps ignore attenuation");
+    check(relation.pre[bin]>-12&&relation.maskPost[bin]==0,"POST detected a collision from the input spectrum");
     check(RelationAnalyzer::mask(-120,-12)==0&&RelationAnalyzer::mask(-12,-120)==0,"silence marked as collision");
     // Learn must reach its decision across short looping transport seeks.
     e.prepare(48000);e.startLearn();s=Settings{};s.glue=s.unmask=false;

@@ -50,6 +50,7 @@ public:
         if(next!=target){target=next;remaining=fadeLength;step=(target-mix)/remaining;}
     }
     bool active() const noexcept { return running||target>0||mix>0; }
+    bool isAuditioning() const noexcept { return mix * auditionMix >= 1e-4; }
     double wetMix() const noexcept { return mix; }
     double addedPower() const noexcept { return residualPower; }
     void frame(std::array<double,2>& x,int count) noexcept {

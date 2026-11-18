@@ -113,7 +113,7 @@ private:
     bool compareScopePre=false;
     struct Choice {juce::ComboBox box;std::unique_ptr<State::ComboBoxAttachment> attachment;};
     std::vector<std::unique_ptr<Choice>> choices;
-    std::array<float,bassdeamon::RelationAnalyzer::bins> visualPre{},visualPost{},visualKick{},visualMaskPre{},visualMaskPost{};
+    std::array<float,bassdeamon::RelationAnalyzer::bins> visualPre{},visualPost{},visualKick{};
     juce::Slider glueAttackSlider,glueReleaseSlider;
     std::unique_ptr<State::SliderAttachment> glueAttackAttachment,glueReleaseAttachment;
     Knob *unmaskAttackKnob=nullptr,*unmaskReleaseKnob=nullptr,*unmaskWidthKnob=nullptr;

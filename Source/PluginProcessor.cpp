@@ -282,17 +282,22 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
         const int channels=bass.getNumChannels();
         std::array<bassdeamon::PhaseTap,chunkSize> phaseTap{};
         const bool phaseScope=phaseScopeEnabled.load(std::memory_order_relaxed) && settings.active && settings.phase && sideChannels>0;
+        const bool normalOutput = !settings.auditionDry && !settings.delta
+            && !(settings.tube.enabled && settings.tube.audition);
         for(int offset=0;offset<bass.getNumSamples();offset+=chunkSize){
             const int count=std::min(chunkSize,bass.getNumSamples()-offset);
             float* output[2]{};const float* reference[2]{};
             for(int c=0;c<channels;++c){output[c]=bass.getWritePointer(c)+offset;std::copy_n(output[c],count,before[size_t(c)].begin());}
             for(int c=0;c<sideChannels;++c)reference[c]=kick[c]+offset;
+            const bool wetAtStart = normalOutput && engine.hasWetOutput();
             engine.process(output,channels,sideChannels>0?reference:nullptr,sideChannels,count,settings,bpm,phaseScope?phaseTap.data():nullptr);
+            const bool wetOutput = wetAtStart && engine.hasWetOutput();
             for(int n=0;n<count;++n){bassdeamon::AnalysisFrame frame;
                 for(int c=0;c<2;++c){const int source=std::min(c,channels-1);
                     frame.pre[size_t(c)]=before[size_t(source)][size_t(n)];frame.post[size_t(c)]=output[source][n];
                     if(sideChannels>0)frame.kick[size_t(c)]=reference[std::min(c,sideChannels-1)][n];}
                 frame.phaseValid=phaseScope;
+                frame.wetOutput=wetOutput;
                 if (phaseScope) frame.phase={phaseTap[n].before,phaseTap[n].after};
                 frame.beat=ppq>=0?ppq+(offset+n)*tempo.load(std::memory_order_relaxed)/(60*getSampleRate()):-1;
                 analysisQueue.push(frame);

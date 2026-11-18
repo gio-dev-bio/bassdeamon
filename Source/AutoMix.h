@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Analyzer.h"
 #include "Dsp.h"
 #include "KickEqLearn.h"
 #include "StereoPhaseAnalysis.h"
@@ -198,26 +199,7 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
         propose("phase.invert", settings.invert, alignment.invert);
         settings.phase = true; settings.delayMs = alignment.delayMs; settings.invert = alignment.invert;
     }
-    const double fraction = *strongest / bassEnergy;
-    if (fraction > .012) {
-        const double focus = bandFrequencies[size_t(strongest - overlap.begin())];
-        const double cut = std::clamp(1.5 + fraction * 14, 2., 6.);
-        const double release = std::clamp(12000 / bpm, 50., 160.);
-        propose("unmask.on", settings.unmask, 1);
-        propose("unmask.controlDb", settings.unmaskDirect, 1);
-        if (!settings.unmaskTrack)
-            propose("unmask.frequency", settings.unmaskFrequency, focus);
-        propose("unmask.width", settings.unmaskWidth, .5);
-        propose("unmask.attenuation", settings.unmaskAttenuationDb, cut);
-        propose("unmask.attack", settings.unmaskAttackMs, 5);
-        propose("unmask.release", settings.unmaskReleaseMs, release);
-        propose("unmask.timing", settings.unmaskSync, 0);
-        settings.unmask = settings.unmaskDirect = true; settings.unmaskSync = false;
-        if (!settings.unmaskTrack) settings.unmaskFrequency = focus;
-        settings.unmaskWidth = .5;
-        settings.unmaskAttenuationDb = cut; settings.unmaskAttackMs = 5; settings.unmaskReleaseMs = release;
-    }
-    if (!settings.tube.enabled && result.reliableKick && fraction > .035 && overlap[8] + overlap[9] < *strongest * .2) {
+    if (!settings.tube.enabled && result.reliableKick && *strongest / bassEnergy > .035 && overlap[8] + overlap[9] < *strongest * .2) {
         propose("tube.on", 0, 1);
         propose("tube.drive", settings.tube.driveDb, 3);
         propose("tube.amount", settings.tube.amount, .15);
@@ -266,25 +248,86 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
 
     settings.active = true;
     settings.auditionDry = settings.matchEnabled = settings.delta = settings.tube.audition = false;
-    Engine preview;
-    preview.prepare(rate);
-    preview.restoreRuntime(runtime);
-    Biquad beforeBand, afterBand, kickBand;
-    const double focus = bandFrequencies[size_t(strongest - overlap.begin())];
-    for (auto* filter : {&beforeBand, &afterBand, &kickBand}) filter->bandpass(focus, 2, rate);
-    double wetEnergy = 0, before = 0, after = 0, kickEnergy = 0;
     constexpr size_t blockSize = 256;
     std::array<float,blockSize> left{}, right{}, kickLeft{}, kickRight{};
     float* output[]{left.data(), right.data()};
     const float* reference[]{kickLeft.data(), kickRight.data()};
-    for (size_t start = 0; start < audio.size(); start += blockSize) {
-        const auto count = std::min(blockSize, audio.size() - start);
-        for (size_t n = 0; n < count; ++n) {
-            const auto& frame = audio[start + n];
-            left[n] = frame.left; right[n] = frame.right;
-            kickLeft[n] = frame.kickLeft; kickRight[n] = frame.kickRight;
+    const auto render = [&](const Settings& pass, auto&& measure) {
+        Engine engine;
+        engine.prepare(rate);
+        engine.restoreRuntime(runtime);
+        for (size_t start = 0; start < audio.size(); start += blockSize) {
+            const auto count = std::min(blockSize, audio.size() - start);
+            for (size_t n = 0; n < count; ++n) {
+                const auto& frame = audio[start+n];
+                left[n] = frame.left; right[n] = frame.right;
+                kickLeft[n] = frame.kickLeft; kickRight[n] = frame.kickRight;
+            }
+            engine.process(output, channels, reference, 2, int(count), pass, bpm);
+            measure(start,count);
         }
-        preview.process(output, channels, reference, 2, int(count), settings, bpm);
+    };
+
+    // Render the proposed upstream chain, including Duck, into the point
+    // where Unmask receives audio. Downstream settings are neutral for this pass.
+    auto beforeUnmask = settings;
+    beforeUnmask.unmask = beforeUnmask.unmaskTrack = beforeUnmask.subMono = false;
+    beforeUnmask.outputDb = beforeUnmask.balanceTrimDb = 0;
+    constexpr size_t focusBands = 10;
+    std::array<double,focusBands> remaining{};
+    double bassAfterDuckEnergy=0;
+    std::array<std::array<std::array<Biquad,2>,2>,focusBands> residualFilters{};
+    for (size_t band=0;band<focusBands;++band)
+        for (auto& channel : residualFilters[band])
+            for (auto& filter : channel) filter.bandpass(bandFrequencies[band],2,rate);
+    render(beforeUnmask,[&](size_t,size_t count) {
+        for (int channel=0;channel<channels;++channel)
+            for (size_t n=0;n<count;++n)
+                bassAfterDuckEnergy+=double(output[channel][n])*output[channel][n]/channels;
+        for (size_t band=0;band<focusBands;++band) {
+            for (int channel=0;channel<channels;++channel) {
+                auto& filters=residualFilters[band][channel];
+                double bassPower=0, kickPower=0, joint=0;
+                for (size_t n=0;n<count;++n) {
+                    const double b=filters[0].tick(output[channel][n]);
+                    const double k=filters[1].tick(reference[channel][n]);
+                    bassPower+=b*b;
+                    kickPower+=k*k;
+                    joint+=std::min(b*b,k*k);
+                }
+                const float score=RelationAnalyzer::mask(float(db(std::sqrt(bassPower/count))),
+                                                         float(db(std::sqrt(kickPower/count))));
+                if (score>=RelationAnalyzer::collisionThreshold) remaining[band]+=joint/channels;
+            }
+        }
+    });
+    const auto strongestRemaining=std::max_element(remaining.begin(),remaining.end());
+    const double fraction=bassAfterDuckEnergy>1e-8 ? *strongestRemaining/bassAfterDuckEnergy : 0;
+    const double unmaskFocus=bandFrequencies[size_t(strongestRemaining-remaining.begin())];
+    if (fraction>.012) {
+        const double cut=std::clamp(1.5 + fraction * 14, 2., 6.);
+        const double release=std::clamp(12000 / bpm, 50., 160.);
+        propose("unmask.on", settings.unmask, 1);
+        propose("unmask.controlDb", settings.unmaskDirect, 1);
+        if (!settings.unmaskTrack)
+            propose("unmask.frequency", settings.unmaskFrequency, unmaskFocus);
+        propose("unmask.width", settings.unmaskWidth, .5);
+        propose("unmask.attenuation", settings.unmaskAttenuationDb, cut);
+        propose("unmask.attack", settings.unmaskAttackMs, 5);
+        propose("unmask.release", settings.unmaskReleaseMs, release);
+        propose("unmask.timing", settings.unmaskSync, 0);
+        settings.unmask = settings.unmaskDirect = true; settings.unmaskSync = false;
+        if (!settings.unmaskTrack) settings.unmaskFrequency = unmaskFocus;
+        settings.unmaskWidth = .5;
+        settings.unmaskAttenuationDb = cut; settings.unmaskAttackMs = 5; settings.unmaskReleaseMs = release;
+    }
+
+    // This comparison describes the full Auto Mix proposal against its input.
+    Biquad beforeBand, afterBand, kickBand;
+    const double focus = fraction>.012 ? unmaskFocus : bandFrequencies[size_t(strongest-overlap.begin())];
+    for (auto* filter : {&beforeBand, &afterBand, &kickBand}) filter->bandpass(focus, 2, rate);
+    double wetEnergy = 0, before = 0, after = 0, kickEnergy = 0;
+    render(settings,[&](size_t start,size_t count) {
         for (size_t n = 0; n < count; ++n) {
             const auto& frame = audio[start + n];
             const double l = left[n], r = channels == 1 ? l : right[n];
@@ -296,7 +339,7 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
             after += std::min(w*w, k*k);
             kickEnergy += k*k;
         }
-    }
+    });
     if (wetEnergy > 1e-8) {
         const double delta = 10 * std::log10(wetEnergy / bassEnergy);
         result.dryGainDb = std::min(0., delta);
@@ -314,24 +357,18 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
     balanceEdges[1]=std::clamp(balanceEdges[1],balanceEdges[0]+5.,150.);
     balanceEdges[2]=std::clamp(balanceEdges[2],balanceEdges[1]+5.,300.);
     result.balanceEdges=balanceEdges;result.balanceBaseTrimDb=originalSettings.balanceTrimDb;
-    Engine baseline;baseline.prepare(rate);baseline.restoreRuntime(runtime);
     std::array<std::array<std::array<Biquad,2>,2>,2> filters{};
     for(size_t band=0;band<2;++band)for(size_t source=0;source<2;++source)for(auto& filter:filters[band][source]) {
         const double lo=balanceEdges[band],hi=balanceEdges[band+1],centre=std::sqrt(lo*hi);
         filter.bandpass(centre,centre/(hi-lo),rate);
     }
     std::array<std::array<double,2>,2> energy{};double sumPeak=0;
-    std::array<float,256> l{},r{},kl{},kr{};
-    for(size_t start=0;start<audio.size();start+=256) {
-        const size_t count=std::min(size_t(256),audio.size()-start);
-        for(size_t n=0;n<count;++n){const auto& f=audio[start+n];l[n]=f.left;r[n]=f.right;kl[n]=f.kickLeft;kr[n]=f.kickRight;}
-        float* outputs[]{l.data(),r.data()};const float* kicks[]{kl.data(),kr.data()};
-        baseline.process(outputs,channels,kicks,2,int(count),originalSettings,bpm);
+    render(originalSettings,[&](size_t,size_t count) {
         for(size_t n=0;n<count;++n)for(size_t c=0;c<size_t(channels);++c) {
-            const double b=c==0?l[n]:r[n],k=c==0?kl[n]:kr[n];sumPeak=std::max(sumPeak,std::abs(b+k));
+            const double b=output[c][n],k=reference[c][n];sumPeak=std::max(sumPeak,std::abs(b+k));
             for(size_t band=0;band<2;++band){const double bv=filters[band][0][c].tick(b),kv=filters[band][1][c].tick(k);energy[band][0]+=bv*bv;energy[band][1]+=kv*kv;}
         }
-    }
+    });
     result.balanceValid=std::all_of(energy.begin(),energy.end(),[](const auto& band){return band[0]>1e-8&&band[1]>1e-8;});
     if(result.balanceValid){result.balanceSubDb=10*std::log10(energy[0][0]/energy[0][1]);result.balanceBodyDb=10*std::log10(energy[1][0]/energy[1][1]);}
     result.sumPeakDb=db(sumPeak);

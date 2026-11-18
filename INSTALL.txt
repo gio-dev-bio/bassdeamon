@@ -1,4 +1,4 @@
-BASSDEAMON 1.0.11 — VST3 macOS Universal (Intel e Apple Silicon)
+BASSDEAMON 1.0.12 — VST3 macOS Universal (Intel e Apple Silicon)
 
 1. Chiudi Cubase.
 2. Estrai tutto lo ZIP e fai doppio clic su Installa_Aggiorna.command.
@@ -18,14 +18,14 @@ BASSDEAMON 1.0.11 — VST3 macOS Universal (Intel e Apple Silicon)
    Il risultato è statico fino a una nuova analisi o a una modifica manuale.
 
 La GUI mostra:
-- spettro selezionabile con PRE / POST, kick di riferimento e conflitti spettrali significativi con marcatori rossi locali;
+- spettro PRE per il confronto con l'ingresso e POST con le sole collisioni residue fra il kick e il basso processato;
 - intervallo libero in Hz con FROM / TO, modificabile trascinando o digitando i valori;
 - Scope in sync a 1/4 sulla somma visiva kick+basso POST, con Mono o Stereo, HOLD e COMPARE PRE. MONO CHECK misura il solo basso processato;
 - GLUE: AUTO, MS o SYNC; UNMASK: MS o SYNC. Attack sempre in ms; solo Release in note con SYNC.
 - Soft Tube opzionale prima di UNMASK, spento inizialmente, con oversampling selezionabile 2x o 4x;
 - VU della gain reduction GLUE;
 - AGC indipendente e Lock per ogni modulo;
-- AUTO FOCUS / HOLD FOCUS e focus manuale per UNMASK;
+- AUTO FOCUS di UNMASK sul basso dopo DUCK, HOLD FOCUS e focus manuale;
 - UNDO / REDO per modifiche e starting point; A/B, output trim e peak indicator.
 - DSP CPU: percentuale del tempo disponibile per il callback audio; ANALYZER in ms separati; OVR conta i superamenti del budget.
 
