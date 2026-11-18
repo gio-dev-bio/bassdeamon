@@ -50,10 +50,9 @@ jobs:
         run: |
           package="$PWD/BassDeamon-1.0.10-macOS-Universal.zip"
           (cd build/BassDeamon_artefacts/Release/VST3 && zip -Xqr "$package" BassDeamon.vst3)
-          bash -n install.sh
           bash -n Installa_Aggiorna.command
           chmod +x Installa_Aggiorna.command
-          zip -Xj "$package" INSTALL.txt install.sh Installa_Aggiorna.command docs/RELEASE_1.0.10_IT.md BUILD-COMMIT.txt BUILD-SHA256.txt GUI-Preview.png GUI-Raw.png GUI-Raw-Advanced.png GUI-Duck-Raw.png GUI-AutoMix.png
+          zip -Xj "$package" INSTALL.txt Installa_Aggiorna.command docs/RELEASE_1.0.10_IT.md BUILD-COMMIT.txt BUILD-SHA256.txt GUI-Preview.png GUI-Raw.png GUI-Raw-Advanced.png GUI-Duck-Raw.png GUI-AutoMix.png
           unzip -t "$package"
           unzip -q "$package" -d package-verification
           bundle=package-verification/BassDeamon.vst3
@@ -64,16 +63,18 @@ jobs:
           source=package-verification/BassDeamon.vst3
           installed=/Library/Audio/Plug-Ins/VST3/BassDeamon.vst3
           test ! -e "$installed" && test ! -L "$installed"
+          test -x package-verification/Installa_Aggiorna.command
+          test ! -e package-verification/install.sh
           trap 'sudo /bin/rm -rf -- "$installed"' EXIT
           xattr -w com.apple.quarantine '0081;00000000;InstallerTest;' "$source/Contents/MacOS/BassDeamon"
-          /bin/bash package-verification/Installa_Aggiorna.command </dev/null
+          package-verification/Installa_Aggiorna.command </dev/null
           test -x "$installed/Contents/MacOS/BassDeamon"
           attributes="$(sudo xattr -r "$installed")"
           [[ "$attributes" != *com.apple.quarantine* ]]
           codesign --verify --strict "$installed"
           sudo touch "$installed/Contents/old-version-test"
           xattr -r -d com.apple.quarantine "$source"
-          /bin/bash package-verification/Installa_Aggiorna.command </dev/null
+          package-verification/Installa_Aggiorna.command </dev/null
           test ! -e "$installed/Contents/old-version-test"
           cmp "$source/Contents/MacOS/BassDeamon" "$installed/Contents/MacOS/BassDeamon"
           codesign --verify --strict "$installed"
