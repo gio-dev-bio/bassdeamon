@@ -69,7 +69,17 @@ private:
     std::vector<std::unique_ptr<Knob>> knobs;
     std::vector<std::unique_ptr<Switch>> switches;
     bassdeamon::RelationAnalyzer analyzer;
-    std::mutex analysisMutex;
+    struct AnalyzerPublication {
+        bassdeamon::RelationAnalyzer::Frame frame;
+        bassdeamon::BeatScope scope;
+        uint64_t revision=0, samples=0;
+        double rate=48000, milliseconds=0;
+        bool bypassed=false;
+    };
+    AnalyzerPublication publication;
+    bassdeamon::RelationAnalyzer::Frame receivedFrame;
+    std::mutex publicationMutex;
+    void publishAnalysis();
     std::thread analysisThread;
     std::atomic<bool> stopAnalysis{false};
     uint64_t analysisRevision=0, displayedAnalysisRevision=0, displayedSamples=0;
@@ -141,7 +151,7 @@ private:
     int autoSide = 0;
     bool autoResultShown = false;
     double analyzerMilliseconds=0;
-    double lastAnalysisTime=0, lastAnalysisPoll=-1;
+    double lastAnalysisTime=0, lastMetersPoll=-1;
     bool staleAnalysis=false;
     juce::ComboBox presets,ceiling;
     std::unique_ptr<State::ComboBoxAttachment> ceilingAttachment;

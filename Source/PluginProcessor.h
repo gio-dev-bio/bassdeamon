@@ -33,7 +33,7 @@ public:
     void loadStartingPoint(int preset);
     double analyzerRefreshHz() const noexcept { return visualAnalyzerHz.load(std::memory_order_relaxed); }
     void setAnalyzerRefreshHz(double hz) noexcept {
-        visualAnalyzerHz.store(float(std::isfinite(hz) ? std::round(std::clamp(hz,1.,30.) * 10) / 10 : 8.),
+        visualAnalyzerHz.store(float(std::isfinite(hz) ? std::round(std::clamp(hz,1.,60.) * 10) / 10 : 30.),
                                std::memory_order_relaxed);
     }
     bassdeamon::UnmaskResponse consumeUnmaskResponse() noexcept;
@@ -143,7 +143,7 @@ private:
     std::array<bassdeamon::UnmaskResponse, 128> responseFrames{};
     std::atomic<bool> rawTheme{true};
     std::atomic<int> visualSpectrumView{1};
-    std::atomic<float> visualAnalyzerHz{8};
+    std::atomic<float> visualAnalyzerHz{30};
     int abSlot = 0; // message-thread only; A/B survives editor close/reopen.
     std::atomic<bool> restoreRequested{false};
     std::atomic<bool> historyResetRequested{false};

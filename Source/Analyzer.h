@@ -138,14 +138,78 @@ public:
     static constexpr size_t fftSize=16384,bins=fftSize/2+1,waveSize=512,fastSize=8192,fastBins=fastSize/2+1;
     using Spectrum=std::array<float,bins>;
     using FastSpectrum=std::array<float,fastBins>;
+    // 250 Hz at a sample rate of at least 8 kHz fits in this readout.
+    static constexpr size_t readoutBins=fftSize/32+1;
+    using LevelTriplet=std::array<float,3>;
+    using CollisionLevels=std::array<std::array<LevelTriplet,readoutBins>,2>;
     BeatScope scope;
     Spectrum pre{},post{},kick{},maskPre{},maskPost{};
     uint64_t discontinuities=0,consumedFrames=0;
     std::array<float,waveSize> wavePre{},wavePost{},waveKick{},sumPre{},sumPost{};
+    struct Frame {
+        Spectrum pre{}, post{}, kick{}, maskPre{}, maskPost{};
+        CollisionLevels eventLevels{};
+        bool hasSpectrum=false;
+        double rate=48000;
+        double sampleRate() const noexcept { return rate; }
+        bool ready() const noexcept { return hasSpectrum; }
+    };
+    void copyFrame(Frame& frame) const noexcept {
+        frame.pre=pre; frame.post=post; frame.kick=kick;
+        frame.maskPre=maskPre; frame.maskPost=maskPost; frame.eventLevels=eventLevels; frame.hasSpectrum=ready(); frame.rate=rate;
+    }
+    static constexpr double collisionMinHz=30, collisionMaxHz=250;
+    static constexpr float collisionThreshold=.12f;
+    CollisionLevels eventLevels{};
+    struct CollisionBand {
+        size_t first=0, last=0, peak=0;
+        double hz=0;
+        float strength=0;
+    };
+    template<class Visitor>
+    static void visitCollisionBands(const Spectrum& mask,const Spectrum& levels,double sampleRate,
+                                    double minimum,double maximum,Visitor&& visit) noexcept {
+        minimum=std::max(minimum,collisionMinHz);
+        maximum=std::min(maximum,collisionMaxHz);
+        if (maximum<minimum) return;
+        const double binHz=sampleRate/fftSize;
+        const auto firstBin=std::max(size_t(1),size_t(std::ceil(minimum/binHz)));
+        const auto lastBin=std::min(bins-2,size_t(std::floor(maximum/binHz)));
+        const double mergeHz=std::max(12.,3*binHz);
+        if (firstBin>lastBin) return;
+        size_t bin=firstBin;
+        while (bin<=lastBin) {
+            if (mask[bin]<collisionThreshold) { ++bin; continue; }
+            CollisionBand band{bin,bin,bin,0,mask[bin]};
+            // A gap narrower than the resolution of the window is still
+            // one band. Measure the spacing in Hz, independent of zoom.
+            while (++bin<=lastBin) {
+                if ((bin-band.last)*binHz>mergeHz) break;
+                if (mask[bin]<collisionThreshold) continue;
+                band.last=bin;
+                if (levels[bin]>levels[band.peak]) band.peak=bin;
+                band.strength=std::max(band.strength,mask[bin]);
+            }
+            const size_t b=band.peak;
+            const double a=levels[b-1],v=levels[b],c=levels[b+1],den=a-2*v+c;
+            const double offset=den< -1e-12?std::clamp(.5*(a-c)/den,-.5,.5):0;
+            band.hz=std::clamp((b+offset)*binHz, minimum,maximum);
+            visit(band);
+        }
+    }
     void prepare(double sr) noexcept {
         rate=sr;scope.prepare(sr);haveSequence=false;discontinuities=0;consumedFrames=0;resetAnalysis();
         wavePre.fill(0);wavePost.fill(0);waveKick.fill(0);sumPre.fill(0);sumPost.fill(0);
         hop=std::max(size_t(256),size_t(sr*.010));
+        if (!fftPrepared) {
+            for(size_t i=0;i<fftSize/2;++i) fftRoots[i]=std::polar(1.,-2*pi*i/fftSize);
+            for(size_t i=1,j=0;i<fftSize;++i){
+                size_t bit=fftSize>>1;
+                for(;j&bit;bit>>=1)j^=bit;
+                fftOrder[i]=uint16_t(j^=bit);
+            }
+            fftPrepared=true;
+        }
         windowSum=fastWindowSum=0;
         for(size_t i=0;i<fftSize;++i){window[i]=blackmanHarris(i,fftSize);windowSum+=window[i];}
         for(size_t i=0;i<fastSize;++i){fastWindow[i]=blackmanHarris(i,fastSize);fastWindowSum+=fastWindow[i];}
@@ -189,13 +253,12 @@ public:
     struct Summary {int regions=0;double strongestHz=0;};
     Summary summary(bool output) const noexcept {
         const auto& values=output?post:pre;const auto& map=output?maskPost:maskPre;
-        Summary result;bool inside=false;float loudest=-121;size_t strongest=0;
-        for(size_t b=1;b+1<bins;++b){const bool active=map[b]>=.12f;
-            if(active&&!inside)++result.regions;inside=active;
-            if(active&&values[b]>loudest){loudest=values[b];strongest=b;}}
-        if(strongest){const double a=values[strongest-1],v=values[strongest],c=values[strongest+1],den=a-2*v+c;
-            const double offset=std::abs(den)>1e-12?std::clamp(.5*(a-c)/den,-.5,.5):0;
-            result.strongestHz=(double(strongest)+offset)*rate/fftSize;}
+        Summary result;
+        float loudest=-121;
+        visitCollisionBands(map,values,rate,collisionMinHz,collisionMaxHz,[&](const CollisionBand& band){
+            ++result.regions;
+            if (values[band.peak]>loudest) { loudest=values[band.peak]; result.strongestHz=band.hz; }
+        });
         return result;
     }
 private:
@@ -209,7 +272,7 @@ private:
         // Leave the old ring slots alone to avoid a full-size stack temporary.
         count=lastCount=lastFastCount=0;referenceDb=-120;
         pre.fill(-120);post.fill(-120);kick.fill(-120);maskPre.fill(0);maskPost.fill(0);
-        recentPre.fill(0);recentPost.fill(0);
+        recentCollision={};
         for(auto& stream:channelLevels)for(auto& channel:stream)channel.fill(-120);
         for(auto& stream:fastLevels)for(auto& channel:stream)channel.fill(-120);
     }
@@ -250,14 +313,25 @@ private:
         referenceDb=active[2];
         const double elapsed=lastFastCount?double(count-lastFastCount)/rate:double(hop)/rate;
         const float decay=float(std::exp(-elapsed/.12));
-        for(size_t b=0;b<fastBins;++b)for(size_t t=0;t<2;++t){float shared=0,event=0;
-            for(size_t c=0;c<2;++c){const float common=std::sqrt(fastSupport[t][c][b]*fastSupport[2][c][b]);
-                shared=std::max(shared,common);event=std::max(event,common*coincidence[t][c]*mask(fastLevels[t][c][b],fastLevels[2][c][b]));}
-            auto& recent=t==0?recentPre[b]:recentPost[b];
-            // A continuing bass has changed note (or panning): discard obsolete
-            // frequency support. A finished short kick may retain its recent hit.
-            if(active[t]>-110&&active[2]>-110&&shared<.02f)recent=0;
-            else recent=std::max(recent*decay,event);
+        float confidence=0;
+        for (size_t stream=0;stream<2;++stream) for (size_t channel=0;channel<2;++channel) {
+            for (size_t b=0;b<fastBins;++b) {
+                const float common=std::sqrt(fastSupport[stream][channel][b]*fastSupport[2][channel][b]);
+                const float event=common*coincidence[stream][channel]*
+                    mask(fastLevels[stream][channel][b],fastLevels[2][channel][b]);
+                currentCollision[stream][channel][b]=event;
+                confidence=std::max(confidence,event);
+            }
+        }
+        if (confidence>=collisionThreshold) {
+            recentCollision=currentCollision;
+            measuredFastLevels=fastLevels;
+        } else {
+            // Retain one short kick as one frame. Independent peak holds
+            // per band would accumulate collisions from different notes.
+            for (auto& stream : recentCollision)
+                for (auto& channel : stream)
+                    for (auto& score : channel) score*=decay;
         }
     }
     void updateMask() noexcept {
@@ -269,16 +343,30 @@ private:
             if(hz<20||hz>20000)continue;
             const double position=double(b)*fastSize/fftSize;const size_t lo=std::min(fastBins-1,size_t(position)),hi=std::min(fastBins-1,lo+1);
             const float fraction=float(position-double(lo));
-            for(size_t t=0;t<2;++t){float fine=0;
-                for(size_t c=0;c<2;++c) {
-                    const float prominence=std::max(channelLevels[t][c][b]-loudest[t][c],
-                                                    channelLevels[2][c][b]-loudest[2][c]);
+            for (size_t stream=0;stream<2;++stream) {
+                float score=0;
+                size_t measuredChannel=0;
+                for (size_t channel=0;channel<2;++channel) {
+                    const auto& levels=channelLevels[stream][channel];
+                    const auto& kickLevels=channelLevels[2][channel];
+                    const float prominence=std::max(levels[b]-loudest[stream][channel],
+                                                    kickLevels[b]-loudest[2][channel]);
                     const float weight=std::clamp((prominence+36.f)/16.f,0.f,1.f);
-                    fine=std::max(fine,weight*std::sqrt(fineSupport[t][c][b]*fineSupport[2][c][b]));
+                    const float fine=weight*std::sqrt(fineSupport[stream][channel][b]*fineSupport[2][channel][b]);
+                    const auto& recent=recentCollision[stream][channel];
+                    const float event=recent[lo]+fraction*(recent[hi]-recent[lo]);
+                    if (const float combined=std::min(fine,event);combined>score) {
+                        score=combined;
+                        measuredChannel=channel;
+                    }
                 }
-                const auto& recent=t==0?recentPre:recentPost;
-                const float event=recent[lo]+fraction*(recent[hi]-recent[lo]);
-                (t==0?maskPre[b]:maskPost[b])=std::min(fine,event);
+                (stream==0?maskPre[b]:maskPost[b])=score;
+                if (score>=collisionThreshold && hz>=collisionMinHz && hz<=collisionMaxHz && b<readoutBins) {
+                    for (size_t signal=0;signal<3;++signal) {
+                        const auto& levels=measuredFastLevels[signal][measuredChannel];
+                        eventLevels[stream][b][signal]=levels[lo]+fraction*(levels[hi]-levels[lo]);
+                    }
+                }
             }
         }
     }
@@ -311,24 +399,44 @@ private:
         }
     }
     void analyze(int stream,Spectrum& destination,bool fast=false) noexcept {
-        powers.fill(0);
-        const size_t length=fast?fastSize:fftSize,valid=std::min(count,length),numBins=length/2+1;
+        const size_t length=fast?fastSize:fftSize, numBins=length/2+1;
         const double sum=fast?fastWindowSum:windowSum;
-        for(size_t channel=0;channel<2;++channel){
-            bool nonzero=false;
-            for(size_t i=0;i<length;++i){double sample=0;if(i>=length-valid){const auto& f=frames[(count-valid+i-(length-valid))%fftSize];
-                sample=stream==0?f.pre[channel]:stream==1?f.post[channel]:f.kick[channel];}
-                if(fast)sample*=kickGate[i];
-                nonzero|=sample!=0;work[i]=sample*(fast?fastWindow[i]:window[i]);}
-            if(nonzero){
-                for(size_t i=1,j=0;i<length;++i){size_t bit=length>>1;for(;j&bit;bit>>=1)j^=bit;j^=bit;if(i<j)std::swap(work[i],work[j]);}
-                for(size_t stage=2;stage<=length;stage<<=1){const auto step=std::polar(1.0,-2*pi/stage);
-                    for(size_t base=0;base<length;base+=stage){std::complex<double> w{1,0};for(size_t j=0;j<stage/2;++j){const auto u=work[base+j],v=w*work[base+j+stage/2];work[base+j]=u+v;work[base+j+stage/2]=u-v;w*=step;}}}
+        const double scale=1/(sum*sum);
+        bool nonzero=false;
+        for (size_t i=0;i<length;++i) {
+            const auto& frame=frames[(count-length+i)%fftSize];
+            const auto& stereo=stream==0?frame.pre:stream==1?frame.post:frame.kick;
+            const double weight=fast?fastWindow[i]*kickGate[i]:window[i];
+            const auto sample=std::complex<double>(stereo[0]*weight,stereo[1]*weight);
+            nonzero|=sample.real()!=0 || sample.imag()!=0;
+            work[fast?fftOrder[i]>>1:fftOrder[i]]=sample;
+        }
+        if (nonzero) {
+            for (size_t stage=2;stage<=length;stage<<=1) {
+                const size_t rootStep=fftSize/stage;
+                for (size_t base=0;base<length;base+=stage)
+                    for (size_t j=0;j<stage/2;++j) {
+                        const auto u=work[base+j], z=work[base+j+stage/2], w=fftRoots[j*rootStep];
+                        const std::complex<double> v(w.real()*z.real()-w.imag()*z.imag(),
+                                                     w.real()*z.imag()+w.imag()*z.real());
+                        work[base+j]=u+v;work[base+j+stage/2]=u-v;
+                    }
             }
-            for(size_t b=0;b<numBins;++b){const double scale=(b==0||b==length/2)?1:2;
-                const double power=std::norm(work[b])*scale*scale/(sum*sum);const float level=float(10*std::log10(std::max(1e-12,power)));
-                if(fast)fastLevels[size_t(stream)][channel][b]=level;else channelLevels[size_t(stream)][channel][b]=level;
-                powers[b]+=.5*power;}
+        }
+        const auto level=[](double power){return float(10*std::log10(std::max(1e-12,power)));};
+        for (size_t b=0;b<numBins;++b) {
+            const auto plus=work[b],minus=std::conj(work[(length-b)%length]);
+            const double normalization=(b==0||b==length/2)?.25*scale:scale;
+            const double left=std::norm(plus+minus)*normalization;
+            const double right=std::norm(plus-minus)*normalization;
+            const auto t=size_t(stream);
+            if (fast) {fastLevels[t][0][b]=level(left);fastLevels[t][1][b]=level(right);}
+            else {
+                channelLevels[t][0][b]=level(left);channelLevels[t][1][b]=level(right);
+                destination[b]=level(.5*(left+right));
+            }
+        }
+        for (size_t channel=0;channel<2;++channel) {
             if(fast){
                 auto& levels=fastLevels[size_t(stream)][channel];auto& support=fastSupport[size_t(stream)][channel];
                 buildSupport(levels,support,fastSize);
@@ -342,17 +450,19 @@ private:
             }
             else buildSupport(channelLevels[size_t(stream)][channel],fineSupport[size_t(stream)][channel],fftSize);
         }
-        if(!fast)for(size_t b=0;b<bins;++b)destination[b]=float(10*std::log10(std::max(1e-12,powers[b])));
     }
     double rate=48000,windowSum=1,fastWindowSum=1;size_t count=0,lastCount=0,lastFastCount=0,hop=480;
     bool haveSequence=false;uint64_t nextSequence=0;float referenceDb=-120;
     std::array<std::array<Spectrum,2>,3> channelLevels{},fineSupport{};
-    std::array<std::array<FastSpectrum,2>,3> fastLevels{},fastSupport{};
-    FastSpectrum recentPre{},recentPost{};
+    std::array<std::array<FastSpectrum,2>,3> fastLevels{},fastSupport{},measuredFastLevels{};
+    std::array<std::array<FastSpectrum,2>,2> recentCollision{},currentCollision{};
     std::array<AnalysisFrame,fftSize> frames{};
-    std::array<double,fftSize> window{};std::array<double,bins> powers{};
+    std::array<double,fftSize> window{};
     std::array<double,fastSize> fastWindow{};
     std::array<float,fastSize> kickGate{};
     std::array<std::complex<double>,fftSize> work{};
+    std::array<std::complex<double>,fftSize/2> fftRoots{};
+    std::array<uint16_t,fftSize> fftOrder{};
+    bool fftPrepared=false;
 };
 }

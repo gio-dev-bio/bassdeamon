@@ -39,6 +39,18 @@ int interactionTests(){
             if(block%6==0)gui->refreshVisuals(block*256/48.);
         }
         ensure(a.parameters.copyState().toXmlString()==before,"PRE/POST modified host parameters");
+        gui->phaseScopeButton.setToggleState(true,juce::dontSendNotification);
+        gui->phaseScopeButton.onClick();
+        ensure(gui->scopeChannel.getSelectedId()==2&&a.phaseScopeEnabled.load(),"Phase comparison must select mono");
+        gui->scopeChannel.setSelectedId(1,juce::sendNotificationSync);
+        ensure(gui->showScope&&!gui->phaseScopeButton.getToggleState()&&!a.phaseScopeEnabled.load(),
+               "Stereo selection must return to independent L/R sums");
+        const auto& scope=gui->visibleScope;
+        ensure(scope.completed>0&&scope.high[bassdeamon::BeatScope::postLeft]!=scope.high[bassdeamon::BeatScope::postRight],
+               "Stereo Scope failed to retain the distinct left and right audio");
+        a.setAnalyzerRefreshHz(60);
+        ensure(a.analyzerRefreshHz()==60,"Spectrum refresh must accept 60 fps");
+
         a.setRawTheme(true);
         a.setAnalyzerRefreshHz(7.5);a.setSpectrumView(0);juce::MemoryBlock state;a.getStateInformation(state);b.setStateInformation(state.getData(),int(state.getSize()));
         ensure(b.spectrumView()==0&&b.analyzerRefreshHz()==7.5,"Local visual view/rate not recalled");

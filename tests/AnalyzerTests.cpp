@@ -1,4 +1,4 @@
-#include "Analyzer.h"
+#include "SpectrumDisplay.h"
 #include <chrono>
 #include <iostream>
 #include <memory>
@@ -41,6 +41,14 @@ int main(){try{
             f.pre={bass,bass};f.post=f.pre;f.kick={kick,kick};return f;
         });
         check(faintPartials->summary(false).regions==1,"Negligible shared partials inflate the collision count");
+        auto twoBands=render(sr,[&](size_t n){
+            AnalysisFrame f;
+            const float value=tone(60,n,sr)+tone(175,n,sr,.15f);
+            f.pre={value,value}; f.post={tone(175,n,sr,.15f),tone(175,n,sr,.15f)};
+            f.kick=f.pre; return f;
+        });
+        check(twoBands->summary(false).regions==2,"Two separated, measured bands must both count");
+        check(twoBands->summary(true).regions==1,"POST must count only the remaining band");
         auto alternating=render(sr,[&](size_t n){AnalysisFrame f;const float value=tone(hz,n,sr);if(n<Analyzer::fftSize/2)f.pre={value,value};else f.kick={value,value};f.post=f.pre;return f;});
         check(flagged(alternating->maskPre)==0,"non-simultaneous notes falsely collide in long FFT window");
         auto changedNote=render(sr,[&](size_t n){AnalysisFrame f;const float bass=tone(n<Analyzer::fftSize/2?75:150,n,sr);f.pre={bass,bass};f.post=f.pre;if(n>=Analyzer::fftSize/2){const float kick=tone(75,n,sr);f.kick={kick,kick};}return f;});
@@ -59,6 +67,32 @@ int main(){try{
         check(offset->pre[peak]>=expected-1.43&&offset->pre[peak]<=expected+.001,"unexpected Blackman-Harris scalloping/calibration");
         check(flagged(offset->maskPre)<=5,"off-bin overlap too broad");
         std::cout<<"PASS "<<sr<<" Hz: calibrated FFT, narrow/shared tones, separated notes, quiet residue, stereo, time separation, POST\n";
+    }
+    {
+        auto frame=std::make_unique<Analyzer::Frame>();frame->hasSpectrum=true;
+        // Split a lobe by one empty bin and put a third peak outside Unmask.
+        auto& mask=frame->maskPre;
+        mask[20]=mask[22]=mask[54]=mask[130]=1;
+        int bands=0;
+        Analyzer::visitCollisionBands(mask,frame->pre,48000,0,1000,[&](const auto&){++bands;});
+        check(bands==2,"A window lobe counted twice or an out-of-range band was included");
+        mask.fill(0);
+        auto display=std::make_unique<SpectrumDisplay>();
+        display->pushAtRate(*frame,1,0,1);
+        constexpr size_t oldBand=20,newBand=55;
+        frame->maskPre[oldBand]=frame->maskPost[oldBand]=1;
+        frame->eventLevels[1][oldBand]={-12,-18,-10};
+        display->pushAtRate(*frame,1,.2,1);
+        frame->maskPre[oldBand]=frame->maskPost[oldBand]=0;
+        frame->maskPre[newBand]=1;
+        frame->eventLevels[0][newBand]={-30,-52,-28};
+        display->pushAtRate(*frame,1,.6,1);
+        display->pushAtRate(*frame,0,1,1);
+        check(display->shown[3][oldBand]==0 && display->shown[4][oldBand]==0 &&
+              display->shown[3][newBand]==1 && display->shown[4][newBand]==0,
+              "Different snapshots were unioned into one collision frame");
+        check(display->eventLevels[0][newBand]==Analyzer::LevelTriplet{-30,-52,-28},
+              "Collision levels must come from the same measurement as the marker");
     }
     auto queue=std::make_unique<AnalysisQueue>();auto analyzer=std::make_unique<Analyzer>();analyzer->prepare(48000);
     for(uint32_t n=0;n<queue->capacity;++n){AnalysisFrame f;const auto value=tone(75,n,48000);f.pre={value,value};f.kick=f.pre;check(queue->push(f),"gap setup");}
