@@ -29,12 +29,43 @@ struct DuckTiming {
     double amountDb = 0, attackMs = 0, releaseMs = 0;
 };
 
-inline DuckTiming analyzeDuckTiming(const std::vector<AutoMixFrame>& audio, double rate) {
+struct DynamicsBin { double bass = 0, kick = 0; };
+
+inline double activeBassRangeDb(const std::vector<DynamicsBin>& bins, double binMs, double gate) {
+    // Measure variations within active notes rather than mistaking gaps
+    // between equally loud notes for excess dynamics.
+    const size_t window = size_t(std::lround(24 / binMs));
+    std::vector<double> levels;
+    double power = 0;
+    size_t active = 0;
+    for (size_t i = 0; i < bins.size(); ++i) {
+        const double current = bins[i].bass;
+        power += current * current;
+        active += current >= gate;
+        if (i >= window) {
+            const double previous = bins[i-window].bass;
+            power -= previous * previous;
+            active -= previous >= gate;
+        }
+        if (i+1 >= window && 4 * active >= 3 * window)
+            levels.push_back(power / window);
+    }
+    if (levels.size() < 6) return 0;
+    std::sort(levels.begin(), levels.end());
+    const size_t last = levels.size() - 1;
+    return 10 * std::log10(levels[last * 17 / 20] / levels[last / 5]);
+}
+
+struct AutoMixDynamics {
+    DuckTiming duck;
+    double bassRangeDb = 0;
+};
+
+inline AutoMixDynamics analyzeDynamics(const std::vector<AutoMixFrame>& audio, double rate) {
     // Short RMS bins track the kick body and bass onsets without phase cancellation.
-    struct Energy { double bass = 0, kick = 0; };
     const size_t hop = std::max<size_t>(1, size_t(std::round(rate*.004)));
     const double binMs = 1000.*hop/rate;
-    std::vector<Energy> bins(audio.size()/hop);
+    std::vector<DynamicsBin> bins(audio.size()/hop);
     double kickPeak = 0, bassPeak = 0;
     for (size_t i=0; i<bins.size(); ++i) {
         auto& energy=bins[i];
@@ -49,44 +80,61 @@ inline DuckTiming analyzeDuckTiming(const std::vector<AutoMixFrame>& audio, doub
         kickPeak=std::max(kickPeak,energy.kick);
     }
     const double kickGate=std::max(.008,kickPeak*.12), bassGate=std::max(.004,bassPeak*.10);
-    const size_t minHitGap=size_t(std::ceil(100/binMs));
-    const size_t maxBody=size_t(std::ceil(160/binMs));
-    const size_t maxSearch=size_t(std::ceil(300/binMs));
-    std::vector<double> releases, depths, attacks;
-    for (size_t start=2; start+maxSearch+2<bins.size(); ++start) {
-        if (bins[start].kick<kickGate || bins[start-1].kick>=kickGate || bins[start-2].kick>=kickGate) continue;
-        size_t last=start, peak=start;
-        for (size_t i=start; i<start+maxBody; ++i) {
-            if (i>last+2) break;
-            if (i>last && bins[i].kick>=kickGate) last=i;
-            if (bins[i].kick>bins[peak].kick) peak=i;
+    AutoMixDynamics result;
+    result.bassRangeDb = activeBassRangeDb(bins, binMs, bassGate);
+    // Bridge zero crossings in the kick. A dip within the body must not
+    // be interpreted as a new hit ending the release window.
+    const size_t bridge = size_t(std::lround(16 / binMs));
+    struct Hit { size_t start, last, peak; };
+    std::vector<Hit> hits;
+    for (size_t start=0; start<bins.size(); ++start) {
+        if (bins[start].kick < kickGate) continue;
+        Hit hit{start,start,start};
+        for (size_t i=start+1; i<bins.size() && i<=hit.last+bridge; ++i) {
+            if (bins[i].kick >= kickGate) hit.last = i;
+            if (bins[i].kick > bins[hit.peak].kick) hit.peak = i;
         }
-        double activeBass=0;
-        size_t next=start+maxSearch;
-        for (size_t i=start; i<=last; ++i) activeBass=std::max(activeBass,bins[i].bass);
-        for (size_t i=start+3; i<start+maxSearch; ++i) {
-            if (i>last && bins[i].kick>=kickGate && bins[i-1].kick<kickGate) {next=i; break;}
+        if (hit.last + bridge < bins.size()) hits.push_back(hit);
+        start = hit.last;
+    }
+    const size_t maxSearch = size_t(std::ceil(300 / binMs));
+    std::vector<double> releases, depths, attacks;
+    for (size_t index=0; index<hits.size(); ++index) {
+        const auto [start, last, peak] = hits[index];
+        double bassPower = 0, kickPower = 0;
+        for (size_t i=start; i<=last; ++i) {
+            kickPower += bins[i].kick * bins[i].kick;
+            if (bins[i].bass >= bassGate) bassPower += bins[i].bass * bins[i].bass;
+        }
+        const double balance = std::sqrt(bassPower / kickPower);
+        const double weight = std::clamp((balance - .126) / (.90 - .126), 0., 1.);
+        const double depth = 4 * weight * weight * (3 - 2 * weight);
+        if (depth < .15) continue;
+
+        size_t next = index+1 < hits.size() ? hits[index+1].start : bins.size();
+        const size_t searchEnd = std::min({next, start+maxSearch, bins.size()-1});
+        for (size_t i=start+3; i<searchEnd; ++i) {
             // A sustained rise after a local dip indicates an audible new note.
             const double prior=std::max({bins[i-1].bass,bins[i-2].bass,bins[i-3].bass});
             if (bins[i].bass>=bassGate && bins[i+1].bass>=bassGate &&
                 std::min(bins[i].bass,bins[i+1].bass)>std::max(2.4*prior,bassPeak*.19)) {next=i; break;}
         }
-        if (activeBass>=bassGate && last>start) {
-            const double body=(last-start+1)*binMs;
-            const double gap=(next-start)*binMs;
-            const double room=std::max(0.,gap-body-18.);
-            releases.push_back(std::round(std::clamp(std::min(30.+.8*body,room/1.5),20.,120.)));
-            depths.push_back(std::clamp(1.5+2.*activeBass/std::max(.02,bins[peak].kick),1.5,4.));
-            attacks.push_back(peak-start<=1?1.:1.5);
-        }
-        start=std::max(last,start+minHitGap-1);
+        const double body = (last-start+1) * binMs;
+        double release = 30 + .8 * body;
+        if (next < bins.size())
+            release = std::min(release, ((next-start) * binMs - body - 18) / 1.5);
+        releases.push_back(std::round(std::clamp(release,20.,120.)));
+        depths.push_back(depth);
+        const double riseMs = (peak-start) * binMs;
+        attacks.push_back(std::clamp(std::round(10 * .35 * riseMs) / 10,1.,8.));
     }
-    if (releases.size()<2) return {};
+    if (releases.size()<2) return result;
     const auto median=[](std::vector<double>& values) {
         std::sort(values.begin(),values.end());
         return values[(values.size()-1)/2];
     };
-    return {std::round(median(depths)*10)/10,median(attacks),median(releases)};
+    result.duck = {std::round(median(depths)*10)/10,median(attacks),median(releases)};
+    return result;
 }
 
 inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, double rate,
@@ -114,7 +162,7 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
     int phaseWindows = 0, phaseAccepted = 0;
     LearnResult alignment;
     bool phaseConflict = false;
-    double bassEnergy = 0, bassPeak = 0;
+    double bassEnergy = 0;
     std::array<double,bandCount> overlap{};
     std::array<std::array<std::array<Biquad,2>,2>,bandCount> bands{};
     for (size_t i = 0; i < bandCount; ++i)
@@ -149,7 +197,6 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
         }
         const double power = (double(frame.left) * frame.left + double(frame.right) * frame.right) * .5;
         bassEnergy += power;
-        bassPeak = std::max(bassPeak, power);
         const std::array<double,2> bassChannels{frame.left,frame.right}, kickChannels{frame.kickLeft,frame.kickRight};
         for (size_t i = 0; i < bandCount; ++i)
             for (size_t c=0;c<2;++c) {
@@ -180,25 +227,13 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
     });
     result.reliableKick = agreeing > 0 && 2 * agreeing > kickWindows;
     if(result.reliableKick){result.kickRootHz=root;propose("unmask.kickReferenceHz",settings.kickReferenceHz,root);settings.kickReferenceHz=root;}
-    if (result.reliableKick && *strongest > bassEnergy * .005) {
-        propose("kickEq.on", settings.kickEqEnabled, 1);
-        propose("kickEq.frequency", settings.kickEqFrequency, root);
-        propose("kickEq.cut", settings.kickEqCut, 1.5);
-        settings.kickEqEnabled = true; settings.kickEqFrequency = root; settings.kickEqCut = 1.5;
-    }
-    const double crest = 10 * std::log10(bassPeak * audio.size() / bassEnergy);
-    if (crest > 9) {
-        const double amount = std::clamp((crest - 6) / 20, .18, .45);
-        const double attack = std::clamp(1200 / bpm, 5., 20.);
-        const double release = std::clamp(15000 / bpm, 65., 210.);
+    const auto dynamics = analyzeDynamics(audio, rate);
+    if (!settings.glueLocked && dynamics.bassRangeDb > 6) {
+        const double amount = std::clamp((dynamics.bassRangeDb - 4) / 18, .18, .45);
         propose("glue.on", settings.glue, 1);
-        propose("glue.lock", settings.glueLocked, 0);
-        propose("glue.timing", settings.glueTiming, 1);
         propose("glue.amount", settings.glueAmount, amount);
-        propose("glue.attackMs", settings.glueAttackMs, attack);
-        propose("glue.releaseMs", settings.glueReleaseMs, release);
-        settings.glue = true; settings.glueLocked = false; settings.glueTiming = 1;
-        settings.glueAmount = amount; settings.glueAttackMs = attack; settings.glueReleaseMs = release;
+        settings.glue = true;
+        settings.glueAmount = amount;
     }
     result.reliablePhase = phaseAccepted > 0 && 2 * phaseAccepted > phaseWindows && !phaseConflict;
     if (result.reliablePhase && (alignment.delayMs >= .25 || alignment.invert)) {
@@ -211,13 +246,6 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
         settings.phase = true; settings.delayMs = alignment.delayMs; settings.invert = alignment.invert;
         settings.rotate=false;settings.phaseAngle=0;
     }
-    if (!settings.tube.enabled && result.reliableKick && *strongest / bassEnergy > .035 && overlap[8] + overlap[9] < *strongest * .2) {
-        propose("tube.on", 0, 1);
-        propose("tube.drive", settings.tube.driveDb, 3);
-        propose("tube.amount", settings.tube.amount, .15);
-        settings.tube.enabled = true; settings.tube.driveDb = 3; settings.tube.amount = .15;
-    }
-
     const auto measureDuckBands=[&]{
         DuckBands bassBands,kickBands;
         std::array<double,3> shared{};
@@ -236,9 +264,9 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
             value=strongestBand>0?std::round(100*std::sqrt(value/strongestBand))/100:0;
         return shared;
     };
-    const auto duck = analyzeDuckTiming(audio,rate);
+    const auto& duck = dynamics.duck;
     result.duckTimingAvailable = duck.amountDb>0;
-    if (result.duckTimingAvailable) {
+    if (result.duckTimingAvailable && (!settings.duck || settings.duckAmountDb <= duck.amountDb)) {
         propose("duck.on", settings.duck, 1);
         propose("duck.amount", settings.duckAmountDb, duck.amountDb);
         propose("duck.attack", settings.duckAttackMs, duck.attackMs);
@@ -293,58 +321,125 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
     beforeUnmask.outputDb = beforeUnmask.balanceTrimDb = 0;
     constexpr size_t focusBands = 10;
     std::array<double,focusBands> remaining{};
+    std::array<double,focusBands> upperCutEnergy{};
     double bassAfterDuckEnergy=0;
     std::array<std::array<std::array<Biquad,2>,2>,focusBands> residualFilters{};
-    for (size_t band=0;band<focusBands;++band)
-        for (auto& channel : residualFilters[band])
-            for (auto& filter : channel) filter.bandpass(bandFrequencies[band],2,rate);
-    render(beforeUnmask,[&](size_t,size_t count) {
-        for (int channel=0;channel<channels;++channel)
-            for (size_t n=0;n<count;++n)
-                bassAfterDuckEnergy+=double(output[channel][n])*output[channel][n]/channels;
-        for (size_t band=0;band<focusBands;++band) {
-            for (size_t channel=0;channel<2;++channel) {
-                auto& filters=residualFilters[band][channel];
-                double bassPower=0, kickPower=0, joint=0;
-                for (size_t n=0;n<count;++n) {
-                    const double b=filters[0].tick(processedBass(channel,n));
-                    const double k=filters[1].tick(reference[channel][n]);
-                    bassPower+=b*b;
-                    kickPower+=k*k;
-                    joint+=std::min(b*b,k*k);
+    const double learnedRoot = unmaskReferenceInRange(settings);
+    const double measuredRoot = result.reliableKick ? root : learnedRoot;
+    std::array<std::array<UnmaskFundamentalBand, 2>, 2> fundamentalFilters{};
+    double fundamentalRemaining = 0, fundamentalKickEnergy = 0;
+    const auto measureResidual = [&](auto& filterBank, size_t count, bool fundamental, double* upperCut = nullptr) {
+        double overlapEnergy = 0;
+        for (size_t channel=0;channel<2;++channel) {
+            auto& filters=filterBank[channel];
+            double bassPower=0, kickPower=0, joint=0, fullBass=0, fullKick=0;
+            for (size_t n=0;n<count;++n) {
+                const double dryBass=processedBass(channel,n), dryKick=reference[channel][n];
+                const double b=filters[0].tick(dryBass), k=filters[1].tick(dryKick);
+                bassPower+=b*b;
+                kickPower+=k*k;
+                joint+=std::min(b*b,k*k);
+                if (fundamental || upperCut) {
+                    fullBass+=dryBass*dryBass;
+                    fullKick+=dryKick*dryKick;
                 }
+            }
+            if (fundamental) {
+                const double activity=unmaskFundamentalActivity(bassPower/count,kickPower/count,fullBass/count,fullKick/count);
+                fundamentalKickEnergy += .5 * kickPower;
+                overlapEnergy += .5 * joint * activity;
+            } else {
                 const float score=RelationAnalyzer::mask(float(db(std::sqrt(bassPower/count))),
                                                          float(db(std::sqrt(kickPower/count))));
-                if (score>=RelationAnalyzer::collisionThreshold) remaining[band]+=.5*joint;
+                if (score>=RelationAnalyzer::collisionThreshold) {
+                    overlapEnergy += .5 * joint;
+                    if (upperCut)
+                        *upperCut += .5 * joint * unmaskUpperCutDb(bassPower/count, kickPower/count,
+                                                                  fullBass/count, fullKick/count);
+                }
             }
         }
-    });
+        return overlapEnergy;
+    };
+    const auto scanResidual = [&] {
+        remaining.fill(0);
+        upperCutEnergy.fill(0);
+        bassAfterDuckEnergy = fundamentalRemaining = fundamentalKickEnergy = 0;
+        residualFilters = {};
+        for (size_t band=0; band<focusBands; ++band)
+            for (auto& channel : residualFilters[band])
+                for (auto& filter : channel) filter.bandpass(bandFrequencies[band],2,rate);
+        if (measuredRoot > 0)
+            for (auto& channel : fundamentalFilters)
+                for (auto& filter : channel) filter.tune(measuredRoot, rate);
+        render(beforeUnmask,[&](size_t,size_t count) {
+            for (int channel=0;channel<channels;++channel)
+                for (size_t n=0;n<count;++n)
+                    bassAfterDuckEnergy+=double(output[channel][n])*output[channel][n]/channels;
+            for (size_t band=0;band<focusBands;++band) {
+                const double hz = bandFrequencies[band];
+                if (learnedRoot == 0 || std::abs(hz - learnedRoot) > learnedRoot * .15)
+                    remaining[band] += measureResidual(residualFilters[band], count, false,
+                        isUnmaskUpperBand(hz, learnedRoot) ? &upperCutEnergy[band] : nullptr);
+            }
+            if (measuredRoot > 0) fundamentalRemaining += measureResidual(fundamentalFilters,count,true);
+        });
+    };
+    const auto fundamentalOverlaps = [&] {
+        return fundamentalRemaining > std::max(audio.size() * 3.162e-7, fundamentalKickEnergy * .12);
+    };
+    scanResidual();
+    // A static notch needs overlap at the stable fundamental itself.
+    // Leave light shared energy to the dynamic modules.
+    const double rootShare = fundamentalKickEnergy > 0 ? fundamentalRemaining / fundamentalKickEnergy : 0;
+    const double eqCut = std::clamp(3 * (rootShare - .20), 0., 1.5);
+    if (result.reliableKick && (!settings.kickEqEnabled || settings.kickEqFrequency < 30)
+        && fundamentalOverlaps() && eqCut >= .2) {
+        propose("kickEq.on", settings.kickEqEnabled, 1);
+        propose("kickEq.frequency", settings.kickEqFrequency, measuredRoot);
+        propose("kickEq.cut", settings.kickEqCut, eqCut);
+        beforeUnmask.kickEqEnabled = settings.kickEqEnabled = true;
+        beforeUnmask.kickEqFrequency = settings.kickEqFrequency = measuredRoot;
+        beforeUnmask.kickEqCut = settings.kickEqCut = eqCut;
+        scanResidual();
+    }
     const auto strongestRemaining=std::max_element(remaining.begin(),remaining.end());
-    const double fraction=bassAfterDuckEnergy>1e-8 ? *strongestRemaining/bassAfterDuckEnergy : 0;
-    const double unmaskFocus=bandFrequencies[size_t(strongestRemaining-remaining.begin())];
-    if (fraction>.012) {
-        const double cut=std::clamp(1.5 + fraction * 14, 2., 6.);
-        const double release=std::clamp(12000 / bpm, 50., 160.);
+    // Assess the fundamental against the kick's own energy there. Normalising
+    // by the full bass would bury a short, real overlap under loud harmonics.
+    const bool preferFundamental = learnedRoot > 0 && fundamentalOverlaps();
+    const double remainingOverlap = preferFundamental ? fundamentalRemaining : *strongestRemaining;
+    const double fraction=bassAfterDuckEnergy>1e-8 ? remainingOverlap/bassAfterDuckEnergy : 0;
+    const size_t residualBand = size_t(strongestRemaining-remaining.begin());
+    const double unmaskFocus=preferFundamental ? learnedRoot : bandFrequencies[residualBand];
+    const bool hasResidualOverlap = preferFundamental || fraction > .012;
+    const double upperLimit = isUnmaskUpperBand(unmaskFocus, learnedRoot) && remainingOverlap > 0
+        ? upperCutEnergy[residualBand] / remainingOverlap : 6.;
+    const double cut = std::min(std::clamp(1.5 + fraction * 14, 2., 6.), upperLimit);
+    if (hasResidualOverlap && cut > .10) {
         propose("unmask.on", settings.unmask, 1);
         propose("unmask.controlDb", settings.unmaskDirect, 1);
         if (!settings.unmaskTrack)
             propose("unmask.frequency", settings.unmaskFrequency, unmaskFocus);
         propose("unmask.width", settings.unmaskWidth, .5);
         propose("unmask.attenuation", settings.unmaskAttenuationDb, cut);
-        propose("unmask.attack", settings.unmaskAttackMs, 5);
-        propose("unmask.release", settings.unmaskReleaseMs, release);
-        propose("unmask.timing", settings.unmaskSync, 0);
-        settings.unmask = settings.unmaskDirect = true; settings.unmaskSync = false;
+        settings.unmask = settings.unmaskDirect = true;
         if (!settings.unmaskTrack) settings.unmaskFrequency = unmaskFocus;
         settings.unmaskWidth = .5;
-        settings.unmaskAttenuationDb = cut; settings.unmaskAttackMs = 5; settings.unmaskReleaseMs = release;
+        settings.unmaskAttenuationDb = cut;
+        if (result.duckTimingAvailable) {
+            const double release = std::max(30., duck.releaseMs);
+            propose("unmask.release", settings.unmaskReleaseMs, release);
+            propose("unmask.timing", settings.unmaskSync, 0);
+            settings.unmaskReleaseMs = release;
+            settings.unmaskSync = false;
+        }
     }
 
     // This comparison describes the full Auto Mix proposal against its input.
     std::array<Biquad,2> beforeBand{}, afterBand{}, kickBand{};
-    const double focus = fraction>.012 ? unmaskFocus : bandFrequencies[size_t(strongest-overlap.begin())];
+    const double focus = hasResidualOverlap ? unmaskFocus : bandFrequencies[size_t(strongest-overlap.begin())];
     for (auto* bank : {&beforeBand,&afterBand,&kickBand})
-        for (auto& filter : *bank) filter.bandpass(focus, 2, rate);
+        for (auto& filter : *bank) filter.bandpass(focus, preferFundamental ? 6 : 2, rate);
     double wetEnergy = 0, before = 0, after = 0, kickEnergy = 0;
     render(settings,[&](size_t start,size_t count) {
         for (size_t n = 0; n < count; ++n) {

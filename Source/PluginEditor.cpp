@@ -127,13 +127,13 @@ void paintSignalPath(juce::Graphics& g, const BassDeamonProcessor& processor) {
 }
 }
 
-BassDeamonEditor::Knob::Knob(State& state,const char* id,const char* name,const char* unit,bool percent) {
+BassDeamonEditor::Knob::Knob(State& state,const char* id,const char* name,const char* unit,bool percent,bool attach) {
     setComponentID(id);
     slider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     slider.setRotaryParameters(juce::MathConstants<float>::pi*1.25f,juce::MathConstants<float>::pi*2.75f,true);
     slider.setTextBoxStyle(juce::Slider::TextBoxBelow,false,98,25);
     slider.setScrollWheelEnabled(false);
-    attachment=std::make_unique<State::SliderAttachment>(state,id,slider);
+    if (attach) attachment=std::make_unique<State::SliderAttachment>(state,id,slider);
     if(percent) {
         slider.textFromValueFunction=[](double v){return juce::String(juce::roundToInt(v*100))+" %";};
         slider.valueFromTextFunction=[](const juce::String& s){return s.getDoubleValue()/100;};
@@ -189,18 +189,12 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
     addKnob("glue.amount","AMOUNT","",true,{57,545,166,165},"Bass-led adaptive compression. Kick and host tempo only provide timing context.");
     addSwitch("glue.lock","LOCK ADAPTATION",{249,670,122,30},"Freeze threshold, ratio, attack and release. The compressor envelope keeps moving.");
     addKnob("phase.delay","DELAY"," ms",false,{438,455,154,193},"Intentional causal delay on the bass. No advance and no host latency compensation of this musical offset.");
-    rotationKnob=&addKnob("phase.frequency","ROTATION","",false,{609,455,154,193},
-        "All-pass rotation at REF. The available angle range depends on the reference and the filter limits.");
-    const auto phaseRate=[this]{return processor.getSampleRate()>0?processor.getSampleRate():48000.;};
-    rotationKnob->slider.textFromValueFunction=[this,phaseRate](double corner) {
-        return juce::String(bassdeamon::allPassDegrees(processor.phaseReferenceHz.load(),corner,phaseRate()),1)+juce::String::charToString(0x00b0);
-    };
-    rotationKnob->slider.valueFromTextFunction=[this,phaseRate](const juce::String& text) {
-        return bassdeamon::cornerForAllPassDegrees(-std::abs(text.getDoubleValue()),processor.phaseReferenceHz.load(),phaseRate());
-    };
-    rotationKnob->slider.updateText();
+    rotationKnob=&addKnob("phase.angle","ROTATION","",false,{609,455,154,193},
+        "Rotation from -180 to +180 degrees at REF. Double-click to reset to zero.",false);
+    legacyRotationKnob=&addKnob("phase.frequency","LEGACY FREQ"," Hz",false,{609,455,154,193},
+        "Legacy all-pass cutoff in Hz. Used when ROTATION is at zero.");
     addSwitch("phase.invert","POLARITY -",{438,654,150,28},"Invert both bass channels together.");
-    addSwitch("phase.rotate","LEGACY AP",{610,654,150,28},"Enable the manual all-pass stage.");
+    addSwitch("phase.rotate","LEGACY AP",{610,654,150,28},"Enable the legacy all-pass at zero rotation.");
     learn.setBounds(438,688,150,28);face.addAndMakeVisible(learn);learn.onClick=[this]{processor.requestLearn();};
     learn.setTooltip("Analyse four seconds. A reliable result enables PHASE and replaces manual rotation with the learned delay and polarity.");
     depthKnob=&addKnob("unmask.amount","DEPTH","",true,{},"Maximum spectral unmasking amount. The kick is never summed into the bass.");
@@ -418,14 +412,14 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
         processor.phaseReferenceAutomatic.store(false);
         processor.phaseReferenceHz.store(float(phaseReference.getValue()));
         processor.phaseProcessingReferenceHz.store(float(phaseReference.getValue()));
-        rotationKnob->slider.updateText();
+        phaseAngleAttachment->sendInitialUpdate();
     };
     face.addAndMakeVisible(phaseReference);
     phaseAutoReference.setToggleState(processor.phaseReferenceAutomatic.load(),juce::dontSendNotification);
     phaseAutoReference.onClick=[this]{
         processor.phaseReferenceAutomatic.store(phaseAutoReference.getToggleState());
         if(phaseAutoReference.getToggleState())processor.acceptKickReference(processor.detectedKickHz.load());
-        phaseAngle.updateText();
+        phaseAngleAttachment->sendInitialUpdate();
     };
     phaseAutoReference.setTooltip("Use the stable kick frequency after analysis for Scope. Does not retune the Phase processor.");
     face.addAndMakeVisible(phaseAutoReference);
@@ -554,6 +548,9 @@ BassDeamonEditor::BassDeamonEditor(BassDeamonProcessor& p):AudioProcessorEditor(
 }
 BassDeamonEditor::~BassDeamonEditor() {
     stopTimer();
+    if (phaseRotationDragging) phaseAngleAttachment->endGesture();
+    phaseAngle.onDragEnd={};
+    rotationKnob->slider.onDragEnd={};
     processor.analysisQueue.enabled.store(false,std::memory_order_release);
     stopAnalysis.store(true,std::memory_order_release);
     if (analysisThread.joinable()) analysisThread.join();
@@ -566,8 +563,8 @@ void BassDeamonEditor::addSwitch(const char* id,const char* name,juce::Rectangle
     auto s=std::make_unique<Switch>();s->button.setButtonText(name);s->button.setComponentID(id);s->button.setBounds(bounds);s->button.setTooltip(tip);
     face.addAndMakeVisible(s->button);s->attachment=std::make_unique<State::ButtonAttachment>(processor.parameters,id,s->button);switches.push_back(std::move(s));
 }
-BassDeamonEditor::Knob& BassDeamonEditor::addKnob(const char* id,const char* name,const char* unit,bool pct,juce::Rectangle<int> r,const char* tip){
-    auto k=std::make_unique<Knob>(processor.parameters,id,name,unit,pct);k->setBounds(r);k->slider.setTooltip(tip);face.addAndMakeVisible(*k);
+BassDeamonEditor::Knob& BassDeamonEditor::addKnob(const char* id,const char* name,const char* unit,bool pct,juce::Rectangle<int> r,const char* tip,bool attach){
+    auto k=std::make_unique<Knob>(processor.parameters,id,name,unit,pct,attach);k->setBounds(r);k->slider.setTooltip(tip);face.addAndMakeVisible(*k);
     auto& ref=*k;knobs.push_back(std::move(k));return ref;
 }
 void BassDeamonEditor::addChoice(const char* id,const juce::StringArray& values,juce::Rectangle<int> bounds){
@@ -579,6 +576,52 @@ juce::Component* BassDeamonEditor::control(const char* id) {
         if (child->getComponentID() == id) return child;
     jassertfalse;
     return nullptr;
+}
+
+double BassDeamonEditor::phaseSampleRate() const noexcept {
+    const auto rate=processor.getSampleRate();
+    return rate>0 ? rate : 48000.;
+}
+
+void BassDeamonEditor::bindPhaseRotation(juce::Slider& slider) {
+    slider.setRange(-180,180,.1);
+    slider.setNumDecimalPlacesToDisplay(1);
+    slider.setDoubleClickReturnValue(true,0);
+    slider.setScrollWheelEnabled(false);
+    slider.textFromValueFunction=[](double value) {
+        return juce::String(value,1)+juce::String::charToString(0x00b0);
+    };
+    slider.valueFromTextFunction=[](const juce::String& text) { return text.getDoubleValue(); };
+    slider.updateText();
+    slider.onDragStart=[this] {
+        phaseRotationDragging=true;
+        phaseAngleAttachment->beginGesture();
+    };
+    slider.onDragEnd=[this] {
+        phaseAngleAttachment->endGesture();
+        phaseRotationDragging=false;
+    };
+    slider.onValueChange=[this,&slider] {
+        displayedPhaseRotation=slider.getValue();
+        const auto stored=bassdeamon::phaseDegreesAtReference(displayedPhaseRotation,
+            processor.phaseReferenceHz.load(),processor.phaseProcessingReferenceHz.load(),phaseSampleRate());
+        if (phaseRotationDragging) phaseAngleAttachment->setValueAsPartOfGesture(float(stored));
+        else phaseAngleAttachment->setValueAsCompleteGesture(float(stored));
+        // Opposite signs at 180 degrees can represent the same parameter value.
+        phaseAngleAttachment->sendInitialUpdate();
+    };
+}
+
+void BassDeamonEditor::updatePhaseRotation(double stored) {
+    const double reference=processor.phaseReferenceHz.load();
+    const double processingReference=processor.phaseProcessingReferenceHz.load();
+    const double angle=bassdeamon::phaseDegreesAtReference(stored,processingReference,reference,phaseSampleRate());
+    double displayed=std::round(10*angle)/10;
+    if (reference!=processingReference && std::abs(displayed)==180 && std::abs(displayedPhaseRotation)==180)
+        displayed=displayedPhaseRotation;
+    displayedPhaseRotation=displayed;
+    phaseAngle.setValue(displayed,juce::dontSendNotification);
+    rotationKnob->slider.setValue(displayed,juce::dontSendNotification);
 }
 
 void BassDeamonEditor::layoutMain() {
@@ -611,19 +654,14 @@ void BassDeamonEditor::layoutMain() {
     place("phase.on",{812,461,53,25});
     phaseAngle.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     phaseAngle.setTextBoxStyle(juce::Slider::TextBoxRight,false,64,24);
-    phaseAngle.setNumDecimalPlacesToDisplay(1);
-    phaseAngle.setDoubleClickReturnValue(true,0);
-    phaseAngle.setScrollWheelEnabled(false);
     phaseAngle.setBounds(865,455,114,40);
     phaseAngle.setTooltip("Phase rotation at the reference frequency. Double-click to reset to zero. Phase must be enabled.");
     face.addAndMakeVisible(phaseAngle);
-    phaseAngleAttachment=std::make_unique<State::SliderAttachment>(processor.parameters,"phase.angle",phaseAngle);
-    const auto phaseRate=[this]{return processor.getSampleRate()>0?processor.getSampleRate():48000.;};
-    phaseAngle.textFromValueFunction=[this,phaseRate](double value){
-        return juce::String(bassdeamon::phaseDegreesAtReference(value,processor.phaseProcessingReferenceHz.load(),processor.phaseReferenceHz.load(),phaseRate()),1)+juce::String::charToString(0x00b0);
-    };
-    phaseAngle.valueFromTextFunction=[this,phaseRate](const juce::String& value){return bassdeamon::phaseDegreesAtReference(value.getDoubleValue(),processor.phaseReferenceHz.load(),processor.phaseProcessingReferenceHz.load(),phaseRate());};
-    phaseAngle.updateText();
+    phaseAngleAttachment=std::make_unique<juce::ParameterAttachment>(*processor.parameters.getParameter("phase.angle"),
+        [this](float angle){updatePhaseRotation(angle);},processor.parameters.undoManager);
+    bindPhaseRotation(phaseAngle);
+    bindPhaseRotation(rotationKnob->slider);
+    phaseAngleAttachment->sendInitialUpdate();
     phaseScopeButton.setBounds(985,461,72,25);
     phaseAdvanced.setComponentID("view-mode");
     phaseAdvanced.setBounds(1063,461,advancedButtonWidth,advancedButtonHeight);
@@ -637,8 +675,12 @@ void BassDeamonEditor::layoutMain() {
         compare();
         refreshDisplayPage();
     };
+    rotationKnob->setBounds(365,190,138,145);
+    legacyRotationKnob->label.setVisible(false);
+    legacyRotationKnob->slider.setSliderStyle(juce::Slider::LinearBar);
+    legacyRotationKnob->slider.setTextBoxStyle(juce::Slider::TextBoxLeft,false,126,24);
+    legacyRotationKnob->setBounds(546,283,126,26);
     phaseControls={place("phase.delay",{193,190,138,145}),
-        place("phase.frequency",{365,190,138,145}),
         place("phase.invert",{546,219,126,26}),place("phase.rotate",{546,253,126,26}),
         place("phase.agc",{699,219,126,26}),place("phase.agcLock",{699,253,126,26}),
         &phaseReference,&learn};
@@ -698,6 +740,9 @@ void BassDeamonEditor::refreshDisplayPage() {
     for (auto* item : std::array<juce::Component*,3>{&scopeChannel,&scopeCompareButton,control("view.hold")})
         item->setVisible(scopePage);
     for (auto* item : phaseControls) item->setVisible(showPhaseAdvanced);
+    const bool legacy=processor.parameters.getRawParameterValue("phase.rotate")->load()>.5f;
+    rotationKnob->setVisible(showPhaseAdvanced);
+    legacyRotationKnob->setVisible(showPhaseAdvanced && legacy);
     phaseAutoReference.setVisible(showPhaseAdvanced);
     duckAdvanced.setToggleState(showDuckAdvanced,juce::dontSendNotification);
     control("duck.amount")->setVisible(!showDuckAdvanced);
@@ -1462,10 +1507,9 @@ void BassDeamonEditor::refreshVisuals(double clockMilliseconds) {
     learn.setEnabled(processor.learnStatus.load()!=1&&processor.parameters.getRawParameterValue("global.on")->load()>.5f);
     aButton.setToggleState(processor.selectedAB()==0,juce::dontSendNotification);bButton.setToggleState(processor.selectedAB()==1,juce::dontSendNotification);
     const double reference=processor.phaseReferenceHz.load();
-    if (std::abs(phaseReference.getValue()-reference)>.051) {
+    if (std::abs(phaseReference.getValue()-reference)>.051)
         phaseReference.setValue(reference,juce::dontSendNotification);
-        rotationKnob->slider.updateText();phaseAngle.updateText();
-    }
+    updatePhaseRotation(processor.parameters.getRawParameterValue("phase.angle")->load());
     phaseAutoReference.setToggleState(processor.phaseReferenceAutomatic.load(),juce::dontSendNotification);
     if (bypassed) {
         inputDb=outputDb=peak=-120;

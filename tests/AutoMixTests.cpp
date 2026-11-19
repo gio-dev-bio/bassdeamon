@@ -37,18 +37,75 @@ int main() {
         const std::string_view id=change.parameter;
         return id=="duck.body" || id=="duck.punch" || id=="duck.click";
     }), "Auto Mix proposed inactive legacy Duck coefficients for Low Band");
-    const double slowRelease = analyzeDuckTiming(audio,sr).releaseMs;
+    const double slowRelease = analyzeDynamics(audio,sr).duck.releaseMs;
     auto fastNotes=audio;
     for (size_t n=0; n<fastNotes.size(); ++n) {
         auto& f=fastNotes[n];
         const double hit=std::fmod(n/sr,.5);
         if (hit>=.088 && hit<.125) f.left=f.right=0;
     }
-    const auto fastTiming=analyzeDuckTiming(fastNotes,sr);
+    const auto fastTiming=analyzeDynamics(fastNotes,sr).duck;
     require(fastTiming.releaseMs>=20 && fastTiming.releaseMs<slowRelease,
             "Duck did not shorten release before an audible bass onset");
+    {
+        auto shortKick = audio;
+        for (size_t n=0; n<shortKick.size(); ++n)
+            if (std::fmod(n/sr,.5) >= .055) shortKick[n].kickLeft = shortKick[n].kickRight = 0;
+        const auto shortTiming = analyzeDynamics(shortKick,sr).duck;
+        require(shortTiming.releaseMs > fastTiming.releaseMs && shortTiming.releaseMs < slowRelease,
+                "Duck timing did not follow kick duration at the same tempo");
+        for (auto& frame : shortKick) { frame.left *= .28f; frame.right *= .28f; }
+        require(analyzeDynamics(shortKick,sr).duck.amountDb < shortTiming.amountDb * .5,
+                "Duck proposed nearly the same depth on a quieter bass");
+    }
     std::cout<<"PASS Auto Mix Duck release "<<slowRelease<<" ms for sustained bass, "
              <<fastTiming.releaseMs<<" ms before the next note\n";
+    {
+        Settings clean;
+        clean.glue = clean.unmask = false;
+        const auto proposes = [](const AutoMixResult& mix, std::string_view id) {
+            return std::any_of(mix.changes.begin(), mix.changes.end(),
+                               [&](const auto& change) { return change.parameter == id; });
+        };
+        std::vector<AutoMixFrame> notes(size_t(4*sr));
+        constexpr double bpm = 128, beat = 60/bpm, hz = 53;
+        for (bool accents : {false, true}) {
+            for (size_t n=0; n<notes.size(); ++n) {
+                const double time = n/sr, age = std::fmod(time,beat);
+                const double position = age - beat*.5;
+                const double envelope = std::clamp(std::min(position,.045-position)/.004,0.,1.);
+                const double level = accents && int(time/beat)%2 ? .118 : .42;
+                const float bass = float(level * envelope * std::sin(2*pi*hz*time));
+                const float kick = age < .070
+                    ? float(.55 * std::sin(2*pi*hz*age) * std::exp(-age/.027)) : 0;
+                notes[n] = {bass,bass,kick,kick,float(time/beat)};
+            }
+            const auto mix = analyzeAutoMix(notes,sr,bpm,2,clean);
+            require(mix.reliableKick && !mix.duckTimingAvailable && !proposes(mix,"kickEq.on")
+                    && !proposes(mix,"unmask.on"), "Auto Mix treated separate kick and bass as overlapping");
+            require(proposes(mix,"glue.on") == accents && !proposes(mix,"tube.on"),
+                    "Auto Mix misread rests as dynamics or forced a colour change");
+        }
+        std::cout << "PASS equal offbeat notes stay uncompressed; audible accents trigger GLUE\n";
+
+        for (size_t n=0; n<notes.size(); ++n) {
+            const double time = n/sr, age = std::fmod(time,.5);
+            const double angle = 2*pi*hz*age;
+            const float bass = float(.10 * std::sin(2*pi*hz*time));
+            const float kick = age < .09 ? float((.55*std::sin(angle)+.18*std::sin(2*angle))
+                                                  * std::exp(-age/.034)) : 0;
+            notes[n] = {bass,bass,kick,kick,float(2*time)};
+        }
+        auto existingDuck = clean;
+        existingDuck.duck = true;
+        existingDuck.duckAmountDb = 18;
+        existingDuck.duckAttackMs = 0;
+        const auto cleared = analyzeAutoMix(notes,sr,120,2,existingDuck);
+        require(cleared.reliableKick && cleared.duckTimingAvailable && !proposes(cleared,"duck.amount")
+                && !proposes(cleared,"kickEq.on") && !proposes(cleared,"unmask.on")
+                && !proposes(cleared,"tube.on"), "Auto Mix added processing on top of a clear Duck");
+        std::cout << "PASS Auto Mix skips extra processing when the existing Duck clears the overlap\n";
+    }
     for (auto& f : audio) { f.kickLeft = f.kickRight = 0; f.right = -f.left; }
     const auto missing = analyzeAutoMix(audio, sr, 120, 2, settings);
     require(missing.hasBass && !missing.hasKick && missing.changes.empty(), "Missing sidechain changed settings");
@@ -102,6 +159,42 @@ int main() {
     selective.duck=true;
     require(suggestedFocus(dualBand,selective)==0,"Auto Mix proposed a cut already taken care of by Duck");
     std::cout<<"PASS after Duck: live and Auto Mix focus 38 -> 186 Hz; Auto Mix skipped the cleared band\n";
+
+    {
+        constexpr double fundamental = 53;
+        std::vector<AutoMixFrame> rhythmic(size_t(6 * sr));
+        Settings focused;
+        focused.glue = focused.unmask = focused.unmaskTrack = false;
+        focused.duckLowHz = 130;
+        for (double bassRoot : {.15, 0.}) {
+            for (size_t n = 0; n < rhythmic.size(); ++n) {
+                const double time = n / sr;
+                const double age = std::fmod(time, .5);
+                const double angle = 2 * pi * fundamental * age;
+                const float kick = float((.14 * std::sin(angle) + .65 * std::sin(2 * angle)) * std::exp(-age / .055));
+                const float bass = float(bassRoot * std::sin(2 * pi * fundamental * time)
+                    + .31 * std::sin(4 * pi * fundamental * time));
+                rhythmic[n] = {bass, bass, kick, kick, float(2 * time)};
+            }
+            const auto mix = analyzeAutoMix(rhythmic, sr, 120, 2, focused);
+            require(mix.reliableKick && std::abs(mix.kickRootHz - fundamental) < 1,
+                    "Auto Mix learned a loud harmonic as the fundamental");
+            const auto proposed = [&](std::string_view id) {
+                for (const auto& change : mix.changes)
+                    if (id == change.parameter) return change.value;
+                return 0.f;
+            };
+            const double focus = proposed("unmask.frequency");
+            const double cut = proposed("unmask.attenuation");
+            if (bassRoot > 0)
+                require(std::abs(focus - fundamental) < 1 && cut >= 2,
+                        "Auto Mix missed a real fundamental overlap after Duck");
+            else
+                require(focus > fundamental * 1.45 && cut > 0 && cut <= 4 && proposed("kickEq.on")==0,
+                        "Auto Mix over-treated a harmonic without bass at the fundamental");
+        }
+        std::cout << "PASS Auto Mix prioritises the learned root and limits residual harmonics\n";
+    }
 
     Settings balance;
     balance.glue=balance.unmask=false;

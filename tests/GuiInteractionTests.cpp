@@ -300,9 +300,9 @@ int interactionTests(){
     ensure(editor->spectrumDisplay.residualReady&&editor->analyzer.summary().regions==0,
            "POST measurement did not resume on the Duck output after audition");
     std::cout<<"PASS POST residual cleared by Duck alone, PRE reference and dry audition\n";
-    // With both modules at maximum, retune the real published curve from
-    // the learned root to the alternate collision. The kick stays the same.
-    set("duck.on",1);set("duck.amount",18);set("duck.attack",1);
+    // Retune the real curve from the learned root to a nearby harmonic
+    // after Duck. The light cut still leaves an audible POST residual.
+    set("duck.on",1);set("duck.amount",9);set("duck.attack",1);
     set("unmask.on",1);set("unmask.track",1);set("unmask.hold",0);
     set("unmask.attenuation",24);set("unmask.attack",1);
     set("unmask.kickReferenceHz",60);set("unmask.focusMinHz",30);set("unmask.focusMaxHz",250);
@@ -311,10 +311,9 @@ int interactionTests(){
     int stableFrames=0,stableResidual=0;
     for(int b=0;b<1260;++b) {
         for(int n=0;n<256;++n) {
-            const double t=(b*256+n)/48000.,age=std::fmod(t,.5);
-            buffer.setSample(0,n,float(.3*std::sin(2*bassdeamon::pi*(t<3?60:118)*t)));
-            buffer.setSample(1,n,float(std::exp(-age/.035)*
-                (.45*std::sin(2*bassdeamon::pi*60*age)+.22*std::sin(2*bassdeamon::pi*118*age))));
+            const double t=(b*256+n)/48000.;
+            buffer.setSample(0,n,float(.3*std::sin(2*bassdeamon::pi*(t<3?60:120)*t)));
+            buffer.setSample(1,n,float(.45*std::sin(2*bassdeamon::pi*60*t)+.22*std::sin(2*bassdeamon::pi*120*t)));
         }
         host.time=b*256/48000.;p.processBlock(buffer,midi);
         if(b%6==0) {
@@ -329,11 +328,12 @@ int interactionTests(){
     const auto& tracked=editor->visualUnmaskResponse;
     ensure(std::abs(firstCentre-60)<4&&std::abs(tracked.centreHz-118)<4,
            "UNMASK curve stayed at the learned kick root after the bass collision changed");
-    ensure(tracked.gainDb(118,48000)<tracked.gainDb(60,48000)-6,
-           "UNMASK graph center does not match its active filter");
-    ensure(stableFrames>0&&stableResidual*3<stableFrames,
-           "Strong Duck plus UNMASK left persistent POST collision markers after settling");
-    std::cout<<"PASS moving Auto Focus curve with Duck 18 / Unmask 24 dB; POST residuals "<<stableResidual
+    const double harmonicCut = -tracked.gainDb(120,48000);
+    ensure(harmonicCut>.4&&harmonicCut<1.35&&tracked.gainDb(60,48000)>-.1,
+           "UNMASK graph missed the light cut on the residual harmonic");
+    ensure(stableFrames>0&&stableResidual*2>stableFrames,
+           "POST omitted the measured residual after the light harmonic cut");
+    std::cout<<"PASS moving Auto Focus curve with light harmonic cut; POST residuals "<<stableResidual
              <<'/'<<stableFrames<<" frames, centers "<<firstCentre<<" -> "<<tracked.centreHz<<" Hz\n";
     p.setStateInformation(audioState.getData(),int(audioState.getSize()));visualTick();
     for(int b=0;b<200;++b){host.time=b*256/48000.;for(int n=0;n<256;++n){buffer.setSample(0,n,float(.6*std::sin(2*bassdeamon::pi*75*(b*256+n)/48000.)));buffer.setSample(1,n,0);}
@@ -420,6 +420,43 @@ int interactionTests(){
     set("glue.timing",0);set("unmask.delta",0);
     editor->phaseAdvanced.onClick();
     ensure(editor->face.getComponentAt(editor->learn.getBounds().getCentre())==&editor->learn,"Learn hit target covered");
+    {
+        auto& rotation=editor->rotationKnob->slider;
+        ensure(editor->rotationKnob->isVisible() && rotation.getMinimum()==-180 && rotation.getMaximum()==180,
+               "Advanced rotation did not use the full signed range");
+        const auto oldReference=p.phaseReferenceHz.load();
+        const auto oldProcessingReference=p.phaseProcessingReferenceHz.load();
+        const auto oldDetected=p.detectedKickHz.load();
+        const auto oldAutoReference=p.phaseReferenceAutomatic.load();
+        p.phaseReferenceAutomatic.store(true);
+        p.acceptKickReference(92);
+        editor->phaseAngleAttachment->sendInitialUpdate();
+        const double physicalReference=p.phaseProcessingReferenceHz.load();
+        const auto setDial=[&](double angle) {
+            rotation.setValue(angle,juce::sendNotificationSync);
+            const auto stored=bassdeamon::phaseDegreesAtReference(angle,92,physicalReference,48000.);
+            ensure(std::abs(get("phase.angle")-stored)<.002 && std::abs(rotation.getValue()-angle)<.051
+                   && std::abs(editor->phaseAngle.getValue()-angle)<.051,
+                   "Phase dial endpoint, readout and host parameter disagree");
+        };
+        setDial(180);setDial(-180);setDial(-156.2);setDial(156.2);
+        const auto beforeTyping=get("phase.angle");
+        p.refreshHistory();
+        editor->phaseAngle.setValue(editor->phaseAngle.getValueFromText("180"),juce::sendNotificationSync);
+        ensure(std::abs(rotation.getValue()-180)<.051,"Typed angle did not reach the Advanced knob");
+        ensure(p.undoEdit() && std::abs(get("phase.angle")-beforeTyping)<.002
+               && std::abs(rotation.getValue()-156.2)<.051,"Phase knob edit did not undo");
+        set("phase.rotate",1);
+        editor->refreshDisplayPage();
+        ensure(editor->legacyRotationKnob->isVisible() && editor->rotationKnob->isVisible(),
+               "An existing legacy all-pass hid the full signed rotation");
+        p.phaseReferenceHz.store(oldReference);
+        p.phaseProcessingReferenceHz.store(oldProcessingReference);
+        p.detectedKickHz.store(oldDetected);
+        p.phaseReferenceAutomatic.store(oldAutoReference);
+        editor->phaseAngleAttachment->sendInitialUpdate();
+        std::cout << "PASS real Phase Rotation reaches both 180 degree endpoints, follows REF and supports Undo\n";
+    }
     set("phase.angle",165);set("phase.rotate",1);p.refreshHistory();
     const float angleBeforeLearn=get("phase.angle");
     const float delayBeforeLearn=get("phase.delay"),invertBeforeLearn=get("phase.invert");
@@ -430,9 +467,12 @@ int interactionTests(){
     host.playing=true;
     std::mt19937 rng(79);std::uniform_real_distribution<float> random(-.4f,.4f);
     std::vector<float> noise(4*48000+256);for(auto& v:noise)v=random(rng);
-    for(int pos=0;pos<4*48000;pos+=256){host.time=std::fmod(pos/48000.,.25); // short Cubase-style cycle
-        for(int n=0;n<256;++n){buffer.setSample(0,n,noise[size_t(pos+n)]);buffer.setSample(1,n,pos+n>=96?-noise[size_t(pos+n-96)]:0);}
-        p.processBlock(buffer,midi);visualTick();}
+    const auto playLearnPhrase=[&] {
+        for(int pos=0;pos<4*48000;pos+=256){host.time=std::fmod(pos/48000.,.25); // short Cubase-style cycle
+            for(int n=0;n<256;++n){buffer.setSample(0,n,noise[size_t(pos+n)]);buffer.setSample(1,n,pos+n>=96?-noise[size_t(pos+n-96)]:0);}
+            p.processBlock(buffer,midi);visualTick();}
+    };
+    playLearnPhrase();
     ensure(p.learnStatus.load()==5,"Learn GUI never completed across short host cycles");
     p.timerCallback();
     ensure(std::abs(get("phase.delay")-2)<.26&&get("phase.invert")==1,"Learn did not apply delay and polarity to host parameters");
@@ -441,6 +481,28 @@ int interactionTests(){
     ensure(p.undoEdit()&&std::abs(get("phase.delay")-delayBeforeLearn)<.001&&get("phase.invert")==invertBeforeLearn&&get("phase.on")==0&&
            std::abs(get("phase.angle")-angleBeforeLearn)<.001&&get("phase.rotate")==1,"Learn undo incomplete");
     ensure(p.redoEdit()&&std::abs(get("phase.delay")-2)<.26&&get("phase.invert")==1&&rotationCleared(),"Learn redo incomplete");
+    {
+        set("phase.angle",58);
+        const float savedAngle=get("phase.angle");
+        juce::MemoryBlock savedPhase;
+        p.getStateInformation(savedPhase);
+        const auto recall=[&] {p.setStateInformation(savedPhase.getData(),int(savedPhase.getSize()));};
+        host.playing=false;
+        editor->learn.onClick();
+        recall();
+        host.playing=true;
+        buffer.clear();
+        p.processBlock(buffer,midi);
+        ensure(p.learnStatus.load()==0,"State recall left an old Learn request waiting");
+        editor->learn.onClick();
+        playLearnPhrase();
+        ensure(p.learnStatus.load()==5,"Expected a Phase Learn result before recall");
+        recall();
+        p.timerCallback();
+        ensure(p.learnStatus.load()==0 && std::abs(get("phase.angle")-savedAngle)<.001,
+               "A pending Phase Learn result overwrote the recalled state");
+        std::cout << "PASS state recall supersedes queued and unapplied Phase Learn\n";
+    }
     ensure(editor->face.getComponentAt(editor->kickEqLearn.getBounds().getCentre())==&editor->kickEqLearn,
            "Kick EQ Learn hit target covered");
     const auto captureKick = [&](bool hasKick) {

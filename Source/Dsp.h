@@ -30,9 +30,12 @@ enum class UnmaskStereoMode { stereo, mid, side };
 
 inline double phaseDegreesAtReference(double degrees,double fromHz,double toHz,double sr) noexcept {
     if(std::abs(degrees)<1e-9)return 0;
+    fromHz=std::clamp(fromHz,30.,130.);
+    toHz=std::clamp(toHz,30.,130.);
+    if(fromHz==toHz)return degrees;
     const double lag=(degrees>0?360-degrees:-degrees)*pi/720;
-    const double corner=std::tan(pi*std::clamp(fromHz,30.,130.)/sr)/std::tan(lag);
-    double result=-720/pi*std::atan(std::tan(pi*std::clamp(toHz,30.,130.)/sr)/corner);
+    const double corner=std::tan(pi*fromHz/sr)/std::tan(lag);
+    double result=-720/pi*std::atan(std::tan(pi*toHz/sr)/corner);
     while(result < -180)result+=360;
     while(result > 180)result-=360;
     return result;
@@ -110,7 +113,68 @@ struct Biquad {
         b0 = (1 + alpha * A) / a0; b1 = -2 * std::cos(w) / a0;
         b2 = (1 - alpha * A) / a0; a1 = b1; a2 = (1 - alpha / A) / a0;
     }
+    std::complex<double> transfer(std::complex<double> z) const noexcept {
+        const auto z2 = z * z;
+        return (b0 + b1 * z + b2 * z2) / (1.0 + a1 * z + a2 * z2);
+    }
 };
+
+struct UnmaskFundamentalBand {
+    void tune(double hz, double rate) noexcept {
+        sections = {};
+        for (auto& section : sections) section.bandpass(hz, 3.5, rate);
+    }
+    double tick(double sample, double* early = nullptr) noexcept {
+        const double front = sections[0].tick(sample);
+        if (early) *early = front;
+        return sections[1].tick(front);
+    }
+private:
+    std::array<Biquad, 2> sections{};
+};
+
+inline double unmaskActivity(double energy) noexcept {
+    if (energy <= 3.1622776601683792e-7) return 0;
+    if (energy >= 3.1622776601683794e-4) return 1;
+    return (10 * std::log10(energy) + 65) / 30;
+}
+
+inline double unmaskFundamentalActivity(double bass, double kick, double fullBass, double fullKick,
+                                        double kickForBalance = 0.) noexcept {
+    // Reject the skirts of a much louder harmonic in either detector.
+    if (bass <= fullBass * .004 || kick <= fullKick * .004) return 0;
+    const double activity = unmaskActivity(std::min(bass, kick));
+    if (activity == 0) return 0;
+    // Use a soft knee over the levels left by Duck. The full setting is
+    // reserved for a bass that actually dominates the kick in this band.
+    const double relative = std::sqrt(bass / std::max(kick, kickForBalance));
+    const double weight = std::clamp((relative - .0631) / (1.4125 - .0631), 0., 1.);
+    return activity * weight * weight * (3 - 2 * weight);
+}
+
+inline bool isUnmaskUpperBand(double hz, double root) noexcept {
+    return hz > (root > 0 ? root * 1.45 : 130.);
+}
+
+inline double unmaskUpperCutDb(double bass, double kick, double fullBass, double fullKick) noexcept {
+    const double activity = unmaskActivity(std::min(bass, kick));
+    if (activity == 0) return 0;
+    const double prominence = std::min(bass / std::max(fullBass, 1e-20), kick / std::max(fullKick, 1e-20));
+    if (prominence < .02) return 0;
+    const double balance = std::sqrt(bass / kick);
+    const double weight = std::clamp((balance - .126) / (.50 - .126), 0., 1.);
+    // Reserve the extra cut for a strong partial in both signals that can
+    // compete with the kick at this frequency.
+    const double severity = std::clamp(std::min({(balance - .63) / .37,
+        (prominence - .12) / .18, (std::min(bass, kick) - .0025) / .0135}), 0., 1.);
+    return activity * weight * (1.25 + 2.75 * severity);
+}
+
+inline double unmaskReferenceInRange(const Settings& settings) noexcept {
+    const double hz = settings.kickReferenceHz;
+    const auto limits = std::minmax(settings.unmaskFocusMinHz, settings.unmaskFocusMaxHz);
+    return hz >= 30 && hz <= 130 && hz >= limits.first && hz <= limits.second ? hz : 0;
+}
 
 inline double allPassDegrees(double hz, double corner, double rate) noexcept {
     return -360 / pi * std::atan(std::tan(pi * hz / rate) / std::tan(pi * corner / rate));
@@ -119,7 +183,7 @@ inline double allPassDegrees(double hz, double corner, double rate) noexcept {
 // Instantaneous small-signal response of the UNMASK filters, before Auto Gain.
 struct UnmaskResponse {
     std::array<Biquad, bandCount> distributed{};
-    Biquad bell;
+    Biquad bell, upperBell;
     double wet = 0, direct = 0, activity = 0, centreHz=0;
     UnmaskStereoMode mode = UnmaskStereoMode::stereo;
 
@@ -127,13 +191,9 @@ struct UnmaskResponse {
         if (wet <= 1e-5) return 0;
         const double angle = 2 * pi * frequency / sampleRate;
         const std::complex<double> z{std::cos(angle), -std::sin(angle)};
-        const auto z2 = z * z;
-        const auto transfer = [&](const Biquad& f) {
-            return (f.b0 + f.b1 * z + f.b2 * z2) / (1.0 + f.a1 * z + f.a2 * z2);
-        };
         std::complex<double> legacy{1}, single{1};
-        if (direct < 1) for (const auto& band : distributed) legacy *= transfer(band);
-        if (direct > 0) single = transfer(bell);
+        if (direct < 1) for (const auto& band : distributed) legacy *= band.transfer(z);
+        if (direct > 0) single = bell.transfer(z) * upperBell.transfer(z);
         return db(std::abs(1.0 + wet * ((1.0 - direct) * legacy + direct * single - 1.0)));
     }
 };
@@ -347,13 +407,17 @@ public:
         glueReduction = 0; onsetClock = lastOnset = 0; kickIntervalMs = 0;
         controlCounter = 0; smoothed = false; meters = {};
         directWeightDenominator = std::max(1e-12, *std::max_element(focusWeights.begin(),focusWeights.end()));
+        setUnmaskFundamental(0);
+        resetUnmaskUpperCut();
+        unmaskKickWeight = 0;
+        unmaskAgcSamples = 0;
         globalInitialised=globalPaused=false;globalRamp.reset(1);delayFade.reset(1);polarityRamp.reset(1);
         inputPowerMeter = outputPowerMeter = outputHeld = kickHeld = 0;
         focusHz = 75; trackedFocusHz = 75; focusCandidate=-1;focusCandidateSamples=0;focusAcquisitions=0;focusReferenceSeen=0;
         cachedRotationHz = -1; cachedAllpassA = 0;
         cutDb.fill(0); kickE.fill(0); bassE.fill(0); focusBassE.fill(0);directCutDb=0;directMix=0;directFilters={};
         allpassX.fill(0); allpassY.fill(0);
-        angleX={};angleY={};angleMix=0;angleCoefficient=0;
+        angleX={};angleY={};angleMix=0;angleCoefficient=0;angleLag=0;angleTransition.reset(1);
         for (auto& d : delays) d.prepare(sampleRate);
         learner.prepare(sampleRate);tube.prepare(sampleRate);tubeAgc.prepare(sampleRate,5000);
         for (size_t b = 0; b < frequencies.size(); ++b) {
@@ -369,7 +433,7 @@ public:
         energyA = pole(300, sampleRate); rmsA = pole(10, sampleRate);
         smoothA = pole(20, sampleRate); bandA = pole(15, sampleRate);
         kickFastA = pole(3, sampleRate); kickSlowA = pole(100, sampleRate);
-        parameterA = pole(500, sampleRate / 32); // coefficients adapt over 500 ms
+        parameterA = pole(500, sampleRate / 32); // ratio and automatic timing adapt over 500 ms
         cutAttackA = pole(8, sampleRate); cutReleaseA = pole(120, sampleRate);
         focusA = pole(200, sampleRate / 32); peakA = pole(300, sampleRate);
         filterParameterA = pole(20, sampleRate / 32);
@@ -405,7 +469,7 @@ public:
             for (auto& band : *bank) for (auto& f : band) f.z1 = f.z2 = 0;
         filters={};cutDb.fill(0);
         allpassX.fill(0); allpassY.fill(0);
-        angleX={};angleY={};angleMix=0;angleCoefficient=0;
+        angleX={};angleY={};angleMix=0;angleCoefficient=0;angleLag=0;angleTransition.reset(1);
         duckEnvelope = duckReduction = 0;
         meters.duckReductionDb = 0;
         duckModeInitialised = false;
@@ -413,6 +477,10 @@ public:
         duckBandEnvelope.fill(0);duckBandReduction.fill(0);
         subMono.clear();
         bassE.fill(0); kickE.fill(0); focusBassE.fill(0);
+        setUnmaskFundamental(0);
+        resetUnmaskUpperCut();
+        unmaskKickWeight = 0;
+        unmaskAgcSamples = 0;
         focusCandidate=-1;focusCandidateSamples=0;
         resetGlueReference();
         envelope = glueReduction = kickFast = kickSlow = 0;
@@ -455,6 +523,11 @@ public:
         const double sideTarget = s.unmaskStereoMode == UnmaskStereoMode::mid ? 0 : 1;
         const double focusLow = std::clamp(std::min(s.unmaskFocusMinHz, s.unmaskFocusMaxHz), 30.0, 250.0);
         const double focusHigh = std::clamp(std::max(s.unmaskFocusMinHz, s.unmaskFocusMaxHz), 30.0, 250.0);
+        const double learnedRoot = s.unmaskDirect && s.unmaskTrack ? unmaskReferenceInRange(s) : 0;
+        if (learnedRoot != unmaskRootHz) setUnmaskFundamental(learnedRoot);
+        const double width = std::clamp(s.unmaskWidth, 0.0, 1.0);
+        const double filterQTarget = 3.5 - 2.6 * width;
+        const double directQTarget = s.unmaskTrack ? 8 - 2.5 * width : filterQTarget;
         if (!smoothed) {
             midMix.reset(midTarget);
             sideMix.reset(sideTarget);
@@ -465,7 +538,9 @@ public:
             previousDelaySamples=delaySamples;delayFade.reset(1);polarityRamp.reset(polarity);
             deltaMix = s.delta && s.unmask && !(s.tube.enabled&&s.tube.audition) ? 1 : 0;
             directMix=s.unmaskDirect?1:0;
-            smoothedFilterQ = 3.5 - 2.6 * std::clamp(s.unmaskWidth, 0.0, 1.0);
+            smoothedFilterQ = filterQTarget;
+            smoothedDirectQ = directQTarget;
+            if (learnedRoot > 0 && !s.unmaskHold) focusHz = trackedFocusHz = learnedRoot;
         }
         meters.unmaskAttackMs=std::clamp(s.unmaskAttackMs,0.0,50.0);
         meters.unmaskReleaseMs=s.unmaskSync?noteMilliseconds(s.unmaskReleaseNote,bpm):std::clamp(s.unmaskReleaseMs,30.0,500.0);
@@ -476,20 +551,31 @@ public:
         const double rotationTarget = std::clamp(s.rotationHz, 20.0, 500.0);
         const double degrees=std::clamp(s.phaseAngle,-180.,180.);
         const bool useAngle=degrees!=0;
+        const double requestedLag = degrees>0 ? 360-degrees : -degrees;
+        const int angleFadeSamples = std::max(1,static_cast<int>(sampleRate * .006));
         // Two first-order sections give a full circle of phase at the
         // reference while retaining unity magnitude and no lookahead.
         double angleTarget=angleCoefficient;
         if (useAngle) {
-            const double lag=(degrees>0?360-degrees:-degrees)*pi/720;
+            const double lag=requestedLag*pi/720;
             const double t=std::tan(pi*std::clamp(s.phaseReference,30.,130.)/sampleRate)/
                 std::tan(lag);
             angleTarget=std::clamp((t-1)/(t+1),-.999999,.999999);
-            if (angleMix==0) angleCoefficient=angleTarget;
+            if (angleMix==0) {
+                angleCoefficient=angleTarget;
+                angleLag=requestedLag;
+                angleX={};angleY={};angleTransition.reset(1);
+            }
         }
         const double glueAmount = std::clamp(s.glueAmount, 0.0, 1.0);
         const double unmaskDepth = std::clamp(s.unmaskMaxCutDb, 3.0, 12.0)*std::clamp(s.unmaskAmount, 0.0, 1.0);
-        const double widthOctaves = 0.25 + 1.25 * std::clamp(s.unmaskWidth, 0.0, 1.0);
-        const double filterQTarget = 3.5 - 2.6 * std::clamp(s.unmaskWidth, 0.0, 1.0);
+        const double directDepth = std::clamp(s.unmaskAttenuationDb, 0.0, 24.0);
+        const double widthOctaves = 0.25 + 1.25 * width;
+        const bool unmaskAgcAvailable = s.agc[2].enabled && s.unmask && kick && kickChannels > 0
+            && (s.unmaskDirect ? directDepth : unmaskDepth) > 0;
+        const int unmaskAgcHold = static_cast<int>(sampleRate * .001 *
+            std::clamp(noteMilliseconds(4, bpm) * 1.25, 500.0, 1250.0));
+        if (!unmaskAgcAvailable) unmaskAgcSamples = 0;
         polarityRamp.set(s.invert?-1:1,rampSamples);
         midMix.set(midTarget, rampSamples);
         sideMix.set(sideTarget, rampSamples);
@@ -624,13 +710,12 @@ public:
             if (++controlCounter == 32) {
                 controlCounter = 0;
                 smoothedFilterQ = follow(smoothedFilterQ, filterQTarget, filterParameterA);
+                smoothedDirectQ = follow(smoothedDirectQ, directQTarget, filterParameterA);
                 if (!s.glueLocked && updateGlueReference) {
-                    // Normalise the RMS estimate while the average fills, and initialise
-                    // the threshold from the signal over the first ~32 ms of evidence.
+                    // Normalise the RMS over the samples observed so far. A second
+                    // average in dB would keep the threshold low during a fade-in.
                     const double referencePower = bassEnergy / glueReferenceWeight;
-                    const double targetThreshold = db(std::sqrt(referencePower)) - 3;
-                    thresholdDb = !glueReferenceReady || glueReferenceWeight < 0.1
-                        ? targetThreshold : follow(thresholdDb, targetThreshold, parameterA);
+                    thresholdDb = db(std::sqrt(referencePower)) - 3;
                     glueReferenceReady = true;
                     const double crest = std::clamp(db(std::sqrt(std::max(envelope, 1e-20) / referencePower)), 0.0, 12.0);
                     ratio = follow(ratio, 1.5 + 2 * glueAmount, parameterA);
@@ -652,7 +737,11 @@ public:
                     focusCandidate = -1;
                     focusCandidateSamples = 0;
                 }
-                const double targetFocus = s.unmaskTrack ? std::clamp(trackedFocusHz, focusLow, focusHigh) : std::clamp(s.unmaskFrequency, 30.0, 250.0);
+                double targetFocus = s.unmaskTrack ? std::clamp(trackedFocusHz, focusLow, focusHigh) : std::clamp(s.unmaskFrequency, 30.0, 250.0);
+                // A nearby detector band represents the same conflict as
+                // the learned frequency, even when its overlap is light.
+                if (learnedRoot > 0 && std::abs(targetFocus - learnedRoot) <= learnedRoot * .15)
+                    targetFocus = learnedRoot;
                 if (!s.unmaskHold || !s.unmaskTrack) {
                     focusHz = std::exp(follow(std::log(focusHz), std::log(targetFocus), focusA));
                     if (s.unmaskTrack && (focusLow > 30 || focusHigh < 250))
@@ -691,9 +780,9 @@ public:
             }
             glueReduction = follow(glueReduction, targetReduction, targetReduction > glueReduction ? attackA : releaseA);
             double budget = 6;
-            const auto compensate = [&](int module, double in, double out, double mix) {
+            const auto compensate = [&](int module, double in, double out, double mix, bool available = true) {
                 auto cfg = s.agc[static_cast<size_t>(module)];
-                if (mix < 1e-6) cfg.enabled = false;
+                if (mix < 1e-6 || !available) cfg.enabled = false;
                 const double g = agc[static_cast<size_t>(module)].tick(in, out, cfg, budget);
                 const double applied = 1 + mix * (g - 1);
                 budget -= std::max(0.0, db(applied));
@@ -721,10 +810,24 @@ public:
                 cachedAllpassA = (t-1)/(t+1); cachedRotationHz = rotationHz;
             }
             const double a = cachedAllpassA;
-            if (useAngle || angleMix>1e-9) {
+            if (useAngle) {
+                const bool crossesZero=std::abs(requestedLag-angleLag)>180.;
+                angleTransition.set(crossesZero?0:1,angleFadeSamples);
+                if (crossesZero && angleTransition.value()==0) {
+                    // At zero the all-pass changes branches. Pass through the
+                    // unrotated signal before changing its coefficient.
+                    angleX={};angleY={};
+                    angleCoefficient=angleTarget;
+                    angleLag=requestedLag;
+                } else if (!crossesZero) {
+                    angleCoefficient=follow(angleCoefficient,angleTarget,smoothA);
+                    angleLag=requestedLag;
+                }
+            }
+            const double angleBlend=angleTransition.next();
+            if (useAngle || angleMix>1e-9)
                 angleMix=follow(angleMix,useAngle?1:0,smoothA);
-                angleCoefficient=follow(angleCoefficient,angleTarget,smoothA);
-            } else angleMix=0;
+            else angleMix=0;
             if (phaseTap) phaseTap[n].before = float(channels == 2 ? (x[0]+x[1])*.5 : x[0]);
             double phaseReference = 0;
             for (int c = 0; c < channels; ++c) {
@@ -743,7 +846,8 @@ public:
                         angleY[stage][c]=std::abs(result)<1e-25?0:result;
                         angleSample=result;
                     }
-                    shifted+=angleMix*(angleSample-shifted);
+                    const double angleOutput=angleBlend==1 ? angleSample : d+angleBlend*(angleSample-d);
+                    shifted+=angleMix*(angleOutput-shifted);
                 }
                 x[c] += phaseMix * (shifted*polarity - x[c]);
             }
@@ -813,6 +917,32 @@ public:
                 const double difference = (signal[0] - signal[1]) * .5;
                 return mid * centre * centre + side * difference * difference;
             };
+            const double unmaskInputPower = selectedPower(beforeUnmask);
+            if (s.unmaskDirect && s.unmaskTrack) {
+                unmaskBassReference = follow(unmaskBassReference, unmaskInputPower, bandA);
+                unmaskKickReference = follow(unmaskKickReference, kp, bandA);
+            }
+            if (learnedRoot > 0) {
+                std::array<double, 2> lowBass{}, lowKick{}, earlyKick{};
+                for (int c = 0; c < channels; ++c) lowBass[c] = fundamentalBass[c].tick(beforeUnmask[c]);
+                for (int c = 0; c < 2; ++c) lowKick[c] = fundamentalKick[c].tick(k[c], &earlyKick[c]);
+                rootBassPower = follow(rootBassPower, selectedPower(lowBass), bandA);
+                rootKickPower = follow(rootKickPower, power(lowKick, 2), bandA);
+                earlyRootKickPower = follow(earlyRootKickPower, power(earlyKick, 2), kickFastA);
+                // The first section responds sooner at the start of a hit.
+                // Use it for balance while the narrower detector confirms overlap.
+                if (controlCounter == 0)
+                    rootActivity = unmaskFundamentalActivity(rootBassPower, rootKickPower, unmaskBassReference,
+                                                              unmaskKickReference, earlyRootKickPower * .5);
+                for (auto& harmonic : harmonicDetectors) {
+                    if (harmonic.frequency == 0) break;
+                    std::array<double, 2> highBass{}, highKick{};
+                    for (int c = 0; c < channels; ++c) highBass[c] = harmonic.bass[c].tick(beforeUnmask[c]);
+                    for (int c = 0; c < 2; ++c) highKick[c] = harmonic.kick[c].tick(k[c]);
+                    harmonic.bassPower = follow(harmonic.bassPower, selectedPower(highBass), bandA);
+                    harmonic.kickPower = follow(harmonic.kickPower, power(highKick, 2), bandA);
+                }
+            }
             // Auto Focus and gain detection share the input of Unmask. The
             // tracker cannot chase bass energy that Duck has already removed.
             if (s.unmaskTrack) {
@@ -833,7 +963,8 @@ public:
                 signal[0] += centre + difference;
                 signal[1] += centre - difference;
             };
-            double maxCut = 0,directActivity=0;
+            double maxCut = 0, directActivity = 0, legacyTarget = 0;
+            size_t directBand = 0;
             auto legacy=x;
             for (size_t b = 0; b < frequencies.size(); ++b) {
                 double be = 0, ke = 0;
@@ -850,30 +981,54 @@ public:
                 bassE[b] = follow(bassE[b], be, bandA); kickE[b] = follow(kickE[b], ke, bandA);
                 // Overlap requires both signals. No kick => decay to unity, never duck full-band.
                 const double overlap = std::min(bassE[b], kickE[b]);
-                // Exact saturated branches avoid log10 for inactive or fully active bands.
-                const double activity = overlap <= 3.1622776601683792e-7 ? 0.0
-                    : overlap >= 3.1622776601683794e-4 ? 1.0
-                    : (10*std::log10(overlap)+65)/30;
+                const double activity = unmaskActivity(overlap);
                 const double target = -unmaskDepth * activity * focusWeights[b];
+                legacyTarget = std::max(legacyTarget, -target);
                 cutDb[b] = follow(cutDb[b], target, target < cutDb[b] ? cutAttackA : cutReleaseA);
                 maxCut = std::max(maxCut, -cutDb[b]);
-                directActivity=std::max(directActivity,activity*focusWeights[b]);
+                const double weightedActivity = activity * focusWeights[b];
+                if (weightedActivity > directActivity) {
+                    directActivity = weightedActivity;
+                    directBand = b;
+                }
                 for (int c = 0; c < channels; ++c) legacy[c] = filters[b][c].tick(legacy[c]);
             }
-            // dB control is a calibrated single dynamic bell: the requested
-            // attenuation is its centre gain at full detector activity. Legacy
-            // sessions keep the former distributed-band path until dB is selected.
-            const double directTarget=-std::clamp(s.unmaskAttenuationDb,0.0,24.0)*(directActivity/directWeightDenominator);
-            directCutDb=follow(directCutDb,directTarget,directTarget<directCutDb?cutAttackA:cutReleaseA);
-            if(controlCounter%32==0){
-                directFilters[0].peak(focusHz,smoothedFilterQ,directCutDb,sampleRate);
-                auto& a=directFilters[0];auto& b=directFilters[1];
-                b.b0=a.b0;b.b1=a.b1;b.b2=a.b2;b.a1=a.a1;b.a2=a.a2;
-                if(std::abs(directCutDb)<1e-12)b.z1=b.z2=0;
+            const bool nearRoot = learnedRoot > 0 && std::abs(focusHz - learnedRoot) <= learnedRoot * .10;
+            const bool upperFocus = s.unmaskTrack && !nearRoot && isUnmaskUpperBand(focusHz, learnedRoot);
+            if (controlCounter == 0 && s.unmaskTrack) {
+                // As the kick fades, its weak tail must not drive a stronger
+                // cut just because the bass is now louder by comparison.
+                const double level = std::sqrt(kickFast) / std::max(kickHeld, 1e-12);
+                const double body = std::clamp((level - .0631) / (.32 - .0631), 0., 1.);
+                unmaskKickWeight = body * body * (3 - 2 * body);
             }
+            const double kickWeight = s.unmaskTrack ? unmaskKickWeight : 1;
+            double targetDepth = directDepth;
+            if (s.unmaskTrack && !nearRoot) {
+                if (controlCounter == 0 && upperFocus)
+                    upperFocusLimitDb = kickWeight > 0 ? unmaskFocusedUpperCut(directBand, focusLow, focusHigh) : 0;
+                targetDepth = std::min(targetDepth, upperFocus ? upperFocusLimitDb : 6.);
+            }
+            const double directTarget = -targetDepth * kickWeight * (nearRoot ? rootActivity : directActivity / directWeightDenominator);
+            directCutDb=follow(directCutDb,directTarget,directTarget<directCutDb?cutAttackA:cutReleaseA);
+            if (controlCounter == 0) {
+                setUnmaskBell(directFilters, focusHz, smoothedDirectQ, directCutDb);
+                updateUnmaskUpperCut(nearRoot && s.unmask ? kickWeight : 0., s.unmaskHold,
+                                      focusLow, focusHigh, directDepth);
+            }
+            const double effectiveUpperTarget = nearRoot ? upperTargetDb : 0;
+            if (upperCutDb > 0 || effectiveUpperTarget > 0) {
+                const double release = !nearRoot || upperRetuning ? smoothA : cutReleaseA;
+                upperCutDb = follow(upperCutDb, effectiveUpperTarget, effectiveUpperTarget > upperCutDb ? cutAttackA : release);
+                if (upperCutDb < 1e-9) upperCutDb = 0;
+            }
+            if (controlCounter == 0 && (upperCutDb > 0 || upperFilters[0].b0 != 1))
+                setUnmaskBell(upperFilters, upperFrequency, 6., -upperCutDb);
+            const bool upperBellActive = upperFilters[0].b0 != 1;
             directMix=follow(directMix,s.unmaskDirect?1:0,smoothA);
             for (int c = 0; c < channels; ++c){
-                const double direct=directFilters[size_t(c)].tick(beforeUnmask[c]);
+                const double focused = directFilters[c].tick(beforeUnmask[c]);
+                const double direct = upperBellActive ? upperFilters[c].tick(focused) : focused;
                 const double processed=directMix==0?legacy[c]:directMix==1?direct:legacy[c]+directMix*(direct-legacy[c]);
                 x[c]=beforeUnmask[c]+unmaskMix*(processed-beforeUnmask[c]);
             }
@@ -885,7 +1040,11 @@ public:
                 applySelectedChange(x, filtered[0] - x[0], filtered[1] - x[1]);
             }
             const auto afterUnmask = x;
-            const double unmaskAgc = compensate(2, selectedPower(beforeUnmask), selectedPower(x), unmaskMix);
+            if (unmaskAgcAvailable) {
+                if ((s.unmaskDirect ? std::max(-directTarget, effectiveUpperTarget) : legacyTarget) > .10) unmaskAgcSamples = unmaskAgcHold;
+                else if (unmaskAgcSamples > 0) --unmaskAgcSamples;
+            }
+            const double unmaskAgc = compensate(2, unmaskInputPower, selectedPower(x), unmaskMix, unmaskAgcSamples > 0);
             if (linked) {
                 for (int c=0;c<channels;++c) x[c] *= unmaskAgc;
             } else {
@@ -936,15 +1095,15 @@ public:
             outputPowerMeter = follow(outputPowerMeter,
                 static_cast<double>(bass[0][n])*bass[0][n]/channels
                 + (channels == 2 ? static_cast<double>(bass[1][n])*bass[1][n]/channels : 0), energyA);
-            meters.unmaskReductionDb = (s.unmaskDirect?-directCutDb:maxCut) * unmaskMix; // maximum individual band, not total cut
+            meters.unmaskReductionDb = (s.unmaskDirect ? std::max(-directCutDb, upperCutDb) : maxCut) * unmaskMix;
         }
         meters.duckReductionDb = displayedDuckReduction;
-        if (samples > 0) meters.glueReductionDb = glueMix == 1 ? glueReduction : -db(glueGain);
+        if (samples > 0) meters.glueReductionDb = -db(glueGain);
         meters.matchGainDb = match ? db(monitorGain.value()) : 0;
         meters.tubeAddedDb=db(std::sqrt(tube.addedPower()));
         meters.peak = outputHeld; meters.kickPeak = kickHeld;
         meters.inputRmsDb = db(std::sqrt(inputPowerMeter)); meters.outputRmsDb = db(std::sqrt(outputPowerMeter));
-        meters.focusHz = focusHz; meters.filterQ = smoothedFilterQ;
+        meters.focusHz = focusHz; meters.filterQ = s.unmaskDirect ? smoothedDirectQ : smoothedFilterQ;
         meters.attackMs = attackMs; meters.releaseMs = releaseMs;
         for (size_t b = 0; b < frequencies.size(); ++b) {
             meters.bassDb[b] = db(std::sqrt(bassE[b])); meters.kickDb[b] = db(std::sqrt(kickE[b]));
@@ -965,11 +1124,89 @@ public:
             response.activity = meters.unmaskReductionDb * globalRamp.value() * projection;
             if (response.direct < 1)
                 for (size_t band = 0; band < bandCount; ++band) response.distributed[band] = filters[band][0];
-            if (response.direct > 0) response.bell = directFilters[0];
+            if (response.direct > 0) {
+                response.bell = directFilters[0];
+                response.upperBell = upperFilters[0];
+            }
         }
         return response;
     }
 private:
+    void setUnmaskFundamental(double hz) noexcept {
+        unmaskRootHz = hz;
+        rootBassPower = rootKickPower = earlyRootKickPower = unmaskBassReference = unmaskKickReference = rootActivity = 0;
+        harmonicDetectors = {};
+        if (hz > 0) {
+            for (auto* bank : {&fundamentalBass, &fundamentalKick})
+                for (auto& filter : *bank) filter.tune(hz, sampleRate);
+            for (size_t i = 0; i < harmonicDetectors.size() && (i + 2) * hz <= 250.; ++i) {
+                auto& harmonic = harmonicDetectors[i];
+                harmonic.frequency = (i + 2) * hz;
+                for (auto* bank : {&harmonic.bass, &harmonic.kick})
+                    for (auto& filter : *bank) filter.bandpass(harmonic.frequency, 7., sampleRate);
+            }
+        }
+    }
+
+    void setUnmaskBell(std::array<Biquad, 2>& pair, double frequency, double q, double cut) noexcept {
+        auto& left = pair[0];
+        auto& right = pair[1];
+        left.peak(frequency, q, cut, sampleRate);
+        right.b0 = left.b0; right.b1 = left.b1; right.b2 = left.b2;
+        right.a1 = left.a1; right.a2 = left.a2;
+        if (std::abs(cut) < 1e-12) right.z1 = right.z2 = 0;
+    }
+
+    void resetUnmaskUpperCut() noexcept {
+        upperFilters = {};
+        upperFrequency = upperTargetDb = upperCutDb = upperFocusLimitDb = 0;
+        upperRetuning = false;
+    }
+
+    double unmaskFocusedUpperCut(size_t band, double low, double high) const noexcept {
+        double bass = focusBassE[band], kick = kickE[band], closest = .15;
+        for (const auto& harmonic : harmonicDetectors) {
+            if (harmonic.frequency == 0) break;
+            if (harmonic.frequency < low || harmonic.frequency > high) continue;
+            const double distance = std::abs(frequencies[band] / harmonic.frequency - 1);
+            if (distance < closest) {
+                closest = distance;
+                bass = harmonic.bassPower;
+                kick = harmonic.kickPower;
+            }
+        }
+        return unmaskUpperCutDb(bass, kick, unmaskBassReference, unmaskKickReference);
+    }
+
+    void updateUnmaskUpperCut(double kickWeight, bool hold, double low, double high, double depth) noexcept {
+        double strongest = 0, current = 0, frequency = 0;
+        if (kickWeight > 0 && depth > 0) {
+            for (const auto& harmonic : harmonicDetectors) {
+                const double hz = harmonic.frequency;
+                if (hz < low || hz > high || (hold && hz != upperFrequency)) continue;
+                const double cut = unmaskUpperCutDb(harmonic.bassPower, harmonic.kickPower,
+                                                    unmaskBassReference, unmaskKickReference);
+                if (hz == upperFrequency) current = cut;
+                if (cut > strongest) { strongest = cut; frequency = hz; }
+            }
+        }
+        if (current > 0 && strongest < current + .20) {
+            strongest = current;
+            frequency = upperFrequency;
+        }
+        upperTargetDb = 0;
+        upperRetuning = frequency > 0 && frequency != upperFrequency && upperCutDb > .02;
+        if (frequency == 0 || upperRetuning) return;
+        if (frequency != upperFrequency) {
+            upperFrequency = frequency;
+            upperFilters = {};
+        }
+        // The upper-band ceiling includes the skirt of the main bell.
+        const double angle = 2 * pi * frequency / sampleRate;
+        const double mainCut = -db(std::abs(directFilters[0].transfer({std::cos(angle), -std::sin(angle)})));
+        upperTargetDb = std::max(0., std::min(strongest, depth * .5) * kickWeight - mainCut);
+    }
+
     void resetGlueReference() noexcept {
         bassEnergy = glueReferenceWeight = 0;
         glueQuietSamples = glueRestartSamples;
@@ -989,6 +1226,13 @@ private:
         // At around 24 dB below the recent kick peak, its tail must not
         // retune the filter as Duck releases and the bass gets louder again.
         const bool kickBody = kickFast > .004 * kickHeld * kickHeld;
+        if (kickBody && unmaskRootHz > 0 && rootActivity > .025) {
+            if (trackedFocusHz != unmaskRootHz) ++focusAcquisitions;
+            trackedFocusHz = unmaskRootHz;
+            focusCandidate = -1;
+            focusCandidateSamples = 0;
+            return;
+        }
         for (size_t band = 0; band < frequencies.size(); ++band) {
             const double hz = frequencies[band];
             if (!kickBody || hz < low || hz > high) continue;
@@ -1038,6 +1282,19 @@ private:
     double kickEqHz = 0, kickEqDb = 0, wetPower = 0;
     static constexpr auto frequencies = bandFrequencies;
     std::array<std::array<Biquad, 2>, bandCount> detectorsBass{}, detectorsKick{}, focusBassFilters{}, filters{};
+    std::array<UnmaskFundamentalBand, 2> fundamentalBass{}, fundamentalKick{};
+    struct HarmonicDetector {
+        std::array<Biquad, 2> bass{}, kick{};
+        double frequency = 0, bassPower = 0, kickPower = 0;
+    };
+    std::array<HarmonicDetector, 7> harmonicDetectors{};
+    std::array<Biquad, 2> upperFilters{};
+    double upperFrequency = 0, upperTargetDb = 0, upperCutDb = 0, upperFocusLimitDb = 0;
+    bool upperRetuning = false;
+    double unmaskRootHz = 0, rootBassPower = 0, rootKickPower = 0, earlyRootKickPower = 0;
+    double unmaskBassReference = 0, unmaskKickReference = 0, rootActivity = 0;
+    double unmaskKickWeight = 0;
+    int unmaskAgcSamples = 0;
     std::array<double, bandCount> bassE{}, kickE{}, focusBassE{}, cutDb{}, focusWeights{};
     std::array<Delay, 2> delays;
     std::array<AutoGain, 3> agc;
@@ -1046,7 +1303,8 @@ private:
     Meters meters;
     std::array<double, 2> allpassX{}, allpassY{};
     std::array<std::array<double,2>,2> angleX{},angleY{};
-    double angleMix=0,angleCoefficient=0;
+    Ramp angleTransition;
+    double angleMix=0,angleCoefficient=0,angleLag=0;
     double sampleRate = 48000, bassEnergy = 0, envelope = 0, kickFast = 0, kickSlow = 0;
     double glueReferenceWeight = 0;
     int glueSignalHoldSamples = 0, glueRestartSamples = 0, glueQuietSamples = 0;
@@ -1059,7 +1317,7 @@ private:
     double rotationMix = 0, rotationHz = 90, outputGain = 1, kickIntervalMs = 0;
     double deltaMix = 0;
     double cachedRotationHz = -1, cachedAllpassA = 0;
-    double smoothedFilterQ = 2, filterParameterA = 0;
+    double smoothedFilterQ = 2, smoothedDirectQ = 2, filterParameterA = 0;
     double inputPowerMeter = 0, outputPowerMeter = 0, outputHeld = 0, kickHeld = 0;
     int focusCandidate=-1,focusAcquisitions=0;double focusCandidateSamples=0,focusReferenceSeen=0;
     double focusHz = 75, trackedFocusHz = 75, focusA = 0, peakA = 0;

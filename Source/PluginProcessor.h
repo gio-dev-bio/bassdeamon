@@ -62,7 +62,11 @@ public:
     std::atomic<float> comparisonGainDb{0};
     std::atomic<int> kickEqStatus{0}; // idle, recording, failed, locked, no sidechain, waiting
     std::atomic<float> kickEqProgress{0};
-    void requestLearn() noexcept { learnStatus.store(7); learnRequested.store(true); }
+    void requestLearn() noexcept {
+        const auto generation=phaseLearnGeneration.fetch_add(1)+1;
+        learnStatus.store(7);
+        phaseLearnRequest.store(generation);
+    }
     enum class AutoMixState { idle, armed, recording, captured, analyzing, ready };
     AutoMixState autoMixState() const noexcept { return autoState.load(std::memory_order_acquire); }
     void startAutoMix(int bars);
@@ -134,7 +138,9 @@ private:
     unsigned captureGeneration = 0; // published with CaptureState::ready
     float captureStartFrequency = 0;
     std::array<std::atomic<float>*,parameterCount> raw{};
-    std::atomic<bool> learnRequested{false}, resultReady{false};
+    void discardPhaseLearn() noexcept;
+    std::atomic<uint64_t> phaseLearnGeneration{0}, phaseLearnRequest{0}, phaseLearnResult{0};
+    uint64_t activePhaseLearn=0;
     std::atomic<float> resultDelay{0};
     std::atomic<bool> resultInvert{false};
     std::array<std::atomic<float>, 9> runtimeSnapshot{}, restoredRuntime{};

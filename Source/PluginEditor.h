@@ -22,7 +22,7 @@ private:
         BassDeamonEditor& editor;
     };
     struct Knob final : juce::Component {
-        Knob(State&,const char*,const char*,const char*,bool);
+        Knob(State&,const char*,const char*,const char*,bool,bool);
         void resized() override;
         juce::Label label;
         juce::Slider slider;
@@ -39,7 +39,7 @@ private:
     };
     struct Switch {UserToggle button;std::unique_ptr<State::ButtonAttachment> attachment;};
     void addSwitch(const char*,const char*,juce::Rectangle<int>,const char* tooltip);
-    Knob& addKnob(const char*,const char*,const char*,bool,juce::Rectangle<int>,const char*);
+    Knob& addKnob(const char*,const char*,const char*,bool,juce::Rectangle<int>,const char*,bool attach=true);
     void addChoice(const char*,const juce::StringArray&,juce::Rectangle<int>);
     void paintConsole(juce::Graphics&);
     void rebuildConsoleBackground();
@@ -53,7 +53,10 @@ private:
     juce::TextButton analyzerTab{"ANALYZER"}, scopeTab{"SCOPE"};
     juce::TextButton phaseAdvanced{"ADVANCED"}, duckAdvanced{"ADVANCED"};
     bool showScope=false, showPhaseAdvanced=false, showDuckAdvanced=false;
-    std::array<juce::Component*,8> phaseControls{};
+    std::array<juce::Component*,7> phaseControls{};
+    void bindPhaseRotation(juce::Slider&);
+    void updatePhaseRotation(double);
+    double phaseSampleRate() const noexcept;
     void refreshUnmaskControls();
     int paintSpectrumPlot(juce::Graphics&, juce::Rectangle<float>, bool post);
     void paintWave(juce::Graphics&);
@@ -99,8 +102,10 @@ private:
     juce::TextButton phaseScopeButton{"PHASE A/B"};
     juce::Slider phaseReference, phaseAngle;
     juce::ToggleButton phaseAutoReference{"AUTO REF"};
-    std::unique_ptr<State::SliderAttachment> phaseAngleAttachment;
-    Knob* rotationKnob=nullptr;
+    std::unique_ptr<juce::ParameterAttachment> phaseAngleAttachment;
+    Knob *rotationKnob=nullptr,*legacyRotationKnob=nullptr;
+    double displayedPhaseRotation=0;
+    bool phaseRotationDragging=false;
     juce::TextButton scopeCompareButton{"COMPARE PRE"};
     juce::TextButton spectrumPre{"PRE"},spectrumPost{"POST"},spectrumHold{"HOLD"};
     juce::TextButton kickEqLearn{"LEARN"}, dryCompare{"DRY"}, matchCompare{"LEVEL MATCH"};

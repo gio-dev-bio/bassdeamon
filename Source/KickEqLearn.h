@@ -83,15 +83,25 @@ public:
                     if (yy / window >= std::max(1e-9, peak * peak * .000025))
                         scores[lag] = xy / std::sqrt(std::max(1e-20, power * yy));
                 }
-                // Pick the first confident period, avoiding octave-down multiples.
+                // A loud harmonic can produce a good short period. Prefer a
+                // multiple only when it repeats the waveform more faithfully.
+                double period = 0, confidence = 0;
                 for (int lag = minLag; lag <= maxLag; ++lag) {
                     const double a = scores[lag - 1], b = scores[lag], c = scores[lag + 1];
                     if (b < .85 || b <= a || b <= c) continue;
                     const double offset = .5 * (a - c) / (a - 2 * b + c);
-                    const double hz = rate / (lag + offset);
-                    return hz >= 30 && hz <= 130 ? hz : 0.0;
+                    const double candidate = lag + offset;
+                    const double hz = rate / candidate;
+                    if (hz < 30 || hz > 130) continue;
+                    const double peak = std::min(1., b + .25 * (c - a) * offset);
+                    const double multiple = period > 0 ? candidate / period : 0;
+                    const bool harmonic = std::abs(multiple - 2) < .15 || std::abs(multiple - 3) < .15;
+                    if (period == 0 || (harmonic && peak > confidence + .02)) {
+                        period = candidate;
+                        confidence = peak;
+                    }
                 }
-                return 0.0;
+                return period > 0 ? rate / period : 0;
             };
             // A repeatable kick can have a steep pitch sweep at its onset.
             // Prefer the settled tail; use early windows for short samples.

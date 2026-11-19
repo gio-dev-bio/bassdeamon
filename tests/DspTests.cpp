@@ -168,6 +168,11 @@ int main() {
         // starts up, or after silence or a transport reset.
         for (double sr : {44100., 48000., 96000.}) {
             const auto phrase = tone(static_cast<int>(sr), 55, 0.8, sr);
+            auto swell = phrase;
+            for (size_t i = 0; i < swell.size(); ++i) {
+                const double progress = std::min(1., double(i) / (0.5 * sr));
+                swell[i] *= static_cast<float>(0.5 - 0.5 * std::cos(pi * progress));
+            }
             for (int timing : {0, 1, 2}) {
                 Settings startup = bypass();
                 startup.glue = true;
@@ -177,35 +182,42 @@ int main() {
                 startup.glueReleaseMs = 70;
                 Engine glue;
                 glue.prepare(sr);
-                const auto checkPhrase = [&](Engine& engine, int block) {
-                    auto wet = phrase;
+                const auto checkPhrase = [&](Engine& engine, int block, const Signal& input, double peakLimit) {
+                    auto wet = input;
                     render(engine, wet, nullptr, startup, block);
                     double peakReduction = 0;
-                    for (size_t i = 0; i < wet.size() / 4; ++i) {
-                        if (std::abs(phrase[i]) > 1e-6)
-                            peakReduction = std::max(peakReduction, -db(std::abs(double(wet[i]) / phrase[i])));
+                    for (size_t i = 0; i < wet.size(); ++i) {
+                        if (std::abs(input[i]) > 1e-6)
+                            peakReduction = std::max(peakReduction, -db(std::abs(double(wet[i]) / input[i])));
                     }
-                    require(peakReduction < 4, "GLUE crushed the bass onset");
+                    require(peakReduction < peakLimit, "GLUE crushed the bass onset");
                     const auto steadyStart = wet.size() * 3 / 4;
-                    require(-db(rms(wet, steadyStart) / rms(phrase, steadyStart)) > 1,
+                    require(-db(rms(wet, steadyStart) / rms(input, steadyStart)) > 1,
                             "GLUE lost sustained compression");
                     return wet;
                 };
-                auto start = checkPhrase(glue, 257);
+                const auto start = checkPhrase(glue, 257, phrase, 4);
                 Engine alternate;
                 alternate.prepare(sr);
-                require(start == checkPhrase(alternate, 1024), "GLUE acquisition depends on host buffer size");
+                require(start == checkPhrase(alternate, 1024, phrase, 4), "GLUE acquisition depends on host buffer size");
                 const double learned = glue.runtimeState()[0];
-                auto nearSilence = tone(static_cast<int>(sr * 3), 67, 1e-5, sr);
+                auto tail = tone(static_cast<int>(sr * 0.1), 67, 1e-5, sr);
+                render(glue, tail, nullptr, startup, 63);
+                const double heldThreshold = glue.runtimeState()[0];
+                require(std::abs(heldThreshold - learned) < 0.75, "GLUE lost its level reference when the bass stopped");
+                auto nearSilence = tone(static_cast<int>(sr * 2.9), 67, 1e-5, sr);
                 render(glue, nearSilence, nullptr, startup, 63);
-                require(std::abs(glue.runtimeState()[0] - learned) < 0.5, "GLUE threshold followed silence");
-                checkPhrase(glue, 512);
+                require(glue.runtimeState()[0] == heldThreshold, "GLUE threshold followed silence");
+                checkPhrase(glue, 512, phrase, 4);
 
                 auto previous = glue.runtimeState();
                 previous[0] = -45;
                 glue.restoreRuntime(previous);
                 glue.clearHistory();
-                checkPhrase(glue, 121);
+                checkPhrase(glue, 121, phrase, 4);
+
+                glue.prepare(sr);
+                checkPhrase(glue, 257, swell, 6);
             }
         }
         {
@@ -232,7 +244,7 @@ int main() {
             require(std::abs(glue.getMeters().glueReductionDb + db(transition.back() / 0.5)) < 1e-5,
                     "GLUE meter differs from actual gain during its wet/dry transition");
         }
-        std::cout << "PASS GLUE onset / silence / transport reset / locked threshold / meter\n";
+        std::cout << "PASS GLUE onset / fade-in / silence / transport reset / locked threshold / meter\n";
 
         // Independent AGC lock, quiet-signal suspension and 3 dB cap.
         AutoGain agc; agc.prepare(48000, 100);
@@ -277,6 +289,178 @@ int main() {
         require(recalledFocus.runtimeState()[7] == heldFocus, "HOLD focus was not persisted");
         std::cout << "PASS automatic focus / HOLD / recall\n";
 
+        // A learned fundamental lies between the detector bands. A hotter
+        // harmonic on both inputs must not pull Auto Focus off that frequency.
+        for (double sr : {44100., 48000., 96000.}) {
+            constexpr double fundamental = 53;
+            const int length = static_cast<int>(sr * 2);
+            const auto first = tone(length, fundamental, .15, sr);
+            const auto second = tone(length, fundamental * 2, .46, sr);
+            const auto third = tone(length, fundamental * 3, .26, sr);
+            auto bass = first;
+            auto kick = tone(length, fundamental, .10, sr);
+            const auto loudHarmonic = tone(length, fundamental * 2, .38, sr);
+            for (int n = 0; n < length; ++n) {
+                bass[n] += second[n] + third[n];
+                kick[n] += loudHarmonic[n];
+            }
+            Settings focused = bypass();
+            focused.unmask = focused.unmaskDirect = true;
+            focused.kickReferenceHz = fundamental;
+            focused.unmaskWidth = 1;
+            focused.unmaskAttenuationDb = 24;
+            Engine detector;
+            detector.prepare(sr);
+            auto wet = bass;
+            render(detector, wet, &kick, focused, 127);
+            const auto change = [&](double frequency) {
+                const auto steady = static_cast<size_t>(sr);
+                return db(projection(wet, frequency, steady, sr) / projection(bass, frequency, steady, sr));
+            };
+            require(std::abs(detector.getMeters().focusHz - fundamental) < .1, "Unmask rounded the learned fundamental or chased a harmonic");
+            require(std::abs(change(fundamental) + 24) < .25, "Unmask did not deliver the requested fundamental cut");
+            require(std::abs(change(fundamental * 2) + 4) < .12 && change(fundamental * 3) > -.6,
+                    "Unmask did not isolate the severe upper overlap");
+            const auto response = detector.unmaskResponse(focused, 1);
+            require(std::abs(response.gainDb(fundamental, sr) - change(fundamental)) < .25 &&
+                    std::abs(response.gainDb(fundamental * 2, sr) - change(fundamental * 2)) < .08,
+                    "Unmask spectrum curve differs from the actual focused cut");
+
+            auto mildBass = tone(length, fundamental, .42, sr);
+            auto mildKick = tone(length, fundamental, .45, sr);
+            const auto mildBassHarmonic = tone(length, fundamental * 2, .14, sr);
+            const auto mildKickHarmonic = tone(length, fundamental * 2, .13, sr);
+            for (int n = 0; n < length; ++n) {
+                mildBass[n] += mildBassHarmonic[n];
+                mildKick[n] += mildKickHarmonic[n];
+            }
+            detector.prepare(sr);
+            auto mildWet = mildBass;
+            render(detector, mildWet, &mildKick, focused, 1024);
+            const auto measureSecond = [&](const Signal& signal) {
+                return projection(signal, fundamental * 2, static_cast<size_t>(sr), sr);
+            };
+            require(std::abs(db(measureSecond(mildWet) / measureSecond(mildBass)) + 1.25) < .12,
+                    "Ordinary shared harmonic exceeded the light cut");
+
+            detector.prepare(sr);
+            auto harmonicOnly = second;
+            render(detector, harmonicOnly, &kick, focused, 257);
+            require(detector.getMeters().focusHz > fundamental * 1.45, "Harmonic leakage counted as fundamental overlap");
+            require(detector.getMeters().unmaskReductionDb > .5 && detector.getMeters().unmaskReductionDb <= 4.001,
+                    "Auto Focus did not limit the residual harmonic cut");
+
+            detector.prepare(sr);
+            const auto kickWithoutHarmonic = tone(length, fundamental, .45, sr);
+            harmonicOnly = second;
+            render(detector, harmonicOnly, &kickWithoutHarmonic, focused, 257);
+            require(std::abs(db(measureSecond(harmonicOnly) / measureSecond(second))) < .05,
+                    "Unmask mistook a bass-only harmonic for overlap");
+
+            detector.prepare(sr);
+            focused.kickReferenceHz = 0;
+            wet = bass;
+            render(detector, wet, &kick, focused);
+            require(detector.getMeters().unmaskReductionDb <= 6.001, "Unverified focus received the full automatic cut");
+        }
+        {
+            constexpr int sr = 44100;
+            const auto bass = tone(sr * 2, 53, .10, sr);
+            const auto kick = tone(sr * 2, 53, .40, sr);
+            Settings focused = bypass();
+            focused.duck = focused.unmask = focused.unmaskDirect = true;
+            focused.duckAmountDb = 18;
+            focused.duckAttackMs = 0;
+            focused.kickReferenceHz = 53;
+            focused.unmaskAttenuationDb = 24;
+            Engine duck, combined;
+            duck.prepare(sr);
+            combined.prepare(sr);
+            auto wet = bass, duckOnly = bass;
+            render(combined, wet, &kick, focused);
+            focused.unmask = false;
+            render(duck, duckOnly, &kick, focused);
+            require(std::abs(db(rms(wet, sr) / rms(duckOnly, sr))) < .05, "Unmask recut a fundamental already cleared by Duck");
+        }
+        std::cout << "PASS Unmask exact fundamental / light and severe harmonic overlap / post-Duck overlap\n";
+
+        // A short kick must produce a stronger cut only for a genuinely
+        // competing bass. Its detector tail should let the note recover.
+        for (double sr : {44100., 48000., 96000.}) {
+            struct HitResponse { double peakDb = 0, tailDb = 0; int peakMs = 0; };
+            constexpr double hz = 53;
+            const int blockSize = static_cast<int>(sr / 100);
+            const auto measureKick = [&](double bassLevelDb) {
+                Engine detector;
+                detector.prepare(sr);
+                Settings focused = bypass();
+                focused.unmask = focused.unmaskDirect = true;
+                focused.kickReferenceHz = hz;
+                focused.unmaskAttenuationDb = 6;
+                Signal bass(blockSize), kick(blockSize);
+                float* output[]{bass.data()};
+                const float* sidechain[]{kick.data()};
+                const double bassAmplitude = .42 * gain(bassLevelDb);
+                HitResponse result;
+                for (int block = 0; block < 250; ++block) {
+                    for (int n = 0; n < blockSize; ++n) {
+                        const double time = (block * blockSize + n) / sr;
+                        const double age = std::fmod(time, .5);
+                        bass[n] = float(bassAmplitude * std::sin(2 * pi * hz * time));
+                        kick[n] = age < .08 ? float(.42 * std::exp(-age / .035) * std::sin(2 * pi * hz * age)) : 0;
+                    }
+                    detector.process(output, 1, sidechain, 1, blockSize, focused, 120);
+                    if (block < 200) continue;
+                    const int timeMs = (block - 199) * 10;
+                    const double cut = detector.getMeters().unmaskReductionDb;
+                    if (cut > result.peakDb) {
+                        result.peakDb = cut;
+                        result.peakMs = timeMs;
+                    }
+                    if (timeMs == 260) result.tailDb = cut;
+                }
+                return result;
+            };
+            const auto quiet = measureKick(-18);
+            const auto strong = measureKick(0);
+            require(quiet.peakDb > .1 && quiet.peakDb < 1.6 && strong.peakDb > 4,
+                    "Auto Focus applied the same depth to quiet and competing bass");
+            require(quiet.peakMs <= 80 && strong.peakMs <= 80 && quiet.tailDb < .35 && strong.tailDb < 1.5,
+                    "Unmask deepened or held the cut after the kick");
+        }
+        std::cout << "PASS Unmask follows kick body and releases with depth proportional to overlap\n";
+
+        // A recalled AGC amount must fade out when its module ceases to cut.
+        for (int stop : {0, 1, 2}) {
+            constexpr int sr = 44100;
+            Engine makeup;
+            makeup.prepare(sr);
+            auto recalled = makeup.runtimeState();
+            recalled[6] = 2.75;
+            makeup.restoreRuntime(recalled);
+            Settings focused = bypass();
+            focused.unmask = focused.unmaskDirect = true;
+            focused.unmaskTrack = false;
+            focused.unmaskFrequency = 75;
+            focused.unmaskAttenuationDb = 12;
+            focused.agc[2] = {true, true};
+            auto bass = tone(sr, 75, .4, sr);
+            const auto activeKick = bass;
+            render(makeup, bass, &activeKick, focused);
+            require(makeup.getMeters().agcDb[2] > 2.7, "Unmask AGC did not apply the recalled compensation");
+            if (stop == 2) focused.unmaskAttenuationDb = 0;
+            const auto reference = tone(sr * 2, 75, .4, sr);
+            const Signal silence(reference.size());
+            auto wet = reference;
+            const auto* kick = stop == 0 ? nullptr : stop == 1 ? &silence : &reference;
+            render(makeup, wet, kick, focused);
+            require(std::abs(makeup.getMeters().agcDb[2]) < .01 &&
+                    std::abs(db(rms(wet, sr * 3 / 2) / rms(reference, sr * 3 / 2))) < .01,
+                    "Unmask AGC still boosted the bass with the cut inactive");
+            require(makeup.runtimeState()[6] == recalled[6], "Unmask AGC discarded its locked compensation");
+        }
+        std::cout << "PASS Unmask Auto Gain fades after lost overlap or zero attenuation\n";
+
         // A narrow manual focus must leave an unrelated upper-bass note relatively intact.
         auto manual = tone(144000, 48, 0.3), upper = tone(144000, 186, 0.3), manualKick = manual;
         for (size_t i = 0; i < manual.size(); ++i) { manual[i] += upper[i]; manualKick[i] += upper[i]; }
@@ -304,16 +488,16 @@ int main() {
         auto rotated = tone(96000, 80, 0.3); phase.prepare(48000); s.delayMs = 0; s.rotate = true;
         render(phase, rotated, nullptr, s);
         require(std::abs(rms(rotated,48000)-0.3/std::sqrt(2)) < 1e-5, "All-pass magnitude not unity");
-        for (double angle : {-180.,-90.,0.,45.,90.,180.}) {
+        for (double reference : {42.,60.,92.}) for (double angle : {-180.,-90.,0.,45.,90.,180.}) {
             Settings dial;
             dial.glue=dial.unmask=false;
-            dial.phase=true;dial.phaseAngle=angle;dial.phaseReference=60;
-            Signal shifted(96000);
-            for (size_t n=0;n<shifted.size();++n) shifted[n]=float(.3*std::sin(2*pi*60*n/48000.));
+            dial.phase=true;dial.phaseReference=60;
+            dial.phaseAngle=phaseDegreesAtReference(angle,reference,dial.phaseReference,48000.);
+            auto shifted=tone(96000,reference,.3);
             Engine phaseDial;phaseDial.prepare(48000);render(phaseDial,shifted,nullptr,dial);
             double i=0,q=0;
             for (size_t n=48000;n<shifted.size();++n) {
-                const auto rad=2*pi*60*n/48000.;
+                const auto rad=2*pi*reference*n/48000.;
                 i+=shifted[n]*std::sin(rad);q+=shifted[n]*std::cos(rad);
             }
             require(std::abs(std::remainder(std::atan2(q,i)*180/pi-angle,360.))<.1,
@@ -321,6 +505,24 @@ int main() {
             require(std::abs(std::hypot(i,q)*2/48000-.3)<1e-5,"Phase dial did not preserve sine amplitude");
         }
         std::cout << "PASS PHASE delay / polarity / all-pass response\n";
+
+        for (double initialAngle : {-1.,1.}) {
+            auto dial=bypass();
+            dial.phase=dial.rotate=true;
+            dial.phaseReference=55;
+            dial.phaseAngle=initialAngle;
+            Engine phaseDial;phaseDial.prepare(48000);
+            auto warm=tone(2*48000,55,.3);
+            render(phaseDial,warm,nullptr,dial);
+            const auto nearDry=tone(12000,55,.3);
+            auto acrossZero=nearDry;
+            dial.phaseAngle=-initialAngle;
+            render(phaseDial,acrossZero,nullptr,dial);
+            for (size_t n=0;n<acrossZero.size();++n)
+                require(std::abs(acrossZero[n]-nearDry[n]) < .018,
+                        "A small Phase adjustment through zero reached the wrong all-pass branch");
+        }
+        std::cout << "PASS Phase rotation moves across zero without a large phase or gain change\n";
 
         // Learn searches a phrase and then stops: no dynamic tracking.
         PhaseLearner learner; learner.prepare(48000); learner.start();

@@ -138,7 +138,7 @@ void BassDeamonProcessor::prepareToPlay(double sr, int maximumBlock) {
     hostBypassed.store(false,std::memory_order_release);
     wasLearning = wasPlaying = wasBypassed = false; lastTimeSeconds = -1; lastBlockSamples = 0;
     lastSamplePosition.reset();analysisInterrupted=true;
-    learnStatus.store(0); resultReady.store(false);
+    learnStatus.store(0); phaseLearnResult.store(0);
 }
 bool BassDeamonProcessor::isBusesLayoutSupported(const BusesLayout& b) const {
     const auto main = b.getMainInputChannelSet();
@@ -199,7 +199,7 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
         for (size_t i = 0; i < restored.size(); ++i) restored[i] = restoredRuntime[i].load();
         engine.restoreRuntime(restored); engine.clearHistory(); wasLearning = false;
         analysisInterrupted=true;
-        resultReady.store(false); learnStatus.store(0);
+        phaseLearnResult.store(0); learnStatus.store(0);
     }
     double bpm = 0,ppq=-1, beatsPerBar=4;
     bool transportAllowsLearn = true;
@@ -247,12 +247,14 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     if (wasBypassed) { engine.clearHistory(); wasLearning = false; learnStatus.store(0); wasBypassed = false; }
     auto settings=readSettings();
     settings.pausePhaseLearn = !transportAllowsLearn;
-    if(!settings.active){engine.cancelLearn();wasLearning=false;learnStatus.store(0);resultReady.store(false);}
+    if(!settings.active){engine.cancelLearn();wasLearning=false;learnStatus.store(0);phaseLearnResult.store(0);}
     const float* kick[2]{nullptr, nullptr};
     const int sideChannels = side.getNumChannels();
-    if (autoAudition.load() == 0 && transportAllowsLearn && learnRequested.exchange(false)&&settings.active) {
-        resultReady.store(false);
+    const auto phaseRequest=autoAudition.load()==0 && transportAllowsLearn ? phaseLearnRequest.exchange(0) : 0;
+    if (phaseRequest!=0 && phaseRequest==phaseLearnGeneration.load() && settings.active) {
+        phaseLearnResult.store(0);
         if (sideChannels > 0) {
+            activePhaseLearn=phaseRequest;
             engine.startLearn(); wasLearning = true; learnStatus.store(1);
         } else {
             learnStatus.store(6);
@@ -327,17 +329,16 @@ void BassDeamonProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
             }
         }
     }
-    if (wasLearning && !engine.learning()) {
+    if (wasLearning && !engine.learning() && activePhaseLearn==phaseLearnGeneration.load()) {
         const auto r = engine.learnResult();
         learnCorrelation.store(static_cast<float>(r.correlation));
         if (r.valid) {
             resultDelay.store(static_cast<float>(r.delayMs)); resultInvert.store(r.invert);
-            learnCorrelation.store(static_cast<float>(r.correlation));
-            resultReady.store(true); learnStatus.store(5);
+            phaseLearnResult.store(activePhaseLearn); learnStatus.store(5);
         } else learnStatus.store(!r.hasReference?6:r.rejection==bassdeamon::LearnRejection::ambiguous?3:r.rejection==bassdeamon::LearnRejection::unstable?4:2);
     }
     if (settings.active && !transportAllowsLearn) {
-        if (learnRequested.load() || engine.learning()) learnStatus.store(7);
+        if (phaseLearnRequest.load()!=0 || engine.learning()) learnStatus.store(7);
         if (kickEqLearnRequested.load() || captureState==CaptureState::recording) kickEqStatus.store(5);
     } else if (transportAllowsLearn) {
         if (engine.learning()) learnStatus.store(1);
@@ -360,11 +361,9 @@ void BassDeamonProcessor::processBlockBypassed(juce::AudioBuffer<float>&, juce::
     const auto state=autoMixState();
     if (state==AutoMixState::armed || state==AutoMixState::recording)
         autoState.store(AutoMixState::idle,std::memory_order_release);
-    learnRequested.store(false);
+    discardPhaseLearn();
     kickEqLearnRequested.store(false);
     kickEqGeneration.fetch_add(1);
-    resultReady.store(false);
-    learnStatus.store(0);
     if (kickEqCaptureState.load(std::memory_order_relaxed)==CaptureState::recording)
         kickEqCaptureState.store(CaptureState::idle,std::memory_order_release);
     kickEqStatus.store(0);
@@ -372,6 +371,12 @@ void BassDeamonProcessor::processBlockBypassed(juce::AudioBuffer<float>&, juce::
     glueReduction.store(0);
     unmaskReduction.store(0);
     // Matching input/output layouts: the host-bypassed bass is bit-identical.
+}
+void BassDeamonProcessor::discardPhaseLearn() noexcept {
+    phaseLearnGeneration.fetch_add(1);
+    phaseLearnRequest.store(0);
+    phaseLearnResult.store(0);
+    learnStatus.store(0);
 }
 void BassDeamonProcessor::pushUnmaskResponse(const bassdeamon::UnmaskResponse& response) noexcept {
     auto write = responseFifo.write(1);
@@ -432,7 +437,8 @@ void BassDeamonProcessor::timerCallback() {
         kickEqStatus.store(current ? (hz > 0 ? 3 : kickEqCapture.hasSignal() ? 2 : 4) : 0);
         kickEqCaptureState.store(CaptureState::idle, std::memory_order_release);
     }
-    if (!resultReady.exchange(false)) return;
+    const auto phaseResult=phaseLearnResult.exchange(0);
+    if (phaseResult==0 || phaseResult!=phaseLearnGeneration.load() || raw[18]->load()<=.5f) return;
     undoManager.beginNewTransaction("Learn phase");
     // Host parameter notifications happen on the message thread, never in the audio callback.
     const auto set = [&](const char* id, float value) {
@@ -643,6 +649,7 @@ void BassDeamonProcessor::setStateInformation(const void* data, int bytes) {
     cancelAutoMix();
     if (auto xml = getXmlFromBinary(data, bytes)) {
         if (xml->hasTagName(parameters.state.getType()) && xml->getIntAttribute("schemaVersion", 1) <= 12) {
+            discardPhaseLearn();
             kickEqGeneration.fetch_add(1);
             kickEqLearnRequested.store(false);
             kickEqStatus.store(0);
@@ -752,6 +759,7 @@ void BassDeamonProcessor::selectAB(int slot) {
 void BassDeamonProcessor::loadStartingPoint(int preset) {
     cancelAutoMix();
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    discardPhaseLearn();
     kickEqGeneration.fetch_add(1);
     kickEqLearnRequested.store(false);
     kickEqStatus.store(0);
