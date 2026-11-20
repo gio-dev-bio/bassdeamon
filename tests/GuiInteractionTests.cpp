@@ -276,11 +276,11 @@ int interactionTests(){
     set("duck.multiband",0);set("duck.amount",18);set("duck.attack",0);
     set("duck.on",0);
     int steadySample=0;
-    const auto steady=[&](int blocks) {
+    const auto steady=[&](int blocks,float kickLevel=.4f) {
         for (int b=0;b<blocks;++b) {
             for (int n=0;n<256;++n,++steadySample) {
                 const float wave=float(std::sin(2*bassdeamon::pi*75*steadySample/48000.));
-                buffer.setSample(0,n,.17f*wave);buffer.setSample(1,n,.4f*wave);
+                buffer.setSample(0,n,.17f*wave);buffer.setSample(1,n,kickLevel*wave);
             }
             host.time=double(steadySample)/48000.;p.processBlock(buffer,midi);
             if (b%6==0) visualTick();
@@ -300,6 +300,17 @@ int interactionTests(){
     ensure(editor->spectrumDisplay.residualReady&&editor->analyzer.summary().regions==0,
            "POST measurement did not resume on the Duck output after audition");
     std::cout<<"PASS POST residual cleared by Duck alone, PRE reference and dry audition\n";
+    steady(240,.02f);
+    ensure(std::abs(p.duckReduction.load()-18)<.05f
+           && std::abs(editor->visualPost[overlapBin]-editor->visualPre[overlapBin]+18)<.3f,
+           "The POST analyzer did not reflect the Full Band Duck cut on a quiet sidechain");
+    set("duck.multiband",1);set("duck.lowHz",150);
+    steady(240,.02f);
+    ensure(std::abs(p.duckReduction.load()-18)<.05f
+           && std::abs(editor->visualPost[overlapBin]-editor->visualPre[overlapBin]+16.28)<.3f,
+           "The POST analyzer did not reflect the Low Band Duck cut on a quiet sidechain");
+    set("duck.multiband",0);
+    std::cout<<"PASS POST analyzer measures Full Band and Low Band Duck with a quiet sidechain\n";
     // Retune the real curve from the learned root to a nearby harmonic
     // after Duck. The light cut still leaves an audible POST residual.
     set("duck.on",1);set("duck.amount",9);set("duck.attack",1);

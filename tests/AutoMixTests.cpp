@@ -118,16 +118,16 @@ int main() {
         const float bass=float(.45*low+.28*high), kick=float(.35*low+.60*high);
         dualBand[n]={bass,bass,kick,kick,float(2*t)};
     }
-    const auto suggestedFocus=[&](const std::vector<AutoMixFrame>& data, Settings setup) {
+    const auto suggestedFocus=[&](const std::vector<AutoMixFrame>& data, Settings setup, int channels=1) {
         setup.unmaskTrack=false;
-        const auto mix=analyzeAutoMix(data,sr,120,1,setup);
+        const auto mix=analyzeAutoMix(data,sr,120,channels,setup);
         for (const auto& change:mix.changes)
             if (std::string_view(change.parameter)=="unmask.frequency") return change.value;
         return 0.f;
     };
     Settings selective;
     selective.glue=selective.phase=false;
-    selective.duckMultiband=true;selective.duckLowHz=250;
+    selective.duckMultiband=true;selective.duckLowHz=110;
     selective.duckAmountDb=18;selective.duckAttackMs=0;
     selective.unmaskDirect=true;selective.unmaskAttenuationDb=12;
     for (bool duck:{false,true}) {
@@ -159,6 +159,18 @@ int main() {
     selective.duck=true;
     require(suggestedFocus(dualBand,selective)==0,"Auto Mix proposed a cut already taken care of by Duck");
     std::cout<<"PASS after Duck: live and Auto Mix focus 38 -> 186 Hz; Auto Mix skipped the cleared band\n";
+    selective.duck = false;
+    selective.unmaskStereoMode = UnmaskStereoMode::side;
+    require(suggestedFocus(dualBand,selective)==0 && suggestedFocus(dualBand,selective,2)==0,
+            "Auto Mix proposed an Unmask cut in Side for a centred bass");
+    for (auto& frame : dualBand) frame.right = -frame.left;
+    require(suggestedFocus(dualBand,selective,2)==75,
+            "Auto Mix missed overlap in the selected Side component");
+    selective.unmaskStereoMode = UnmaskStereoMode::mid;
+    require(suggestedFocus(dualBand,selective,2)==0,
+            "Auto Mix proposed an Unmask cut in an empty Mid component");
+    for (auto& frame : dualBand) frame.right = frame.left;
+    std::cout<<"PASS Auto Mix analyses the selected Mid or Side after Duck\n";
 
     {
         constexpr double fundamental = 53;

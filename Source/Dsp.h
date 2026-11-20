@@ -113,6 +113,17 @@ struct Biquad {
         b0 = (1 + alpha * A) / a0; b1 = -2 * std::cos(w) / a0;
         b2 = (1 - alpha * A) / a0; a1 = b1; a2 = (1 - alpha / A) / a0;
     }
+    void lowShelf(double frequency, double linearGain, double sr) noexcept {
+        const double w = 2 * pi * frequency / sr, A = std::sqrt(linearGain);
+        const double c = std::cos(w), beta = std::sqrt(2 * A) * std::sin(w);
+        const double sum = A + 1, difference = A - 1;
+        const double a0 = sum + difference * c + beta;
+        b0 = A * (sum - difference * c + beta) / a0;
+        b1 = 2 * A * (difference - sum * c) / a0;
+        b2 = A * (sum - difference * c - beta) / a0;
+        a1 = -2 * (difference + sum * c) / a0;
+        a2 = (sum + difference * c - beta) / a0;
+    }
     std::complex<double> transfer(std::complex<double> z) const noexcept {
         const auto z2 = z * z;
         return (b0 + b1 * z + b2 * z2) / (1.0 + a1 * z + a2 * z2);
@@ -133,17 +144,30 @@ private:
     std::array<Biquad, 2> sections{};
 };
 
-inline double unmaskActivity(double energy) noexcept {
+inline double unmaskActivity(double energy, double spanDb = 30) noexcept {
     if (energy <= 3.1622776601683792e-7) return 0;
     if (energy >= 3.1622776601683794e-4) return 1;
-    return (10 * std::log10(energy) + 65) / 30;
+    return std::min((10 * std::log10(energy) + 65) / spanDb, 1.);
+}
+
+inline constexpr double kickPeakHoldMs = 300.;
+
+inline double unmaskKeySpan(double peak) noexcept {
+    // A quiet key can supply full evidence above the same absolute noise floor.
+    return peak >= .063095734448 ? 30. : std::clamp(54 + db(peak), 15., 30.);
+}
+
+inline double unmaskOverlapActivity(double bass, double kick, double keySpan) noexcept {
+    if (bass <= kick || keySpan == 30) return unmaskActivity(std::min(bass, kick));
+    const double keyActivity = unmaskActivity(kick, keySpan);
+    return keyActivity > 0 ? std::min(unmaskActivity(bass), keyActivity) : 0.;
 }
 
 inline double unmaskFundamentalActivity(double bass, double kick, double fullBass, double fullKick,
-                                        double kickForBalance = 0.) noexcept {
+                                        double kickForBalance = 0., double keySpan = 30.) noexcept {
     // Reject the skirts of a much louder harmonic in either detector.
     if (bass <= fullBass * .004 || kick <= fullKick * .004) return 0;
-    const double activity = unmaskActivity(std::min(bass, kick));
+    const double activity = unmaskOverlapActivity(bass, kick, keySpan);
     if (activity == 0) return 0;
     // Use a soft knee over the levels left by Duck. The full setting is
     // reserved for a bass that actually dominates the kick in this band.
@@ -393,6 +417,7 @@ public:
         duckPunchPole=std::exp(-2*pi*800/sampleRate);
         duckModeInitialised = false;
         duckBassBands={};duckKickBands={};
+        duckShelf = {}; duckShelfHz = 0;
         duckBandEnvelope.fill(0);duckBandReduction.fill(0);
         subMono = {}; subMonoMix.reset(0); subMonoCutoff = 0;
         monitorMix.reset(0);
@@ -410,6 +435,7 @@ public:
         setUnmaskFundamental(0);
         resetUnmaskUpperCut();
         unmaskKickWeight = 0;
+        unmaskKeySpanDb = 30.;
         unmaskAgcSamples = 0;
         globalInitialised=globalPaused=false;globalRamp.reset(1);delayFade.reset(1);polarityRamp.reset(1);
         inputPowerMeter = outputPowerMeter = outputHeld = kickHeld = 0;
@@ -435,7 +461,7 @@ public:
         kickFastA = pole(3, sampleRate); kickSlowA = pole(100, sampleRate);
         parameterA = pole(500, sampleRate / 32); // ratio and automatic timing adapt over 500 ms
         cutAttackA = pole(8, sampleRate); cutReleaseA = pole(120, sampleRate);
-        focusA = pole(200, sampleRate / 32); peakA = pole(300, sampleRate);
+        focusA = pole(200, sampleRate / 32); peakA = pole(kickPeakHoldMs, sampleRate);
         filterParameterA = pole(20, sampleRate / 32);
         attackA = pole(attackMs, sampleRate); releaseA = pole(releaseMs, sampleRate);
     }
@@ -474,12 +500,14 @@ public:
         meters.duckReductionDb = 0;
         duckModeInitialised = false;
         duckBassBands={};duckKickBands={};
+        duckShelf = {}; duckShelfHz = 0;
         duckBandEnvelope.fill(0);duckBandReduction.fill(0);
         subMono.clear();
         bassE.fill(0); kickE.fill(0); focusBassE.fill(0);
         setUnmaskFundamental(0);
         resetUnmaskUpperCut();
         unmaskKickWeight = 0;
+        unmaskKeySpanDb = 30.;
         unmaskAgcSamples = 0;
         focusCandidate=-1;focusCandidateSamples=0;
         resetGlueReference();
@@ -621,7 +649,9 @@ public:
         else if (subMonoCutoff == 0) subMonoCutoff = subMonoTarget;
         const bool monitor = match || !monitorMix.finished() || monitorMix.value() != 0 || !monitorGain.finished() || monitorGain.value() != 1 || !dryMonitorGain.finished();
         const bool duckEnabled = s.duck && s.active && !(s.tube.enabled && s.tube.audition) && kick && kickChannels > 0;
-        const double duckDepth = duckEnabled ? std::clamp(s.duckAmountDb,0.,18.) : 0.;
+        constexpr double maxDuckDepth = 18.;
+        const double minimumDuckGain = gain(-maxDuckDepth);
+        const double duckDepth = duckEnabled ? std::clamp(s.duckAmountDb,0.,maxDuckDepth) : 0.;
         const double duckBandTarget = s.duckMultiband ? 1 : 0;
         if (!duckModeInitialised) {
             duckBandMix.reset(duckBandTarget);
@@ -629,11 +659,16 @@ public:
         }
         duckBandMix.set(duckBandTarget,rampSamples);
         const bool lowBand = s.duckLowHz > 0;
-        // Keep the selected crossover until the outgoing Low-Band path has faded out.
-        const double lowBandPole = lowBand && (s.duckMultiband || duckBandMix.value() > 0)
-            ? std::exp(-2*pi*std::clamp(s.duckLowHz,60.,250.)/sampleRate) : duckBodyPole;
         const bool runDuck = duckDepth > 0 || duckReduction > 0
             || std::any_of(duckBandReduction.begin(),duckBandReduction.end(),[](double v){return v>0;});
+        const bool runDuckShelf = runDuck && lowBand && (s.duckMultiband || duckBandMix.value() > 0);
+        const double duckShelfTarget = std::clamp(s.duckLowHz, 60., 250.);
+        if (runDuckShelf && duckShelfHz == 0) {
+            duckShelfHz = duckShelfTarget;
+            for (auto& filter : duckShelf) filter.lowShelf(duckShelfHz, minimumDuckGain, sampleRate);
+        } else if (!runDuckShelf && duckShelfHz != 0) {
+            duckShelf = {}; duckShelfHz = 0;
+        }
         const double duckAttack = runDuck ? pole(std::clamp(s.duckAttackMs,0.,20.),sampleRate) : 0.;
         const double duckReleaseMs = s.duckSync ? noteMilliseconds(s.duckReleaseNote,bpm)
                                             : std::clamp(s.duckReleaseMs,20.,350.);
@@ -711,6 +746,12 @@ public:
                 controlCounter = 0;
                 smoothedFilterQ = follow(smoothedFilterQ, filterQTarget, filterParameterA);
                 smoothedDirectQ = follow(smoothedDirectQ, directQTarget, filterParameterA);
+                if (runDuckShelf && duckShelfHz != duckShelfTarget) {
+                    duckShelfHz = follow(duckShelfHz, duckShelfTarget, filterParameterA);
+                    if (std::abs(duckShelfHz - duckShelfTarget) < .01) duckShelfHz = duckShelfTarget;
+                    for (auto& filter : duckShelf) filter.lowShelf(duckShelfHz, minimumDuckGain, sampleRate);
+                }
+                unmaskKeySpanDb = s.unmaskDirect ? unmaskKeySpan(kickHeld) : 30.;
                 if (!s.glueLocked && updateGlueReference) {
                     // Normalise the RMS over the samples observed so far. A second
                     // average in dB would keep the threshold low during a fade-in.
@@ -869,9 +910,11 @@ public:
                 if (duckDepth > 0)
                     duckEnvelope = std::max(std::max(std::abs(k[0]),std::abs(k[1])),
                                             duckEnvelope*duckDetectorRelease);
-                // Soft knee below roughly -24 dBFS. The peak hold bridges
-                // kick zero crossings, including the first low-frequency cycles.
-                const double weight = std::clamp((duckEnvelope-.004)/.059,0.,1.);
+                // Follow the sidechain level so a quiet kick can reach the
+                // requested depth. Keep an absolute gate for very low signals.
+                constexpr double duckGate = .004;
+                const double fullDepthLevel = std::clamp(kickHeld * .2, .0063, .063);
+                const double weight = std::clamp((duckEnvelope-duckGate)/(fullDepthLevel-duckGate),0.,1.);
                 const double target = duckDepth * weight * weight * (3 - 2 * weight);
                 duckReduction = follow(duckReduction,target,target>duckReduction?duckAttack:duckRelease);
                 if (duckReduction < 1e-7) duckReduction = 0;
@@ -879,19 +922,22 @@ public:
                 const double duckGain=gain(-duckReduction);
                 displayedDuckReduction=(lowBand?1:1-bandMix)*duckReduction;
                 if (bandMix>0 && lowBand) {
+                    // Interpolate the shelf in linear gain so the low end
+                    // follows the reduction and the dry path is exact at 0 dB.
+                    const double shelfMix = bandMix * (1 - duckGain) / (1 - minimumDuckGain);
                     for (int c=0;c<channels;++c) {
-                        auto& low=duckBassBands.body[c];
-                        low=(1-lowBandPole)*x[c]+lowBandPole*low;
-                        x[c]+=(duckGain-1)*((1-bandMix)*x[c]+bandMix*low);
+                        const double filtered = duckShelf[c].tick(x[c]);
+                        x[c] += (1 - bandMix) * x[c] * (duckGain - 1) + shelfMix * (filtered - x[c]);
                     }
                 } else if (bandMix>0) {
                     const auto left=duckKickBands.split(k[0],0,duckBodyPole,duckPunchPole);
                     const auto right=duckKickBands.split(k[1],1,duckBodyPole,duckPunchPole);
                     std::array<double,3> bandGain{};
+                    const double legacyDepthLevel = std::min(fullDepthLevel, .048);
                     for (size_t band=0;band<bandGain.size();++band) {
                         const double peak=std::max(std::abs(left[band]),std::abs(right[band]));
                         duckBandEnvelope[band]=duckDepth>0?std::max(peak,duckBandEnvelope[band]*duckDetectorRelease):0;
-                        const double level=std::clamp((duckBandEnvelope[band]-.003)/.045,0.,1.);
+                        const double level=std::clamp((duckBandEnvelope[band]-.003)/(legacyDepthLevel-.003),0.,1.);
                         const double bandTarget=duckDepth*std::clamp(s.duckBands[band],0.,1.)*level*level*(3-2*level);
                         auto& reduction=duckBandReduction[band];
                         reduction=follow(reduction,bandTarget,bandTarget>reduction?duckAttack:duckRelease);
@@ -918,6 +964,7 @@ public:
                 return mid * centre * centre + side * difference * difference;
             };
             const double unmaskInputPower = selectedPower(beforeUnmask);
+            const double keySpan = s.unmaskDirect ? unmaskKeySpanDb : 30.;
             if (s.unmaskDirect && s.unmaskTrack) {
                 unmaskBassReference = follow(unmaskBassReference, unmaskInputPower, bandA);
                 unmaskKickReference = follow(unmaskKickReference, kp, bandA);
@@ -933,7 +980,7 @@ public:
                 // Use it for balance while the narrower detector confirms overlap.
                 if (controlCounter == 0)
                     rootActivity = unmaskFundamentalActivity(rootBassPower, rootKickPower, unmaskBassReference,
-                                                              unmaskKickReference, earlyRootKickPower * .5);
+                                                              unmaskKickReference, earlyRootKickPower * .5, keySpan);
                 for (auto& harmonic : harmonicDetectors) {
                     if (harmonic.frequency == 0) break;
                     std::array<double, 2> highBass{}, highKick{};
@@ -986,7 +1033,9 @@ public:
                 legacyTarget = std::max(legacyTarget, -target);
                 cutDb[b] = follow(cutDb[b], target, target < cutDb[b] ? cutAttackA : cutReleaseA);
                 maxCut = std::max(maxCut, -cutDb[b]);
-                const double weightedActivity = activity * focusWeights[b];
+                const double directEvidence = keySpan < 30 && kickE[b] < bassE[b]
+                    ? unmaskOverlapActivity(bassE[b], kickE[b], keySpan) : activity;
+                const double weightedActivity = directEvidence * focusWeights[b];
                 if (weightedActivity > directActivity) {
                     directActivity = weightedActivity;
                     directBand = b;
@@ -1319,6 +1368,7 @@ private:
     double cachedRotationHz = -1, cachedAllpassA = 0;
     double smoothedFilterQ = 2, smoothedDirectQ = 2, filterParameterA = 0;
     double inputPowerMeter = 0, outputPowerMeter = 0, outputHeld = 0, kickHeld = 0;
+    double unmaskKeySpanDb = 30.;
     int focusCandidate=-1,focusAcquisitions=0;double focusCandidateSamples=0,focusReferenceSeen=0;
     double focusHz = 75, trackedFocusHz = 75, focusA = 0, peakA = 0;
     std::uint64_t onsetClock = 0, lastOnset = 0;
@@ -1328,6 +1378,8 @@ private:
     double duckEnvelope = 0, duckReduction = 0, duckDetectorRelease = 0;
     double duckBodyPole=0,duckPunchPole=0;
     DuckBands duckBassBands,duckKickBands;
+    std::array<Biquad,2> duckShelf{};
+    double duckShelfHz = 0;
     std::array<double,3> duckBandEnvelope{},duckBandReduction{};
     Ramp duckBandMix;
     bool duckModeInitialised = false;

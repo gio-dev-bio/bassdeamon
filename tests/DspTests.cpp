@@ -65,6 +65,84 @@ int main() {
         }
         std::cout << "PASS zero attack for Duck and Unmask\n";
 
+        for (double rate : {44100.,48000.,96000.}) {
+            auto settings=bypass();
+            settings.duck=true;
+            settings.duckAmountDb=18;
+            settings.duckAttackMs=0;
+            const auto expectedGain=gain(-settings.duckAmountDb);
+            auto dry=tone(int(rate*.1),55,.42,rate);
+            auto quietKick=tone(int(dry.size()),55,.02,rate);
+            const auto upper=tone(int(dry.size()),2200,.15,rate);
+            for (size_t n=0;n<dry.size();++n) {
+                dry[n]+=upper[n];
+                quietKick[n]*=float(std::exp(-double(n)/(rate*.035)));
+            }
+            Engine duck;
+            duck.prepare(rate);
+            auto wet=dry;
+            render(duck,wet,&quietKick,settings,63);
+            for (size_t n=size_t(rate*.002);n<size_t(rate*.012);++n)
+                require(std::abs(wet[n]-dry[n]*expectedGain)<1e-6,
+                        "A quiet kick did not reach Full Band Duck depth at the onset");
+            duck.prepare(rate);
+            const auto belowGate=tone(int(dry.size()),55,.003,rate);
+            wet=dry;
+            render(duck,wet,&belowGate,settings);
+            require(wet==dry,"Duck attenuated a sidechain below its noise gate");
+
+            duck.prepare(rate);
+            float bass[]{.5f,.5f,.5f};
+            const float left[]{0,0,0},right[]{0,.02f,0};
+            float* output[]{bass};
+            const float* sidechain[]{left,right};
+            duck.process(output,1,sidechain,2,3,settings);
+            require(bass[0]==.5f&&std::abs(bass[1]-.5*expectedGain)<1e-6,
+                    "Zero attack did not follow the first detected sample of a quiet stereo key");
+        }
+        std::cout << "PASS Full Band Duck reaches its set depth on quiet keys and ignores sub-gate signals\n";
+
+        {
+            constexpr double rate=44100;
+            auto settings=bypass();
+            settings.duck=settings.duckMultiband=true;
+            settings.duckLowHz=110;
+            settings.duckAmountDb=18;
+            settings.duckAttackMs=0;
+            const auto response=[&](double frequency,double kickLevel) {
+                auto bass=tone(int(rate),frequency,.42,rate);
+                const auto kick=tone(int(rate),55,kickLevel,rate);
+                const auto input=rms(bass,size_t(rate/2));
+                Engine duck;
+                duck.prepare(rate);
+                render(duck,bass,&kick,settings,63);
+                require(std::abs(duck.getMeters().duckReductionDb-18)<.01,
+                        "Low Band Duck did not reach its set depth with this sidechain");
+                return db(rms(bass,size_t(rate/2))/input);
+            };
+            const auto weakKeySub=response(55,.018);
+            require(weakKeySub<-15.5 && std::abs(weakKeySub-response(55,.4))<.02,
+                    "Low Band Duck response changed with sidechain level");
+            require(std::abs(response(110,.018)+9)<.1,
+                    "Low Band Duck did not follow its selected crossover");
+            require(std::abs(response(2200,.018))<.02,
+                    "A quiet key made Low Band Duck attenuate the upper bass");
+            auto bass=tone(int(rate/4),55,.42,rate);
+            const auto kick=tone(int(bass.size()),55,.018,rate);
+            auto wet=bass,repartitioned=bass,silentKey=bass;
+            const Signal silence(bass.size());
+            Engine duck;
+            duck.prepare(rate);
+            render(duck,wet,&kick,settings,63);
+            duck.prepare(rate);
+            render(duck,repartitioned,&kick,settings,1024);
+            duck.prepare(rate);
+            render(duck,silentKey,&silence,settings,63);
+            require(wet==repartitioned && silentKey==bass,
+                    "Low Band Duck bypass or buffer partition changed the output");
+            std::cout << "PASS Low Band Duck is equally selective with quiet and strong keys\n";
+        }
+
         // Same stream partitioned differently must produce identical DSP output.
         auto source = tone(96000, 75, 0.5), kick = tone(96000, 60, 0.4);
         for (int i = 0; i < 96000; ++i) kick[static_cast<size_t>(i)] *= (i % 24000 < 4000 ? 1.0f : 0.0f);
@@ -384,13 +462,40 @@ int main() {
         }
         std::cout << "PASS Unmask exact fundamental / light and severe harmonic overlap / post-Duck overlap\n";
 
+        {
+            constexpr int sr = 44100;
+            const auto bass = tone(sr, 55, .42, sr);
+            const auto quietKick = tone(sr, 55, .018, sr);
+            const auto belowFloor = tone(sr, 55, .0004, sr);
+            auto focused = bypass();
+            focused.unmask = focused.unmaskDirect = true;
+            focused.unmaskTrack = false;
+            focused.unmaskFrequency = 55;
+            focused.unmaskAttenuationDb = 24;
+            focused.unmaskAttackMs = 0;
+            Engine detector;
+            detector.prepare(sr);
+            auto wet = bass;
+            render(detector, wet, &quietKick, focused, 63);
+            require(db(rms(wet, sr/2)/rms(bass, sr/2)) < -23.5,
+                    "Manual Unmask lost depth with a quiet sidechain");
+            detector.prepare(sr);
+            auto repartitioned = bass;
+            render(detector, repartitioned, &quietKick, focused, 1024);
+            require(wet == repartitioned, "Manual Unmask depends on host buffer size");
+            detector.prepare(sr);
+            wet = bass;
+            render(detector, wet, &belowFloor, focused);
+            require(wet == bass, "Manual Unmask attenuated a key below its noise floor");
+        }
+
         // A short kick must produce a stronger cut only for a genuinely
         // competing bass. Its detector tail should let the note recover.
         for (double sr : {44100., 48000., 96000.}) {
             struct HitResponse { double peakDb = 0, tailDb = 0; int peakMs = 0; };
             constexpr double hz = 53;
             const int blockSize = static_cast<int>(sr / 100);
-            const auto measureKick = [&](double bassLevelDb) {
+            const auto measureKick = [&](double bassLevelDb, double kickLevel = .42) {
                 Engine detector;
                 detector.prepare(sr);
                 Settings focused = bypass();
@@ -407,7 +512,7 @@ int main() {
                         const double time = (block * blockSize + n) / sr;
                         const double age = std::fmod(time, .5);
                         bass[n] = float(bassAmplitude * std::sin(2 * pi * hz * time));
-                        kick[n] = age < .08 ? float(.42 * std::exp(-age / .035) * std::sin(2 * pi * hz * age)) : 0;
+                        kick[n] = age < .08 ? float(kickLevel * std::exp(-age / .035) * std::sin(2 * pi * hz * age)) : 0;
                     }
                     detector.process(output, 1, sidechain, 1, blockSize, focused, 120);
                     if (block < 200) continue;
@@ -423,10 +528,13 @@ int main() {
             };
             const auto quiet = measureKick(-18);
             const auto strong = measureKick(0);
+            const auto quietKey = measureKick(0, .02);
             require(quiet.peakDb > .1 && quiet.peakDb < 1.6 && strong.peakDb > 4,
                     "Auto Focus applied the same depth to quiet and competing bass");
             require(quiet.peakMs <= 80 && strong.peakMs <= 80 && quiet.tailDb < .35 && strong.tailDb < 1.5,
                     "Unmask deepened or held the cut after the kick");
+            require(quietKey.peakDb > 5 && quietKey.peakMs <= 80 && quietKey.tailDb < 1.5,
+                    "Auto Focus missed the fundamental of a quiet kick or held the cut into the next note");
         }
         std::cout << "PASS Unmask follows kick body and releases with depth proportional to overlap\n";
 

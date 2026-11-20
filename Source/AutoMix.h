@@ -328,13 +328,17 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
     const double measuredRoot = result.reliableKick ? root : learnedRoot;
     std::array<std::array<UnmaskFundamentalBand, 2>, 2> fundamentalFilters{};
     double fundamentalRemaining = 0, fundamentalKickEnergy = 0;
-    const auto measureResidual = [&](auto& filterBank, size_t count, bool fundamental, double* upperCut = nullptr) {
+    double keySpan = 30.;
+    const double keyPeakDecay = pole(kickPeakHoldMs, rate);
+    const auto measureResidual = [&](auto& filterBank, size_t count, const double* projectedBass,
+                                     bool fundamental, double* upperCut = nullptr) {
         double overlapEnergy = 0;
         for (size_t channel=0;channel<2;++channel) {
             auto& filters=filterBank[channel];
             double bassPower=0, kickPower=0, joint=0, fullBass=0, fullKick=0;
             for (size_t n=0;n<count;++n) {
-                const double dryBass=processedBass(channel,n), dryKick=reference[channel][n];
+                const double dryBass = projectedBass ? projectedBass[n] : processedBass(channel,n);
+                const double dryKick = reference[channel][n];
                 const double b=filters[0].tick(dryBass), k=filters[1].tick(dryKick);
                 bassPower+=b*b;
                 kickPower+=k*k;
@@ -345,7 +349,8 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
                 }
             }
             if (fundamental) {
-                const double activity=unmaskFundamentalActivity(bassPower/count,kickPower/count,fullBass/count,fullKick/count);
+                const double activity = unmaskFundamentalActivity(bassPower/count, kickPower/count,
+                    fullBass/count, fullKick/count, 0., keySpan);
                 fundamentalKickEnergy += .5 * kickPower;
                 overlapEnergy += .5 * joint * activity;
             } else {
@@ -361,7 +366,7 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
         }
         return overlapEnergy;
     };
-    const auto scanResidual = [&] {
+    const auto scanResidual = [&](UnmaskStereoMode mode) {
         remaining.fill(0);
         upperCutEnergy.fill(0);
         bassAfterDuckEnergy = fundamentalRemaining = fundamentalKickEnergy = 0;
@@ -372,37 +377,60 @@ inline AutoMixResult analyzeAutoMix(const std::vector<AutoMixFrame>& audio, doub
         if (measuredRoot > 0)
             for (auto& channel : fundamentalFilters)
                 for (auto& filter : channel) filter.tune(measuredRoot, rate);
+        double keyPeak = 0;
         render(beforeUnmask,[&](size_t,size_t count) {
-            for (int channel=0;channel<channels;++channel)
-                for (size_t n=0;n<count;++n)
-                    bassAfterDuckEnergy+=double(output[channel][n])*output[channel][n]/channels;
+            std::array<double,blockSize> component;
+            const double* projectedBass = nullptr;
+            if (mode == UnmaskStereoMode::stereo) {
+                for (int channel=0;channel<channels;++channel)
+                    for (size_t n=0;n<count;++n)
+                        bassAfterDuckEnergy+=double(output[channel][n])*output[channel][n]/channels;
+            } else {
+                const double sign = mode == UnmaskStereoMode::side ? -1. : 1.;
+                for (size_t n=0;n<count;++n) {
+                    component[n] = (double(processedBass(0,n)) + sign * processedBass(1,n)) * .5;
+                    bassAfterDuckEnergy += component[n] * component[n];
+                }
+                projectedBass = component.data();
+            }
             for (size_t band=0;band<focusBands;++band) {
                 const double hz = bandFrequencies[band];
                 if (learnedRoot == 0 || std::abs(hz - learnedRoot) > learnedRoot * .15)
-                    remaining[band] += measureResidual(residualFilters[band], count, false,
+                    remaining[band] += measureResidual(residualFilters[band], count, projectedBass, false,
                         isUnmaskUpperBand(hz, learnedRoot) ? &upperCutEnergy[band] : nullptr);
             }
-            if (measuredRoot > 0) fundamentalRemaining += measureResidual(fundamentalFilters,count,true);
+            if (measuredRoot > 0) {
+                for (size_t n=0; n<count; ++n)
+                    keyPeak = std::max(double(std::max(std::abs(kickLeft[n]), std::abs(kickRight[n]))),
+                                       keyPeak * keyPeakDecay);
+                keySpan = unmaskKeySpan(keyPeak);
+                fundamentalRemaining += measureResidual(fundamentalFilters, count, projectedBass, true);
+            }
         });
     };
     const auto fundamentalOverlaps = [&] {
         return fundamentalRemaining > std::max(audio.size() * 3.162e-7, fundamentalKickEnergy * .12);
     };
-    scanResidual();
+    // Kick EQ processes both channels. Unmask should be proposed for
+    // the component that its selected Stereo, Mid or Side mode can cut.
+    const bool canLearnKickEq = result.reliableKick && (!settings.kickEqEnabled || settings.kickEqFrequency < 30);
+    const auto initialMode = canLearnKickEq ? UnmaskStereoMode::stereo : settings.unmaskStereoMode;
+    scanResidual(initialMode);
     // A static notch needs overlap at the stable fundamental itself.
     // Leave light shared energy to the dynamic modules.
     const double rootShare = fundamentalKickEnergy > 0 ? fundamentalRemaining / fundamentalKickEnergy : 0;
     const double eqCut = std::clamp(3 * (rootShare - .20), 0., 1.5);
-    if (result.reliableKick && (!settings.kickEqEnabled || settings.kickEqFrequency < 30)
-        && fundamentalOverlaps() && eqCut >= .2) {
+    const bool enableKickEq = canLearnKickEq && fundamentalOverlaps() && eqCut >= .2;
+    if (enableKickEq) {
         propose("kickEq.on", settings.kickEqEnabled, 1);
         propose("kickEq.frequency", settings.kickEqFrequency, measuredRoot);
         propose("kickEq.cut", settings.kickEqCut, eqCut);
         beforeUnmask.kickEqEnabled = settings.kickEqEnabled = true;
         beforeUnmask.kickEqFrequency = settings.kickEqFrequency = measuredRoot;
         beforeUnmask.kickEqCut = settings.kickEqCut = eqCut;
-        scanResidual();
     }
+    if (enableKickEq || initialMode != settings.unmaskStereoMode)
+        scanResidual(settings.unmaskStereoMode);
     const auto strongestRemaining=std::max_element(remaining.begin(),remaining.end());
     // Assess the fundamental against the kick's own energy there. Normalising
     // by the full bass would bury a short, real overlap under loud harmonics.
